@@ -1,0 +1,13 @@
+{
+  "name": "@ibirdos/config",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/env.ts",
+  "types": "./src/env.ts",
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

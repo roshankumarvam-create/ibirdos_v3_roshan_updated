@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ibirdos-config
+data:
+  NODE_ENV: "production"
+  APP_URL: "https://app.ibirdos.com"
+  API_URL: "https://api.ibirdos.com"
+  NEXT_PUBLIC_APP_URL: "https://app.ibirdos.com"
+  AUTH_COOKIE_DOMAIN: ".ibirdos.com"
+  STORAGE_REGION: "auto"
+  STORAGE_BUCKET: "ibirdos-prod"
+  STORAGE_PUBLIC_URL_BASE: "https://cdn.ibirdos.com"
+  LOG_LEVEL: "info"
+  RATE_LIMIT_RPM: "120"
+  STRIPE_REQUIRED: "true"
+  OPENAI_VISION_MODEL: "gpt-4o"
+  OPENAI_INSIGHTS_MODEL: "gpt-4o-mini"

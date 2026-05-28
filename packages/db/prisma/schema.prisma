@@ -1,0 +1,1501 @@
+// =====================================================================
+// IBirdOS V3 — Phase 1: Foundation schema
+// =====================================================================
+// This file establishes the tenancy and identity skeleton.
+// Every future domain table MUST follow the contract set here:
+//   - workspaceId (tenant scope)
+//   - createdAt, updatedAt
+//   - createdById (audit trail)
+//   - deletedAt (soft delete)
+//
+// Schema is split across multiple files via Prisma's multi-file feature
+// once domain phases are added. For now everything lives here.
+// =====================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------
+
+enum WorkspaceStatus {
+  ACTIVE
+  SUSPENDED   // billing failure, manual hold
+  CANCELED    // owner-initiated, soft-deleted
+
+  @@map("workspace_status")
+}
+
+enum Role {
+  OWNER       // workspace owner — full access including billing
+  MANAGER     // operational + financial visibility, no billing
+  CHEF        // kitchen only, no financial visibility
+  STAFF       // limited operational
+  CUSTOMER    // external ordering only
+
+  @@map("role")
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED            // disabled by owner/manager
+  PENDING_PASSWORD_RESET
+
+  @@map("membership_status")
+}
+
+// ---------------------------------------------------------------------
+// Workspace — the tenant root
+// ---------------------------------------------------------------------
+// Every multi-tenant row in the system carries workspaceId. This is the
+// root that those references resolve to.
+// ---------------------------------------------------------------------
+
+model Workspace {
+  id               String          @id @default(cuid())
+  slug             String          @unique
+  name             String
+  status           WorkspaceStatus @default(ACTIVE)
+
+  // Stripe — nullable so STRIPE_REQUIRED=false workspaces work
+  stripeCustomerId     String? @unique @map("stripe_customer_id")
+  stripeSubscriptionId String? @unique @map("stripe_subscription_id")
+
+  // Per-workspace settings (currency, locale, kitchen stations, etc.)
+  // Stored as JSONB; structure validated at the application layer via Zod.
+  settings         Json            @default("{}")
+
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt      @map("updated_at")
+  deletedAt        DateTime?       @map("deleted_at")
+
+  memberships      Membership[]
+  auditLogs        AuditLog[]
+
+  @@index([slug])
+  @@index([deletedAt])
+  @@map("workspaces")
+  billingCustomer BillingCustomer?
+}
+
+// ---------------------------------------------------------------------
+// User — global identity (not tenant-scoped)
+// ---------------------------------------------------------------------
+// Username is primary per spec: chefs/staff get @chef_001 with no email.
+// One user may belong to multiple workspaces via Membership. The active
+// workspace context for a session lives on Session, not on User.
+// ---------------------------------------------------------------------
+
+model User {
+  id                  String    @id @default(cuid())
+  username            String    @unique
+  email               String?   @unique
+  passwordHash        String    @map("password_hash")
+  displayName         String?   @map("display_name")
+  mustChangePassword  Boolean   @default(true) @map("must_change_password")
+  lastLoginAt         DateTime? @map("last_login_at")
+
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt      @map("updated_at")
+  deletedAt           DateTime? @map("deleted_at")
+
+  memberships         Membership[]
+  sessions            Session[]
+  auditLogs           AuditLog[]   @relation("AuditLogActor")
+  createdMemberships  Membership[] @relation("MembershipCreator")
+
+  @@index([username])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------
+// Membership — Workspace × User join, carries the role
+// ---------------------------------------------------------------------
+// THIS is where role lives. A user could in principle be OWNER of one
+// workspace and CHEF of another. The role check on every protected
+// route resolves against (session.workspaceId, session.userId).
+// ---------------------------------------------------------------------
+
+model Membership {
+  id           String           @id @default(cuid())
+  workspaceId  String           @map("workspace_id")
+  userId       String           @map("user_id")
+  role         Role
+  status       MembershipStatus @default(ACTIVE)
+
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt      @map("updated_at")
+  createdById  String?   @map("created_by_id")
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user         User      @relation(fields: [userId],      references: [id], onDelete: Cascade)
+  createdBy    User?     @relation("MembershipCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+// ---------------------------------------------------------------------
+// Session — server-side session record
+// ---------------------------------------------------------------------
+// We store tokenHash (SHA-256 of the JWT), NOT the token itself.
+// A DB read leak cannot reveal live tokens. Revocation works by
+// clearing revokedAt or deleting the row. workspaceId on Session is
+// the active workspace context for that session.
+// ---------------------------------------------------------------------
+
+model Session {
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  workspaceId  String    @map("workspace_id")
+  tokenHash    String    @unique @map("token_hash")
+  ipAddress    String?   @map("ip_address")
+  userAgent    String?   @map("user_agent")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ---------------------------------------------------------------------
+// AuditLog — every meaningful mutation lands here
+// ---------------------------------------------------------------------
+// Tenant-scoped by construction. Actor may be null for system actions
+// (cron jobs, webhooks, AI re-costing). Entity reference is a
+// (type, id) pair so this table works for every future domain.
+// ---------------------------------------------------------------------
+
+model AuditLog {
+  id           String    @id @default(cuid())
+  workspaceId  String    @map("workspace_id")
+  actorId      String?   @map("actor_id")
+  action       String    // dotted: "user.created", "invoice.confirmed", "ingredient.price_changed"
+  entityType   String    @map("entity_type")
+  entityId     String    @map("entity_id")
+  metadata     Json      @default("{}")
+  ipAddress    String?   @map("ip_address")
+  userAgent    String?   @map("user_agent")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor        User?     @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+// =====================================================================
+// PHASE 5 — Ingredient Intelligence Engine
+// =====================================================================
+// Ingredients are the single source of truth. Every cost in every
+// recipe, every event, every margin trace back to one row in this
+// table. Quantities are stored in CANONICAL units (g for mass, ml
+// for volume, each for count). Display units are converted at the
+// UI layer using packages/types unit helpers.
+// =====================================================================
+
+enum IngredientCategory {
+  PRODUCE
+  PROTEIN
+  DAIRY
+  DRY_GOODS
+  SPICES
+  OIL_VINEGAR
+  BEVERAGE
+  FROZEN
+  BAKERY
+  PACKAGING        // not consumed, but appears on invoices
+  CLEANING
+  OTHER
+
+  @@map("ingredient_category")
+}
+
+enum UnitDimension {
+  MASS    // canonical: g
+  VOLUME  // canonical: ml
+  COUNT   // canonical: each
+
+  @@map("unit_dimension")
+}
+
+enum AliasSource {
+  MANUAL
+  INVOICE
+  RECIPE
+  VENDOR_CATALOG
+  AI_MATCH         // needs review before promotion to confidence=1.0
+
+  @@map("alias_source")
+}
+
+enum PriceSource {
+  INVOICE
+  VENDOR_API
+  MANUAL
+  IMPORTED
+
+  @@map("price_source")
+}
+
+enum VendorIntegrationType {
+  NONE
+  API
+  EDI
+  EMAIL
+  CSV
+
+  @@map("vendor_integration_type")
+}
+
+model Vendor {
+  id              String                @id @default(cuid())
+  workspaceId     String                @map("workspace_id")
+  name            String
+  code            String?               // customer code with vendor (Sysco account #)
+  contactEmail    String?               @map("contact_email")
+  contactPhone    String?               @map("contact_phone")
+  integrationType VendorIntegrationType @default(NONE) @map("integration_type")
+  notes           String?
+
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt      @map("updated_at")
+  createdById     String?   @map("created_by_id")
+  deletedAt       DateTime? @map("deleted_at")
+
+  ingredients     Ingredient[]
+  priceHistory    IngredientPriceHistory[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("vendors")
+}
+
+model Ingredient {
+  id                     String              @id @default(cuid())
+  workspaceId            String              @map("workspace_id")
+  name                   String              // canonical display name
+  category               IngredientCategory  @default(OTHER)
+  dimension              UnitDimension       // mass / volume / count
+  canonicalUnit          String              @map("canonical_unit") // "g" | "ml" | "each"
+
+  // For cross-dimension conversion (recipe says cups, invoice prices lbs).
+  // null means the system MUST refuse to convert across dimensions for
+  // this ingredient — surfaces a "missing density" warning instead of
+  // silently producing wrong numbers.
+  densityGPerMl          Decimal?            @map("density_g_per_ml") @db.Decimal(10, 4)
+
+  // Live cost in CANONICAL unit. e.g., chicken at $4.50/lb is stored
+  // as currentCostCents = 992 (= 450 cents / 453.59 g * 1000? no —
+  // we store cents-per-canonical-unit, so 992 means 0.992 cents/g
+  // which is wrong. CORRECT: cost is stored as integer micro-cents
+  // per canonical unit to preserve precision on small quantities.
+  // 1 cent = 1000 micro-cents.
+  currentCostMicrocents  BigInt?             @map("current_cost_microcents")
+  currentVendorId        String?             @map("current_vendor_id")
+
+  // Live stock in canonical units. Updated by inventory transactions.
+  currentStockCanonical  Decimal             @default(0) @map("current_stock_canonical") @db.Decimal(14, 4)
+  reorderThresholdCanonical Decimal?         @map("reorder_threshold_canonical") @db.Decimal(14, 4)
+
+  // Display preference: when showing this ingredient in UI, prefer
+  // this unit (e.g., chicken displayed in lb even though stored in g).
+  preferredDisplayUnit   String?             @map("preferred_display_unit")
+
+  // 95.0 = 5% trim loss default; actual recorded yield in Phase 12
+  defaultYieldPct        Decimal             @default(100) @map("default_yield_pct") @db.Decimal(5, 2)
+
+  photoUrl               String?             @map("photo_url")
+  notes                  String?
+
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt      @map("updated_at")
+  createdById            String?   @map("created_by_id")
+  deletedAt              DateTime? @map("deleted_at")
+
+  vendor                 Vendor?             @relation(fields: [currentVendorId], references: [id], onDelete: SetNull)
+  aliases                IngredientAlias[]
+  priceHistory           IngredientPriceHistory[]
+  recipeIngredients      RecipeIngredient[]
+  inventoryTransactions  InventoryTransaction[]
+  lowStockAlerts         LowStockAlert[]
+  yieldEntries           YieldEntry[]
+  wasteEntries           WasteEntry[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([workspaceId, category])
+  @@index([workspaceId, deletedAt])
+  @@map("ingredients")
+}
+
+model IngredientAlias {
+  id            String      @id @default(cuid())
+  workspaceId   String      @map("workspace_id")
+  ingredientId  String      @map("ingredient_id")
+  text          String      // matched against; stored lowercased+trimmed
+  source        AliasSource @default(MANUAL)
+  confidence    Decimal     @default(1.0) @db.Decimal(3, 2)
+  needsReview   Boolean     @default(false) @map("needs_review")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  createdById   String?     @map("created_by_id")
+
+  ingredient    Ingredient  @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  // Unique per workspace+text so a string can only map to ONE ingredient
+  @@unique([workspaceId, text])
+  @@index([ingredientId])
+  @@index([workspaceId, needsReview])
+  @@map("ingredient_aliases")
+}
+
+model IngredientPriceHistory {
+  id                        String       @id @default(cuid())
+  workspaceId               String       @map("workspace_id")
+  ingredientId              String       @map("ingredient_id")
+  vendorId                  String?      @map("vendor_id")
+  pricePerCanonicalMicrocents BigInt     @map("price_per_canonical_microcents")
+  source                    PriceSource
+  // For source=INVOICE, sourceRef is invoice.id. For VENDOR_API, the
+  // vendor's catalog row id. Lets us answer "where did this price
+  // come from?" without joining across modules.
+  sourceRef                 String?      @map("source_ref")
+  effectiveAt               DateTime     @default(now()) @map("effective_at")
+  notes                     String?
+  createdById               String?      @map("created_by_id")
+
+  ingredient                Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  vendor                    Vendor?      @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, ingredientId, effectiveAt(sort: Desc)])
+  @@index([workspaceId, effectiveAt(sort: Desc)])
+  @@map("ingredient_price_history")
+}
+
+// =====================================================================
+// PHASE 6 — Invoice AI Engine
+// =====================================================================
+
+enum InvoiceStatus {
+  UPLOADING
+  EXTRACTING          // OpenAI Vision job in flight
+  EXTRACTION_FAILED   // job failed; user can retry or fill manually
+  PENDING_REVIEW      // AI extracted; awaiting human Confirm & Save
+  CONFIRMED           // committed — ingredient prices updated
+  ARCHIVED            // soft-archived from active list
+
+  @@map("invoice_status")
+}
+
+enum InvoicePaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+
+  @@map("invoice_payment_status")
+}
+
+enum InvoiceLineCategory {
+  FOOD_INGREDIENT    // ONLY this category updates recipe costing
+  PACKAGING
+  LABOR
+  DELIVERY
+  TAX
+  DISCOUNT
+  IGNORED            // user excluded this row from any processing
+
+  @@map("invoice_line_category")
+}
+
+model Invoice {
+  id              String               @id @default(cuid())
+  workspaceId     String               @map("workspace_id")
+  vendorId        String?              @map("vendor_id")  // null if vendor unidentified by AI
+  uploadKey       String               @map("upload_key") // R2 object key
+  uploadMimeType  String               @map("upload_mime_type")
+  uploadSizeBytes Int                  @map("upload_size_bytes")
+
+  status          InvoiceStatus        @default(UPLOADING)
+  paymentStatus   InvoicePaymentStatus @default(UNPAID) @map("payment_status")
+
+  // AI-extracted metadata (editable on review)
+  vendorNameRaw   String?              @map("vendor_name_raw")  // what AI saw, before vendor match
+  invoiceNumber   String?              @map("invoice_number")
+  invoiceDate     DateTime?            @map("invoice_date")
+  dueDate         DateTime?            @map("due_date")
+  subtotalCents   Int?                 @map("subtotal_cents")
+  taxCents        Int?                 @map("tax_cents")
+  totalCents      Int?                 @map("total_cents")
+  currency        String               @default("USD")
+
+  // AI quality / cost tracking
+  aiModel         String?              @map("ai_model")
+  aiTokensInput   Int?                 @map("ai_tokens_input")
+  aiTokensOutput  Int?                 @map("ai_tokens_output")
+  aiCostCents     Int?                 @map("ai_cost_cents")
+  extractionError String?              @map("extraction_error")
+
+  confirmedAt     DateTime?            @map("confirmed_at")
+  confirmedById   String?              @map("confirmed_by_id")
+
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt      @map("updated_at")
+  createdById     String?   @map("created_by_id")
+  deletedAt       DateTime? @map("deleted_at")
+
+  vendor          Vendor?              @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  lines           InvoiceLine[]
+  extractionJobs  InvoiceExtractionJob[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, invoiceDate(sort: Desc)])
+  @@index([workspaceId, deletedAt])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id                       String               @id @default(cuid())
+  workspaceId              String               @map("workspace_id")
+  invoiceId                String               @map("invoice_id")
+
+  // Line position on the source invoice (1-indexed)
+  position                 Int
+
+  // Raw text as the AI extracted it
+  descriptionRaw           String               @map("description_raw")
+
+  // Editable fields (start as AI proposal, user may correct)
+  quantity                 Decimal              @db.Decimal(14, 4)
+  unit                     String               // raw unit string from invoice ("CS", "LB"...)
+  unitPriceCents           Int                  @map("unit_price_cents")
+  extendedPriceCents       Int                  @map("extended_price_cents")
+  category                 InvoiceLineCategory  @default(FOOD_INGREDIENT)
+
+  // Ingredient linkage — proposed by AI matcher, committed by user
+  proposedIngredientId     String?              @map("proposed_ingredient_id")
+  proposedConfidence       Decimal?             @db.Decimal(3, 2) @map("proposed_confidence")
+  committedIngredientId    String?              @map("committed_ingredient_id")
+
+  // Pack metadata for unit normalization ("1 CASE of 12 x 16oz")
+  packSize                 Decimal?             @db.Decimal(14, 4) @map("pack_size")
+  packUnit                 String?              @map("pack_unit")
+
+  // User actions
+  excluded                 Boolean              @default(false)  // row dropped from confirm
+  notes                    String?
+
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt      @map("updated_at")
+
+  invoice                  Invoice              @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([workspaceId])
+  @@map("invoice_lines")
+}
+
+enum ExtractionJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+
+  @@map("extraction_job_status")
+}
+
+model InvoiceExtractionJob {
+  id           String              @id @default(cuid())
+  workspaceId  String              @map("workspace_id")
+  invoiceId    String              @map("invoice_id")
+  status       ExtractionJobStatus @default(QUEUED)
+  attemptCount Int                 @default(0) @map("attempt_count")
+  lastError    String?             @map("last_error")
+  startedAt    DateTime?           @map("started_at")
+  finishedAt   DateTime?           @map("finished_at")
+  createdAt    DateTime            @default(now()) @map("created_at")
+
+  invoice      Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([invoiceId])
+  @@map("invoice_extraction_jobs")
+}
+
+// =====================================================================
+// PHASE 7 — Recipe Intelligence Engine
+// =====================================================================
+
+enum RecipeStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+
+  @@map("recipe_status")
+}
+
+enum RecipeCostStaleness {
+  FRESH        // cached cost ≤ 5 min old AND no ingredient changed since
+  STALE        // ingredient changed; recost queued
+  RECOSTING    // worker currently recomputing
+  COMPUTE_ERROR // a referenced ingredient has no price or no canonical convert
+  NO_INGREDIENTS // recipe has zero ingredient lines
+
+  @@map("recipe_cost_staleness")
+}
+
+model Recipe {
+  id              String       @id @default(cuid())
+  workspaceId     String       @map("workspace_id")
+  name            String
+  category        String?      // free-form: "Mains", "Sauces", "Desserts" (no enum: too varied)
+  status          RecipeStatus @default(DRAFT)
+
+  // Times in minutes
+  prepTimeMin     Int?         @map("prep_time_min")
+  cookTimeMin     Int?         @map("cook_time_min")
+
+  // Yield — how much this recipe produces. Optional, but required for
+  // accurate "cost per portion" math. portionsYielded = number of
+  // servings; totalYieldCanonical = total weight/volume in the recipe's
+  // primary dimension (mass usually for batches).
+  portionsYielded        Int?     @map("portions_yielded")
+  totalYieldCanonical    Decimal? @db.Decimal(14, 4) @map("total_yield_canonical")
+  totalYieldDimension    UnitDimension?              @map("total_yield_dimension")
+
+  // Pricing (sale price for margin calcs; null if not for sale individually)
+  salePriceCents  Int?         @map("sale_price_cents")
+
+  // ---- Computed fields (written by recost worker, read by everyone) ----
+  // Total cost in microcents at last compute. NULL = never computed.
+  cachedCostMicrocents       BigInt?              @map("cached_cost_microcents")
+  cachedCostUpdatedAt        DateTime?            @map("cached_cost_updated_at")
+  costStaleness              RecipeCostStaleness  @default(NO_INGREDIENTS) @map("cost_staleness")
+  costComputeError           String?              @map("cost_compute_error")
+  // Margin = (salePrice - cost) / salePrice * 100. Null if either is null.
+  cachedMarginPct            Decimal?             @db.Decimal(5, 2) @map("cached_margin_pct")
+
+  photoUrl        String?  @map("photo_url")
+  instructionsMd  String?  @map("instructions_md")  // markdown body
+  notes           String?
+
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt      @map("updated_at")
+  createdById     String?   @map("created_by_id")
+  deletedAt       DateTime? @map("deleted_at")
+
+  ingredients     RecipeIngredient[]
+  costHistory     RecipeCostHistory[]
+  eventMenuItems  EventMenuItem[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, status])
+  @@index([workspaceId, deletedAt])
+  @@map("recipes")
+}
+
+model RecipeIngredient {
+  id           String  @id @default(cuid())
+  workspaceId  String  @map("workspace_id")
+  recipeId     String  @map("recipe_id")
+  ingredientId String  @map("ingredient_id")
+
+  // Quantity as the recipe author wrote it (e.g., 2.5 cups). The engine
+  // converts to the ingredient's canonical unit at compute time using
+  // the unit-conversion engine. Stored separately from canonical so
+  // editing a recipe shows the author's original units.
+  quantity     Decimal @db.Decimal(14, 4)
+  unit         String  // "cup", "tbsp", "lb", "g" etc.
+
+  // 100.0 = no loss. 85.0 means "85% of this ingredient ends up in
+  // the dish after trim/peel/cooking shrink". Falls back to the
+  // ingredient's defaultYieldPct if null.
+  yieldPctOverride Decimal? @db.Decimal(5, 2) @map("yield_pct_override")
+
+  notes        String?
+  displayOrder Int     @default(0) @map("display_order")
+
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt      @map("updated_at")
+
+  recipe       Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@unique([recipeId, ingredientId])
+  @@index([ingredientId])
+  @@index([workspaceId])
+  @@map("recipe_ingredients")
+}
+
+model RecipeCostHistory {
+  id                  String   @id @default(cuid())
+  workspaceId         String   @map("workspace_id")
+  recipeId            String   @map("recipe_id")
+  totalCostMicrocents BigInt   @map("total_cost_microcents")
+  portionsYielded     Int?     @map("portions_yielded")
+  salePriceCents      Int?     @map("sale_price_cents")
+  marginPct           Decimal? @db.Decimal(5, 2) @map("margin_pct")
+  triggerKind         String   @map("trigger_kind")  // "ingredient_change", "manual_recost", "recipe_edit", "invoice_confirmed"
+  triggerRef          String?  @map("trigger_ref")
+  computedAt          DateTime @default(now()) @map("computed_at")
+
+  recipe              Recipe   @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, recipeId, computedAt(sort: Desc)])
+  @@map("recipe_cost_history")
+}
+
+// Extend Ingredient to enable cascading from the Ingredient side
+// (we already have it from RecipeIngredient side via @relation)
+
+// =====================================================================
+// PHASE 8 — Inventory Engine
+// =====================================================================
+
+enum InventoryTransactionKind {
+  RECEIVE        // from invoice confirm or manual receive
+  CONSUME        // recipe production / event execution
+  ADJUST         // manual count correction (positive or negative)
+  TRANSFER_OUT   // to another location/workspace (Phase 16)
+  TRANSFER_IN
+  WASTE          // shrink/spoilage (also recorded in Phase 11)
+
+  @@map("inventory_transaction_kind")
+}
+
+enum LowStockAlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+
+  @@map("low_stock_alert_status")
+}
+
+model InventoryTransaction {
+  id                String                   @id @default(cuid())
+  workspaceId       String                   @map("workspace_id")
+  ingredientId     String                    @map("ingredient_id")
+  kind              InventoryTransactionKind
+  /// Positive = stock IN, negative = stock OUT. In canonical units.
+  quantityCanonical Decimal                  @db.Decimal(14, 4) @map("quantity_canonical")
+  /// Stock level AFTER this transaction (for fast last-balance lookups).
+  balanceAfterCanonical Decimal              @db.Decimal(14, 4) @map("balance_after_canonical")
+  /// Cost basis of this movement in microcents (for COGS reports).
+  costMicrocents    BigInt?                  @map("cost_microcents")
+  /// "Invoice", "Recipe", "Event", "Manual" — the originating system.
+  sourceKind        String                   @map("source_kind")
+  sourceRef         String?                  @map("source_ref")
+  notes             String?
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  createdById       String?                  @map("created_by_id")
+
+  ingredient        Ingredient               @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, ingredientId, createdAt(sort: Desc)])
+  @@index([workspaceId, kind, createdAt(sort: Desc)])
+  @@map("inventory_transactions")
+}
+
+model LowStockAlert {
+  id           String              @id @default(cuid())
+  workspaceId  String              @map("workspace_id")
+  ingredientId String              @map("ingredient_id")
+  status       LowStockAlertStatus @default(OPEN)
+  currentCanonical Decimal         @db.Decimal(14, 4) @map("current_canonical")
+  thresholdCanonical Decimal       @db.Decimal(14, 4) @map("threshold_canonical")
+  detectedAt   DateTime            @default(now()) @map("detected_at")
+  resolvedAt   DateTime?           @map("resolved_at")
+  acknowledgedById String?         @map("acknowledged_by_id")
+
+  ingredient   Ingredient          @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, ingredientId, status])
+  @@index([workspaceId, status])
+  @@map("low_stock_alerts")
+}
+
+// =====================================================================
+// PHASE 9 — Event & Catering Engine
+// =====================================================================
+
+enum EventStatus {
+  DRAFT
+  CONFIRMED
+  PREP_IN_PROGRESS
+  IN_SERVICE
+  COMPLETED
+  CANCELLED
+
+  @@map("event_status")
+}
+
+enum EventServiceType {
+  BUFFET
+  PLATED
+  FAMILY_STYLE
+  COCKTAIL
+  BOXED
+  DROP_OFF
+  OTHER
+
+  @@map("event_service_type")
+}
+
+enum StaffAssignmentRole {
+  HEAD_CHEF
+  LINE_COOK
+  PREP_COOK
+  SERVER
+  BARTENDER
+  DRIVER
+  COORDINATOR
+  OTHER
+
+  @@map("staff_assignment_role")
+}
+
+model Event {
+  id              String           @id @default(cuid())
+  workspaceId     String           @map("workspace_id")
+  name            String
+  status          EventStatus      @default(DRAFT)
+  serviceType     EventServiceType @default(OTHER) @map("service_type")
+  customerName    String?          @map("customer_name")
+  customerContact String?          @map("customer_contact")
+  venueAddress    String?          @map("venue_address")
+
+  /// Service window
+  startsAt        DateTime         @map("starts_at")
+  endsAt          DateTime?        @map("ends_at")
+  /// When prep should begin (auto-derived from kitchen packet or manual)
+  prepStartsAt    DateTime?        @map("prep_starts_at")
+
+  guestCount      Int              @map("guest_count")
+  /// Cushion: 1.10 = prep for 10% above guest count (default safety)
+  portionMultiplier Decimal        @default(1.10) @map("portion_multiplier") @db.Decimal(4, 2)
+
+  /// Revenue from this event (quoted price)
+  quotedPriceCents Int?            @map("quoted_price_cents")
+  /// Computed COGS after kitchen packet generation
+  computedFoodCostCents Int?       @map("computed_food_cost_cents")
+  /// Computed labor cost from staff assignments
+  computedLaborCostCents Int?      @map("computed_labor_cost_cents")
+  /// Margin = (revenue - food - labor) / revenue * 100, cached
+  computedMarginPct Decimal?       @db.Decimal(5, 2) @map("computed_margin_pct")
+
+  notes           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt      @map("updated_at")
+  createdById     String?   @map("created_by_id")
+  deletedAt       DateTime? @map("deleted_at")
+
+  menuItems       EventMenuItem[]
+  staff           EventStaffAssignment[]
+  kitchenPacket   KitchenPacket?
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, startsAt])
+  @@index([workspaceId, deletedAt])
+  @@map("events")
+}
+
+model EventMenuItem {
+  id           String   @id @default(cuid())
+  workspaceId  String   @map("workspace_id")
+  eventId      String   @map("event_id")
+  recipeId     String   @map("recipe_id")
+  /// How many portions of this recipe (typically = guestCount × multiplier)
+  portions     Int
+  /// Per-item override on the event multiplier (allows mains 1.15× but sides 1.05×)
+  perItemMultiplier Decimal? @db.Decimal(4, 2) @map("per_item_multiplier")
+  notes        String?
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  recipe       Recipe   @relation(fields: [recipeId], references: [id], onDelete: Restrict)
+
+  @@unique([eventId, recipeId])
+  @@map("event_menu_items")
+}
+
+model EventStaffAssignment {
+  id           String              @id @default(cuid())
+  workspaceId  String              @map("workspace_id")
+  eventId      String              @map("event_id")
+  userId       String?             @map("user_id") // null if "open role to fill"
+  role         StaffAssignmentRole
+  hours        Decimal             @db.Decimal(5, 2)
+  hourlyRateCents Int              @map("hourly_rate_cents")
+  notes        String?
+  createdAt    DateTime            @default(now()) @map("created_at")
+
+  event        Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user         User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
+  @@index([workspaceId, userId])
+  @@map("event_staff_assignments")
+}
+
+/// Generated artifact — a snapshot of what the kitchen needs to produce.
+/// Regenerated when event menu/guest count changes; not edited directly.
+model KitchenPacket {
+  id           String   @id @default(cuid())
+  workspaceId  String   @map("workspace_id")
+  eventId      String   @unique @map("event_id")
+  generatedAt  DateTime @default(now()) @map("generated_at")
+  /// Aggregated ingredient demand: [{ ingredientId, totalCanonicalQty, breakdown: [recipe→qty] }]
+  ingredientsJson Json   @map("ingredients_json")
+  /// Per-recipe production tasks with target portions and prep times
+  tasksJson    Json     @map("tasks_json")
+  totalFoodCostMicrocents BigInt? @map("total_food_cost_microcents")
+
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("kitchen_packets")
+}
+
+// =====================================================================
+// PHASE 10 — Kitchen Command Center
+// =====================================================================
+
+enum KitchenStation {
+  GRILL
+  SAUTE
+  FRY
+  PASTRY
+  PREP
+  PIZZA
+  SALAD
+  GARDE_MANGER
+  EXPO
+  OTHER
+
+  @@map("kitchen_station")
+}
+
+enum KitchenTaskStatus {
+  PENDING
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+
+  @@map("kitchen_task_status")
+}
+
+model KitchenTask {
+  id              String              @id @default(cuid())
+  workspaceId     String              @map("workspace_id")
+  eventId         String?             @map("event_id")     // null = ad-hoc prep
+  recipeId        String?             @map("recipe_id")
+  station         KitchenStation      @default(OTHER)
+  title           String
+  targetPortions  Int?                @map("target_portions")
+  estimatedMinutes Int?               @map("estimated_minutes")
+  status          KitchenTaskStatus   @default(PENDING)
+  blockReason     String?             @map("block_reason")
+  assignedUserId  String?             @map("assigned_user_id")
+  scheduledStartAt DateTime?          @map("scheduled_start_at")
+  startedAt       DateTime?           @map("started_at")
+  completedAt     DateTime?           @map("completed_at")
+  notes           String?
+  displayOrder    Int                 @default(0) @map("display_order")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt      @map("updated_at")
+  createdById     String?             @map("created_by_id")
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, station, status])
+  @@index([workspaceId, eventId])
+  @@map("kitchen_tasks")
+}
+
+// =====================================================================
+// PHASE 11 — Yield & Waste Intelligence
+// =====================================================================
+
+enum WasteReason {
+  SPOILAGE
+  OVERPRODUCTION
+  TRIM_LOSS
+  COOKING_ERROR
+  CUSTOMER_RETURN
+  DROPPED
+  EXPIRED
+  OTHER
+
+  @@map("waste_reason")
+}
+
+model YieldEntry {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  ingredientId    String   @map("ingredient_id")
+  recipeId        String?  @map("recipe_id")    // optional: yield observed during a specific recipe
+  /// Raw input in canonical units
+  rawCanonical    Decimal  @db.Decimal(14, 4) @map("raw_canonical")
+  /// Usable output in canonical units (after trim/cook shrink)
+  yieldCanonical  Decimal  @db.Decimal(14, 4) @map("yield_canonical")
+  /// Computed: yieldCanonical / rawCanonical * 100
+  yieldPct        Decimal  @db.Decimal(5, 2) @map("yield_pct")
+  notes           String?
+  observedAt      DateTime @default(now()) @map("observed_at")
+  createdById     String?  @map("created_by_id")
+
+  ingredient      Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, ingredientId, observedAt(sort: Desc)])
+  @@map("yield_entries")
+}
+
+model WasteEntry {
+  id              String       @id @default(cuid())
+  workspaceId     String       @map("workspace_id")
+  ingredientId    String       @map("ingredient_id")
+  reason          WasteReason
+  quantityCanonical Decimal    @db.Decimal(14, 4) @map("quantity_canonical")
+  /// Cost basis at time of waste (snapshot of current ingredient price × qty)
+  costMicrocents  BigInt       @map("cost_microcents")
+  recipeId        String?      @map("recipe_id")
+  eventId         String?      @map("event_id")
+  notes           String?
+  occurredAt      DateTime     @default(now()) @map("occurred_at")
+  createdById     String?      @map("created_by_id")
+
+  ingredient      Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, occurredAt(sort: Desc)])
+  @@index([workspaceId, ingredientId])
+  @@index([workspaceId, reason])
+  @@map("waste_entries")
+}
+
+// =====================================================================
+// PHASE 13 — Customer Ordering System
+// =====================================================================
+
+enum CustomerOrderStatus {
+  DRAFT             // building quote
+  AWAITING_PAYMENT  // Stripe checkout in flight
+  PAID              // payment confirmed; event auto-created
+  CANCELLED
+  REFUNDED
+
+  @@map("customer_order_status")
+}
+
+model CustomerProfile {
+  id           String   @id @default(cuid())
+  workspaceId  String   @map("workspace_id")
+  email        String
+  fullName     String?  @map("full_name")
+  phone        String?
+  notes        String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  orders       CustomerOrder[]
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId])
+  @@map("customer_profiles")
+}
+
+model CustomerOrder {
+  id              String              @id @default(cuid())
+  workspaceId     String              @map("workspace_id")
+  customerId      String              @map("customer_id")
+  status          CustomerOrderStatus @default(DRAFT)
+
+  /// What they're ordering — array of { recipeId, quantity, portionSize }
+  itemsJson       Json                @map("items_json")
+  /// Add-ons: { utensils: bool, staffHours: number, deliveryMiles: number }
+  addonsJson      Json?               @map("addons_json")
+  serviceType     EventServiceType    @default(BOXED) @map("service_type")
+  guestCount      Int                 @map("guest_count")
+  scheduledFor    DateTime            @map("scheduled_for")
+  venueAddress    String?             @map("venue_address")
+
+  subtotalCents   Int                 @map("subtotal_cents")
+  addonsCents     Int                 @default(0) @map("addons_cents")
+  taxCents        Int                 @default(0) @map("tax_cents")
+  totalCents      Int                 @map("total_cents")
+
+  stripeCheckoutSessionId String?     @map("stripe_checkout_session_id")
+  stripePaymentIntentId   String?     @map("stripe_payment_intent_id")
+  paidAt          DateTime?           @map("paid_at")
+
+  /// Linked event auto-created on PAID
+  createdEventId  String?             @unique @map("created_event_id")
+
+  notes           String?
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt      @map("updated_at")
+
+  customer        CustomerProfile     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, scheduledFor])
+  @@map("customer_orders")
+}
+
+// =====================================================================
+// PRODUCTION COMPLETION — Stripe billing
+// =====================================================================
+
+enum BillingPlanTier {
+  TRIAL
+  STARTER
+  GROWTH
+  SCALE
+  ENTERPRISE
+
+  @@map("billing_plan_tier")
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  INCOMPLETE
+  PAUSED
+
+  @@map("subscription_status")
+}
+
+enum BillingInvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  UNCOLLECTIBLE
+
+  @@map("billing_invoice_status")
+}
+
+model BillingPlan {
+  id              String          @id @default(cuid())
+  tier            BillingPlanTier @unique
+  name            String
+  /// Monthly base price in cents
+  monthlyPriceCents Int           @map("monthly_price_cents")
+  /// Included seats; overage charged per seat
+  includedSeats   Int             @default(3) @map("included_seats")
+  perSeatPriceCents Int           @default(0) @map("per_seat_price_cents")
+  /// Stripe price ID
+  stripePriceId   String?         @unique @map("stripe_price_id")
+  /// Feature flags as JSON: { ai: true, vendorApi: true, ... }
+  featuresJson    Json            @default("{}") @map("features_json")
+  active          Boolean         @default(true)
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  subscriptions   Subscription[]
+
+  @@map("billing_plans")
+}
+
+model Subscription {
+  id                  String              @id @default(cuid())
+  workspaceId         String              @unique @map("workspace_id")
+  workspace           Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  planId              String              @map("plan_id")
+  status              SubscriptionStatus  @default(TRIALING)
+  /// Stripe IDs
+  stripeCustomerId    String?             @unique @map("stripe_customer_id")
+  stripeSubscriptionId String?            @unique @map("stripe_subscription_id")
+  /// Current billing period
+  currentPeriodStart  DateTime?           @map("current_period_start")
+  currentPeriodEnd    DateTime?           @map("current_period_end")
+  trialEndsAt         DateTime?           @map("trial_ends_at")
+  cancelledAt         DateTime?           @map("cancelled_at")
+  cancelAtPeriodEnd   Boolean             @default(false) @map("cancel_at_period_end")
+  /// Cached seat count for metered billing
+  currentSeats        Int                 @default(1) @map("current_seats")
+  pastDueSince        DateTime?           @map("past_due_since")
+  metadata            Json?               @default("{}")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt      @map("updated_at")
+
+  plan                BillingPlan         @relation(fields: [planId], references: [id], onDelete: Restrict)
+  invoices            BillingInvoice[]
+
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model BillingInvoice {
+  id                  String              @id @default(cuid())
+  workspaceId         String              @map("workspace_id")
+  subscriptionId      String              @map("subscription_id")
+  stripeInvoiceId     String              @unique @map("stripe_invoice_id")
+  status              BillingInvoiceStatus
+  amountDueCents      Int                 @map("amount_due_cents")
+  amountPaidCents     Int                 @default(0) @map("amount_paid_cents")
+  currency            String              @default("USD")
+  hostedInvoiceUrl    String?             @map("hosted_invoice_url")
+  invoicePdfUrl       String?             @map("invoice_pdf_url")
+  periodStart         DateTime?           @map("period_start")
+  periodEnd           DateTime?           @map("period_end")
+  paidAt              DateTime?           @map("paid_at")
+  attemptCount        Int                 @default(0) @map("attempt_count")
+  failureMessage      String?             @map("failure_message")
+  createdAt           DateTime            @default(now()) @map("created_at")
+
+  subscription        Subscription        @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@map("billing_invoices")
+}
+
+model StripeWebhookEvent {
+  id          String   @id          // stripe event id (idempotency key)
+  type        String
+  payloadJson Json     @map("payload_json")
+  processedAt DateTime? @map("processed_at")
+  error       String?
+  receivedAt  DateTime @default(now()) @map("received_at")
+
+  @@index([type, receivedAt(sort: Desc)])
+  @@map("stripe_webhook_events")
+}
+
+// =====================================================================
+// PRODUCTION COMPLETION — AI Insights Engine
+// =====================================================================
+
+enum InsightKind {
+  PRICE_SPIKE         // ingredient price jumped > X%
+  MARGIN_RISK         // recipe margin dropped below target
+  WASTE_PATTERN       // recurring waste by reason
+  VENDOR_OPPORTUNITY  // cheaper vendor for an ingredient
+  REORDER_SUGGEST     // stock will run out before next planned receive
+  MENU_OPTIMIZATION   // demand vs margin recommendation
+  FORECAST_DEMAND     // upcoming-event demand projection
+  ANOMALY             // statistical outlier (yield drop, unusual usage)
+
+  @@map("insight_kind")
+}
+
+enum InsightSeverity {
+  INFO
+  WARNING
+  CRITICAL
+
+  @@map("insight_severity")
+}
+
+enum InsightStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  DISMISSED
+  RESOLVED
+
+  @@map("insight_status")
+}
+
+model Insight {
+  id              String           @id @default(cuid())
+  workspaceId     String           @map("workspace_id")
+  kind            InsightKind
+  severity        InsightSeverity  @default(INFO)
+  status          InsightStatus    @default(ACTIVE)
+  title           String
+  body            String           @db.Text
+  /// Optional structured payload — { ingredientId, recipeId, oldPrice, newPrice, delta }
+  payloadJson     Json?            @map("payload_json")
+  /// LLM-generated suggested actions
+  suggestedActions Json?           @map("suggested_actions")
+  /// Numerical relevance score 0..1 for sorting on the dashboard
+  relevanceScore  Decimal          @default(0.5) @db.Decimal(3, 2) @map("relevance_score")
+  /// Generation provenance — for explainability + audit
+  generatedBy     String           @map("generated_by")  // "ai" | "rule:price_spike" | "ai:gpt-4o"
+  aiModel         String?          @map("ai_model")
+  aiTokens        Int?             @map("ai_tokens")
+  acknowledgedById String?         @map("acknowledged_by_id")
+  acknowledgedAt  DateTime?        @map("acknowledged_at")
+  expiresAt       DateTime?        @map("expires_at")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  @@index([workspaceId, status, severity, createdAt(sort: Desc)])
+  @@index([workspaceId, kind])
+  @@map("insights")
+}
+
+// =====================================================================
+// PRODUCTION COMPLETION — Notifications
+// =====================================================================
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SLACK
+
+  @@map("notification_channel")
+}
+
+model Notification {
+  id          String              @id @default(cuid())
+  workspaceId String              @map("workspace_id")
+  /// User this notification targets. Null = broadcast to whole workspace.
+  userId      String?             @map("user_id")
+  channel     NotificationChannel @default(IN_APP)
+  kind        String              // "invoice.confirmed", "low_stock", "insight", etc
+  title       String
+  body        String?
+  linkPath    String?             @map("link_path")        // /:workspace/inventory
+  metadata    Json?               @default("{}")
+  readAt      DateTime?           @map("read_at")
+  createdAt   DateTime            @default(now()) @map("created_at")
+
+  @@index([workspaceId, userId, readAt, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+// =====================================================================
+// PRODUCTION — Stripe Billing
+// =====================================================================
+
+enum BillingPlan {
+  TRIAL
+  STARTER       // single location, < 5 seats
+  GROWTH        // multi-location, 5-25 seats
+  SCALE         // unlimited seats, priority support
+  ENTERPRISE    // custom contract
+
+  @@map("billing_plan")
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  INCOMPLETE
+  INCOMPLETE_EXPIRED
+  PAUSED
+
+  @@map("subscription_status")
+}
+
+model BillingCustomer {
+  id                String   @id @default(cuid())
+  workspaceId       String   @unique @map("workspace_id")
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  stripeCustomerId  String   @unique @map("stripe_customer_id")
+  billingEmail      String   @map("billing_email")
+  taxId             String?  @map("tax_id")
+  defaultPaymentMethodId String? @map("default_payment_method_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt      @map("updated_at")
+
+  subscriptions     Subscription[]
+  paymentEvents     PaymentEvent[]
+
+  @@index([workspaceId])
+  @@map("billing_customers")
+}
+
+model Subscription {
+  id                   String              @id @default(cuid())
+  workspaceId          String              @map("workspace_id")
+  customerId           String              @map("customer_id")
+  stripeSubscriptionId String              @unique @map("stripe_subscription_id")
+  plan                 BillingPlan
+  status               SubscriptionStatus
+  /// Stripe Price ID currently attached
+  stripePriceId        String              @map("stripe_price_id")
+  /// Seat-based quantity (number of MEMBERSHIPS with status=ACTIVE)
+  seatQuantity         Int                 @default(1) @map("seat_quantity")
+  /// In whole cents per seat per billing period
+  unitAmountCents      Int                 @map("unit_amount_cents")
+  currency             String              @default("USD")
+  /// e.g., "month" or "year"
+  interval             String              @default("month")
+
+  currentPeriodStart   DateTime            @map("current_period_start")
+  currentPeriodEnd     DateTime            @map("current_period_end")
+  trialEndsAt          DateTime?           @map("trial_ends_at")
+  cancelAt             DateTime?           @map("cancel_at")
+  canceledAt           DateTime?           @map("canceled_at")
+
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt      @map("updated_at")
+
+  customer             BillingCustomer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, status])
+  @@map("subscriptions")
+}
+
+model PaymentEvent {
+  id              String   @id @default(cuid())
+  workspaceId     String   @map("workspace_id")
+  customerId      String   @map("customer_id")
+  /// e.g. "invoice.payment_succeeded", "invoice.payment_failed",
+  /// "customer.subscription.updated", "customer.subscription.deleted"
+  stripeEventType String   @map("stripe_event_type")
+  stripeEventId   String   @unique @map("stripe_event_id")
+  amountCents     Int?     @map("amount_cents")
+  currency        String?
+  /// Snapshot of the relevant Stripe object so we can render history
+  /// even if the row was deleted server-side later.
+  payloadJson     Json     @map("payload_json")
+  receivedAt      DateTime @default(now()) @map("received_at")
+
+  customer        BillingCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, receivedAt(sort: Desc)])
+  @@map("payment_events")
+}
+
+model BillingPlanCatalog {
+  /// Reference catalog of available plans, seeded by ops; the source
+  /// of truth for "what can a customer pick" without round-tripping
+  /// to Stripe on every page load.
+  id              String      @id @default(cuid())
+  plan            BillingPlan @unique
+  displayName     String      @map("display_name")
+  stripePriceMonthlyId String? @map("stripe_price_monthly_id")
+  stripePriceYearlyId  String? @map("stripe_price_yearly_id")
+  unitAmountMonthlyCents Int  @map("unit_amount_monthly_cents")
+  unitAmountYearlyCents  Int  @map("unit_amount_yearly_cents")
+  seatIncluded    Int         @map("seat_included")
+  features        Json
+  active          Boolean     @default(true)
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt      @map("updated_at")
+
+  @@map("billing_plan_catalog")
+}
+
+// =====================================================================
+// AI Insights — production intelligence layer
+// =====================================================================
+
+enum InsightKind {
+  PRICE_SPIKE             // ingredient went up significantly
+  MARGIN_EROSION          // recipe margin dropped below target
+  WASTE_PATTERN           // recurring waste at scale
+  REORDER_RECOMMENDATION  // forecasted stockout
+  VENDOR_OPPORTUNITY      // cheaper alternative vendor detected
+  MENU_OPTIMIZATION       // suggest portion / pricing change
+  DEMAND_FORECAST         // upcoming demand spike (events)
+  GENERAL
+
+  @@map("insight_kind")
+}
+
+enum InsightSeverity {
+  INFO
+  WARNING
+  CRITICAL
+
+  @@map("insight_severity")
+}
+
+enum InsightStatus {
+  OPEN
+  ACKNOWLEDGED
+  ACTIONED
+  DISMISSED
+  EXPIRED
+
+  @@map("insight_status")
+}
+
+model Insight {
+  id              String          @id @default(cuid())
+  workspaceId     String          @map("workspace_id")
+  kind            InsightKind
+  severity        InsightSeverity @default(INFO)
+  status          InsightStatus   @default(OPEN)
+
+  title           String          // one-line summary
+  body            String          // longer markdown body with explanation
+  /// AI-generated suggested action (markdown)
+  recommendation  String?
+  /// Confidence (0-1) — how strongly the model believes this is actionable
+  confidence      Decimal         @default(0.5) @db.Decimal(3, 2)
+
+  /// Structured payload backing the insight — entity refs, deltas
+  metadataJson    Json            @map("metadata_json")
+
+  /// What entities this insight refers to (for click-through)
+  entityRefs      Json?           @map("entity_refs")  // {ingredientId?, recipeId?, vendorId?, eventId?}
+
+  /// AI generation metadata
+  aiModel         String?         @map("ai_model")
+  aiTokensInput   Int?            @map("ai_tokens_input")
+  aiTokensOutput  Int?            @map("ai_tokens_output")
+  aiCostCents     Int?            @map("ai_cost_cents")
+
+  acknowledgedAt  DateTime?       @map("acknowledged_at")
+  acknowledgedById String?        @map("acknowledged_by_id")
+  dismissedAt     DateTime?       @map("dismissed_at")
+  expiresAt       DateTime?       @map("expires_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt      @map("updated_at")
+
+  @@index([workspaceId, status, severity])
+  @@index([workspaceId, kind, createdAt(sort: Desc)])
+  @@map("insights")
+}
+
+// =====================================================================
+// Notifications — in-app delivery for cross-feature events
+// =====================================================================
+
+enum NotificationKind {
+  LOW_STOCK
+  INSIGHT
+  INVOICE_EXTRACTION_FAILED
+  KITCHEN_TASK_BLOCKED
+  EVENT_REMINDER
+  BILLING_PAYMENT_FAILED
+  GENERIC
+
+  @@map("notification_kind")
+}
+
+model Notification {
+  id            String           @id @default(cuid())
+  workspaceId   String           @map("workspace_id")
+  /// Null = workspace-wide (everyone in the workspace sees it). Set = user-specific.
+  userId        String?          @map("user_id")
+  kind          NotificationKind
+  title         String
+  body          String?
+  /// Click-through destination — frontend route
+  linkPath      String?          @map("link_path")
+  /// Reference IDs for context
+  entityRefs    Json?            @map("entity_refs")
+  /// Lifecycle
+  readAt        DateTime?        @map("read_at")
+  dismissedAt   DateTime?        @map("dismissed_at")
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  @@index([workspaceId, userId, readAt])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
