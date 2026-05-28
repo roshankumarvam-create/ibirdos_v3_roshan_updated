@@ -17,7 +17,12 @@
 import {
   Injectable, NotFoundException, BadRequestException, Inject,
 } from "@nestjs/common";
-import { Decimal } from "@prisma/client/runtime/library";
+// Decimal is reached via the Prisma namespace (avoids the
+// "@prisma/client/runtime/library" subpath, which some bundler
+// configurations fail to resolve under exports-map restrictions).
+import { Prisma } from "@prisma/client";
+type Decimal = Prisma.Decimal;
+const Decimal = Prisma.Decimal;
 import { Redis } from "ioredis";
 
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";

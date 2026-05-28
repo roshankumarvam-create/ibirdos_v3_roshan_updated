@@ -5,7 +5,8 @@
   "description": "IBirdOS — AI operating system for commercial kitchens",
   "packageManager": "pnpm@9.12.0",
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=20.11.0",
+    "pnpm": ">=9.0.0"
   },
   "scripts": {
     "build": "turbo run build",
@@ -29,7 +30,6 @@
     "test:e2e": "playwright test"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
     "@types/node": "^22.10.0",
     "prettier": "^3.3.3",
     "turbo": "^2.3.0",
