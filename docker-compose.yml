@@ -1,0 +1,65 @@
+# IBirdOS V3 — local development infrastructure
+# Postgres for the relational store, Redis for sessions/queues/cache.
+# Web (apps/web) and API (apps/api) run on the host via `pnpm dev`.
+#
+# Production deployment (Phase 18) replaces this with Helm charts.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ibirdos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ibirdos
+      POSTGRES_PASSWORD: ibirdos_dev_password
+      POSTGRES_DB: ibirdos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ibirdos -d ibirdos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ibirdos-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # MinIO — local S3-compatible storage for R2 development
+  # Production uses real Cloudflare R2; this lets local dev work offline.
+  minio:
+    image: minio/minio:latest
+    container_name: ibirdos-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ibirdos
+      MINIO_ROOT_PASSWORD: ibirdos_dev_password
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

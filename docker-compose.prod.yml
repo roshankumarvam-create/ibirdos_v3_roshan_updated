@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ibirdos}
+      POSTGRES_USER: ${POSTGRES_USER:-ibirdos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ibirdos}"]
+      interval: 10s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    restart: always
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_COOKIE_NAME: ibirdos.sid
+      AUTH_SESSION_TTL_HOURS: "168"
+      ARGON2_MEMORY_KIB: "65536"
+      ARGON2_TIME_COST: "3"
+      ARGON2_PARALLELISM: "4"
+      WEB_URL: ${WEB_URL}
+      API_URL: ${API_URL}
+      STRIPE_REQUIRED: ${STRIPE_REQUIRED:-false}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-4o}
+      R2_ENDPOINT: ${R2_ENDPOINT}
+      R2_BUCKET: ${R2_BUCKET}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL}
+      NODE_ENV: production
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+    ports: ["3001:3001", "3002:3002"]   # 3002 = Socket.IO
+
+  worker:
+    build: { context: ., dockerfile: apps/api/Dockerfile.worker }
+    restart: always
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-4o}
+      R2_ENDPOINT: ${R2_ENDPOINT}
+      R2_BUCKET: ${R2_BUCKET}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      AUTH_SECRET: ${AUTH_SECRET}
+      WEB_URL: ${WEB_URL}
+      API_URL: ${API_URL}
+      NODE_ENV: production
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy } }
+    deploy: { replicas: 2 }
+
+  web:
+    build: { context: ., dockerfile: apps/web/Dockerfile }
+    restart: always
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${API_URL}
+      WEB_URL: ${WEB_URL}
+      AUTH_COOKIE_NAME: ibirdos.sid
+    depends_on: [api]
+    ports: ["3000:3000"]
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,6 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+overrides:
+  ioredis: "5.10.1"

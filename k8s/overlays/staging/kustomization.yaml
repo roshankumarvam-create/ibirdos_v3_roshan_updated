@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ibirdos-staging
+resources: [../../base]
+images:
+  - name: ghcr.io/ibirdos/api
+    newTag: staging
+  - name: ghcr.io/ibirdos/web
+    newTag: staging
+  - name: ghcr.io/ibirdos/workers
+    newTag: staging

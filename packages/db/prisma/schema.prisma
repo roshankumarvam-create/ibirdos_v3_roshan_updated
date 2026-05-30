@@ -1,0 +1,1055 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Workspace {
+  id                   String           @id @default(cuid())
+  slug                 String           @unique
+  name                 String
+  status               WorkspaceStatus  @default(ACTIVE)
+  stripeCustomerId     String?          @unique @map("stripe_customer_id")
+  stripeSubscriptionId String?          @unique @map("stripe_subscription_id")
+  settings             Json             @default("{}")
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+  deletedAt            DateTime?        @map("deleted_at")
+  auditLogs            AuditLog[]
+  billingCustomer      BillingCustomer?
+  memberships          Membership[]
+
+  @@index([slug])
+  @@index([deletedAt])
+  @@map("workspaces")
+}
+
+model User {
+  id                 String                 @id @default(cuid())
+  username           String                 @unique
+  email              String?                @unique
+  passwordHash       String                 @map("password_hash")
+  displayName        String?                @map("display_name")
+  mustChangePassword Boolean                @default(true) @map("must_change_password")
+  lastLoginAt        DateTime?              @map("last_login_at")
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+  deletedAt          DateTime?              @map("deleted_at")
+  auditLogs          AuditLog[]             @relation("AuditLogActor")
+  staffAssignments   EventStaffAssignment[]
+  createdMemberships Membership[]           @relation("MembershipCreator")
+  memberships        Membership[]
+  sessions           Session[]
+
+  @@index([username])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model Membership {
+  id          String           @id @default(cuid())
+  workspaceId String           @map("workspace_id")
+  userId      String           @map("user_id")
+  role        Role
+  status      MembershipStatus @default(ACTIVE)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  createdById String?          @map("created_by_id")
+  createdBy   User?            @relation("MembershipCreator", fields: [createdById], references: [id])
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+model Session {
+  id          String    @id @default(cuid())
+  userId      String    @map("user_id")
+  workspaceId String    @map("workspace_id")
+  tokenHash   String    @unique @map("token_hash")
+  ipAddress   String?   @map("ip_address")
+  userAgent   String?   @map("user_agent")
+  expiresAt   DateTime  @map("expires_at")
+  revokedAt   DateTime? @map("revoked_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  actorId     String?   @map("actor_id")
+  action      String
+  entityType  String    @map("entity_type")
+  entityId    String    @map("entity_id")
+  metadata    Json      @default("{}")
+  ipAddress   String?   @map("ip_address")
+  userAgent   String?   @map("user_agent")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  actor       User?     @relation("AuditLogActor", fields: [actorId], references: [id])
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+model Vendor {
+  id              String                   @id @default(cuid())
+  workspaceId     String                   @map("workspace_id")
+  name            String
+  code            String?
+  contactEmail    String?                  @map("contact_email")
+  contactPhone    String?                  @map("contact_phone")
+  integrationType VendorIntegrationType    @default(NONE) @map("integration_type")
+  notes           String?
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+  createdById     String?                  @map("created_by_id")
+  deletedAt       DateTime?                @map("deleted_at")
+  priceHistory    IngredientPriceHistory[]
+  ingredients     Ingredient[]
+  invoices        Invoice[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("vendors")
+}
+
+model Ingredient {
+  id                        String                   @id @default(cuid())
+  workspaceId               String                   @map("workspace_id")
+  name                      String
+  category                  IngredientCategory       @default(OTHER)
+  dimension                 UnitDimension
+  canonicalUnit             String                   @map("canonical_unit")
+  densityGPerMl             Decimal?                 @map("density_g_per_ml") @db.Decimal(10, 4)
+  currentCostMicrocents     BigInt?                  @map("current_cost_microcents")
+  currentVendorId           String?                  @map("current_vendor_id")
+  currentStockCanonical     Decimal                  @default(0) @map("current_stock_canonical") @db.Decimal(14, 4)
+  reorderThresholdCanonical Decimal?                 @map("reorder_threshold_canonical") @db.Decimal(14, 4)
+  preferredDisplayUnit      String?                  @map("preferred_display_unit")
+  defaultYieldPct           Decimal                  @default(100) @map("default_yield_pct") @db.Decimal(5, 2)
+  photoUrl                  String?                  @map("photo_url")
+  notes                     String?
+  createdAt                 DateTime                 @default(now()) @map("created_at")
+  updatedAt                 DateTime                 @updatedAt @map("updated_at")
+  createdById               String?                  @map("created_by_id")
+  deletedAt                 DateTime?                @map("deleted_at")
+  aliases                   IngredientAlias[]
+  priceHistory              IngredientPriceHistory[]
+  vendor                    Vendor?                  @relation(fields: [currentVendorId], references: [id])
+  inventoryTransactions     InventoryTransaction[]
+  lowStockAlerts            LowStockAlert[]
+  recipeIngredients         RecipeIngredient[]
+  wasteEntries              WasteEntry[]
+  yieldEntries              YieldEntry[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@index([workspaceId, category])
+  @@index([workspaceId, deletedAt])
+  @@map("ingredients")
+}
+
+model IngredientAlias {
+  id           String      @id @default(cuid())
+  workspaceId  String      @map("workspace_id")
+  ingredientId String      @map("ingredient_id")
+  text         String
+  source       AliasSource @default(MANUAL)
+  confidence   Decimal     @default(1.0) @db.Decimal(3, 2)
+  needsReview  Boolean     @default(false) @map("needs_review")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  createdById  String?     @map("created_by_id")
+  ingredient   Ingredient  @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, text])
+  @@index([ingredientId])
+  @@index([workspaceId, needsReview])
+  @@map("ingredient_aliases")
+}
+
+model IngredientPriceHistory {
+  id                          String      @id @default(cuid())
+  workspaceId                 String      @map("workspace_id")
+  ingredientId                String      @map("ingredient_id")
+  vendorId                    String?     @map("vendor_id")
+  pricePerCanonicalMicrocents BigInt      @map("price_per_canonical_microcents")
+  source                      PriceSource
+  sourceRef                   String?     @map("source_ref")
+  effectiveAt                 DateTime    @default(now()) @map("effective_at")
+  notes                       String?
+  createdById                 String?     @map("created_by_id")
+  ingredient                  Ingredient  @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  vendor                      Vendor?     @relation(fields: [vendorId], references: [id])
+
+  @@index([workspaceId, ingredientId, effectiveAt(sort: Desc)])
+  @@index([workspaceId, effectiveAt(sort: Desc)])
+  @@map("ingredient_price_history")
+}
+
+model Invoice {
+  id              String                 @id @default(cuid())
+  workspaceId     String                 @map("workspace_id")
+  vendorId        String?                @map("vendor_id")
+  uploadKey       String                 @map("upload_key")
+  uploadMimeType  String                 @map("upload_mime_type")
+  uploadSizeBytes Int                    @map("upload_size_bytes")
+  status          InvoiceStatus          @default(UPLOADING)
+  paymentStatus   InvoicePaymentStatus   @default(UNPAID) @map("payment_status")
+  vendorNameRaw   String?                @map("vendor_name_raw")
+  invoiceNumber   String?                @map("invoice_number")
+  invoiceDate     DateTime?              @map("invoice_date")
+  dueDate         DateTime?              @map("due_date")
+  subtotalCents   Int?                   @map("subtotal_cents")
+  taxCents        Int?                   @map("tax_cents")
+  totalCents      Int?                   @map("total_cents")
+  currency        String                 @default("USD")
+  aiModel         String?                @map("ai_model")
+  aiTokensInput   Int?                   @map("ai_tokens_input")
+  aiTokensOutput  Int?                   @map("ai_tokens_output")
+  aiCostCents     Int?                   @map("ai_cost_cents")
+  extractionError String?                @map("extraction_error")
+  confirmedAt     DateTime?              @map("confirmed_at")
+  confirmedById   String?                @map("confirmed_by_id")
+  createdAt       DateTime               @default(now()) @map("created_at")
+  updatedAt       DateTime               @updatedAt @map("updated_at")
+  createdById     String?                @map("created_by_id")
+  deletedAt       DateTime?              @map("deleted_at")
+  extractionJobs  InvoiceExtractionJob[]
+  lines           InvoiceLine[]
+  vendor          Vendor?                @relation(fields: [vendorId], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, invoiceDate(sort: Desc)])
+  @@index([workspaceId, deletedAt])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id                    String              @id @default(cuid())
+  workspaceId           String              @map("workspace_id")
+  invoiceId             String              @map("invoice_id")
+  position              Int
+  descriptionRaw        String              @map("description_raw")
+  quantity              Decimal             @db.Decimal(14, 4)
+  unit                  String
+  unitPriceCents        Int                 @map("unit_price_cents")
+  extendedPriceCents    Int                 @map("extended_price_cents")
+  category              InvoiceLineCategory @default(FOOD_INGREDIENT)
+  proposedIngredientId  String?             @map("proposed_ingredient_id")
+  proposedConfidence    Decimal?            @map("proposed_confidence") @db.Decimal(3, 2)
+  committedIngredientId String?             @map("committed_ingredient_id")
+  packSize              Decimal?            @map("pack_size") @db.Decimal(14, 4)
+  packUnit              String?             @map("pack_unit")
+  excluded              Boolean             @default(false)
+  notes                 String?
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @updatedAt @map("updated_at")
+  invoice               Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([workspaceId])
+  @@map("invoice_lines")
+}
+
+model InvoiceExtractionJob {
+  id           String              @id @default(cuid())
+  workspaceId  String              @map("workspace_id")
+  invoiceId    String              @map("invoice_id")
+  status       ExtractionJobStatus @default(QUEUED)
+  attemptCount Int                 @default(0) @map("attempt_count")
+  lastError    String?             @map("last_error")
+  startedAt    DateTime?           @map("started_at")
+  finishedAt   DateTime?           @map("finished_at")
+  createdAt    DateTime            @default(now()) @map("created_at")
+  invoice      Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([invoiceId])
+  @@map("invoice_extraction_jobs")
+}
+
+model Recipe {
+  id                   String              @id @default(cuid())
+  workspaceId          String              @map("workspace_id")
+  name                 String
+  category             String?
+  status               RecipeStatus        @default(DRAFT)
+  prepTimeMin          Int?                @map("prep_time_min")
+  cookTimeMin          Int?                @map("cook_time_min")
+  portionsYielded      Int?                @map("portions_yielded")
+  totalYieldCanonical  Decimal?            @map("total_yield_canonical") @db.Decimal(14, 4)
+  totalYieldDimension  UnitDimension?      @map("total_yield_dimension")
+  salePriceCents       Int?                @map("sale_price_cents")
+  cachedCostMicrocents BigInt?             @map("cached_cost_microcents")
+  cachedCostUpdatedAt  DateTime?           @map("cached_cost_updated_at")
+  costStaleness        RecipeCostStaleness @default(NO_INGREDIENTS) @map("cost_staleness")
+  costComputeError     String?             @map("cost_compute_error")
+  cachedMarginPct      Decimal?            @map("cached_margin_pct") @db.Decimal(5, 2)
+  photoUrl             String?             @map("photo_url")
+  instructionsMd       String?             @map("instructions_md")
+  notes                String?
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+  createdById          String?             @map("created_by_id")
+  deletedAt            DateTime?           @map("deleted_at")
+  eventMenuItems       EventMenuItem[]
+  costHistory          RecipeCostHistory[]
+  ingredients          RecipeIngredient[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, status])
+  @@index([workspaceId, deletedAt])
+  @@map("recipes")
+}
+
+model RecipeIngredient {
+  id               String     @id @default(cuid())
+  workspaceId      String     @map("workspace_id")
+  recipeId         String     @map("recipe_id")
+  ingredientId     String     @map("ingredient_id")
+  quantity         Decimal    @db.Decimal(14, 4)
+  unit             String
+  yieldPctOverride Decimal?   @map("yield_pct_override") @db.Decimal(5, 2)
+  notes            String?
+  displayOrder     Int        @default(0) @map("display_order")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
+  ingredient       Ingredient @relation(fields: [ingredientId], references: [id])
+  recipe           Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@unique([recipeId, ingredientId])
+  @@index([ingredientId])
+  @@index([workspaceId])
+  @@map("recipe_ingredients")
+}
+
+model RecipeCostHistory {
+  id                  String   @id @default(cuid())
+  workspaceId         String   @map("workspace_id")
+  recipeId            String   @map("recipe_id")
+  totalCostMicrocents BigInt   @map("total_cost_microcents")
+  portionsYielded     Int?     @map("portions_yielded")
+  salePriceCents      Int?     @map("sale_price_cents")
+  marginPct           Decimal? @map("margin_pct") @db.Decimal(5, 2)
+  triggerKind         String   @map("trigger_kind")
+  triggerRef          String?  @map("trigger_ref")
+  computedAt          DateTime @default(now()) @map("computed_at")
+  recipe              Recipe   @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, recipeId, computedAt(sort: Desc)])
+  @@map("recipe_cost_history")
+}
+
+model InventoryTransaction {
+  id                    String                   @id @default(cuid())
+  workspaceId           String                   @map("workspace_id")
+  ingredientId          String                   @map("ingredient_id")
+  kind                  InventoryTransactionKind
+  /// Positive = stock IN, negative = stock OUT. In canonical units.
+  quantityCanonical     Decimal                  @map("quantity_canonical") @db.Decimal(14, 4)
+  /// Stock level AFTER this transaction (for fast last-balance lookups).
+  balanceAfterCanonical Decimal                  @map("balance_after_canonical") @db.Decimal(14, 4)
+  /// Cost basis of this movement in microcents (for COGS reports).
+  costMicrocents        BigInt?                  @map("cost_microcents")
+  /// "Invoice", "Recipe", "Event", "Manual" â€” the originating system.
+  sourceKind            String                   @map("source_kind")
+  sourceRef             String?                  @map("source_ref")
+  notes                 String?
+  createdAt             DateTime                 @default(now()) @map("created_at")
+  createdById           String?                  @map("created_by_id")
+  ingredient            Ingredient               @relation(fields: [ingredientId], references: [id])
+
+  @@index([workspaceId, ingredientId, createdAt(sort: Desc)])
+  @@index([workspaceId, kind, createdAt(sort: Desc)])
+  @@map("inventory_transactions")
+}
+
+model LowStockAlert {
+  id                 String              @id @default(cuid())
+  workspaceId        String              @map("workspace_id")
+  ingredientId       String              @map("ingredient_id")
+  status             LowStockAlertStatus @default(OPEN)
+  currentCanonical   Decimal             @map("current_canonical") @db.Decimal(14, 4)
+  thresholdCanonical Decimal             @map("threshold_canonical") @db.Decimal(14, 4)
+  detectedAt         DateTime            @default(now()) @map("detected_at")
+  resolvedAt         DateTime?           @map("resolved_at")
+  acknowledgedById   String?             @map("acknowledged_by_id")
+  ingredient         Ingredient          @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, ingredientId, status])
+  @@index([workspaceId, status])
+  @@map("low_stock_alerts")
+}
+
+model Event {
+  id                     String                 @id @default(cuid())
+  workspaceId            String                 @map("workspace_id")
+  name                   String
+  status                 EventStatus            @default(DRAFT)
+  serviceType            EventServiceType       @default(OTHER) @map("service_type")
+  customerName           String?                @map("customer_name")
+  customerContact        String?                @map("customer_contact")
+  venueAddress           String?                @map("venue_address")
+  /// Service window
+  startsAt               DateTime               @map("starts_at")
+  endsAt                 DateTime?              @map("ends_at")
+  /// When prep should begin (auto-derived from kitchen packet or manual)
+  prepStartsAt           DateTime?              @map("prep_starts_at")
+  guestCount             Int                    @map("guest_count")
+  /// Cushion: 1.10 = prep for 10% above guest count (default safety)
+  portionMultiplier      Decimal                @default(1.10) @map("portion_multiplier") @db.Decimal(4, 2)
+  /// Revenue from this event (quoted price)
+  quotedPriceCents       Int?                   @map("quoted_price_cents")
+  /// Computed COGS after kitchen packet generation
+  computedFoodCostCents  Int?                   @map("computed_food_cost_cents")
+  /// Computed labor cost from staff assignments
+  computedLaborCostCents Int?                   @map("computed_labor_cost_cents")
+  /// Margin = (revenue - food - labor) / revenue * 100, cached
+  computedMarginPct      Decimal?               @map("computed_margin_pct") @db.Decimal(5, 2)
+  notes                  String?
+  createdAt              DateTime               @default(now()) @map("created_at")
+  updatedAt              DateTime               @updatedAt @map("updated_at")
+  createdById            String?                @map("created_by_id")
+  deletedAt              DateTime?              @map("deleted_at")
+  menuItems              EventMenuItem[]
+  staff                  EventStaffAssignment[]
+  kitchenPacket          KitchenPacket?
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, startsAt])
+  @@index([workspaceId, deletedAt])
+  @@map("events")
+}
+
+model EventMenuItem {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  eventId           String   @map("event_id")
+  recipeId          String   @map("recipe_id")
+  /// How many portions of this recipe (typically = guestCount Ã— multiplier)
+  portions          Int
+  /// Per-item override on the event multiplier (allows mains 1.15Ã— but sides 1.05Ã—)
+  perItemMultiplier Decimal? @map("per_item_multiplier") @db.Decimal(4, 2)
+  notes             String?
+  displayOrder      Int      @default(0) @map("display_order")
+  createdAt         DateTime @default(now()) @map("created_at")
+  event             Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  recipe            Recipe   @relation(fields: [recipeId], references: [id])
+
+  @@unique([eventId, recipeId])
+  @@map("event_menu_items")
+}
+
+model EventStaffAssignment {
+  id              String              @id @default(cuid())
+  workspaceId     String              @map("workspace_id")
+  eventId         String              @map("event_id")
+  userId          String?             @map("user_id")
+  role            StaffAssignmentRole
+  hours           Decimal             @db.Decimal(5, 2)
+  hourlyRateCents Int                 @map("hourly_rate_cents")
+  notes           String?
+  createdAt       DateTime            @default(now()) @map("created_at")
+  event           Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user            User?               @relation(fields: [userId], references: [id])
+
+  @@index([eventId])
+  @@index([workspaceId, userId])
+  @@map("event_staff_assignments")
+}
+
+/// Generated artifact â€” a snapshot of what the kitchen needs to produce.
+/// Regenerated when event menu/guest count changes; not edited directly.
+model KitchenPacket {
+  id                      String   @id @default(cuid())
+  workspaceId             String   @map("workspace_id")
+  eventId                 String   @unique @map("event_id")
+  generatedAt             DateTime @default(now()) @map("generated_at")
+  /// Aggregated ingredient demand: [{ ingredientId, totalCanonicalQty, breakdown: [recipeâ†’qty] }]
+  ingredientsJson         Json     @map("ingredients_json")
+  /// Per-recipe production tasks with target portions and prep times
+  tasksJson               Json     @map("tasks_json")
+  totalFoodCostMicrocents BigInt?  @map("total_food_cost_microcents")
+  event                   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("kitchen_packets")
+}
+
+model KitchenTask {
+  id               String            @id @default(cuid())
+  workspaceId      String            @map("workspace_id")
+  eventId          String?           @map("event_id")
+  recipeId         String?           @map("recipe_id")
+  station          KitchenStation    @default(OTHER)
+  title            String
+  targetPortions   Int?              @map("target_portions")
+  estimatedMinutes Int?              @map("estimated_minutes")
+  status           KitchenTaskStatus @default(PENDING)
+  blockReason      String?           @map("block_reason")
+  assignedUserId   String?           @map("assigned_user_id")
+  scheduledStartAt DateTime?         @map("scheduled_start_at")
+  startedAt        DateTime?         @map("started_at")
+  completedAt      DateTime?         @map("completed_at")
+  notes            String?
+  displayOrder     Int               @default(0) @map("display_order")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  createdById      String?           @map("created_by_id")
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, station, status])
+  @@index([workspaceId, eventId])
+  @@map("kitchen_tasks")
+}
+
+model YieldEntry {
+  id             String     @id @default(cuid())
+  workspaceId    String     @map("workspace_id")
+  ingredientId   String     @map("ingredient_id")
+  recipeId       String?    @map("recipe_id")
+  /// Raw input in canonical units
+  rawCanonical   Decimal    @map("raw_canonical") @db.Decimal(14, 4)
+  /// Usable output in canonical units (after trim/cook shrink)
+  yieldCanonical Decimal    @map("yield_canonical") @db.Decimal(14, 4)
+  /// Computed: yieldCanonical / rawCanonical * 100
+  yieldPct       Decimal    @map("yield_pct") @db.Decimal(5, 2)
+  notes          String?
+  observedAt     DateTime   @default(now()) @map("observed_at")
+  createdById    String?    @map("created_by_id")
+  ingredient     Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, ingredientId, observedAt(sort: Desc)])
+  @@map("yield_entries")
+}
+
+model WasteEntry {
+  id                String      @id @default(cuid())
+  workspaceId       String      @map("workspace_id")
+  ingredientId      String      @map("ingredient_id")
+  reason            WasteReason
+  quantityCanonical Decimal     @map("quantity_canonical") @db.Decimal(14, 4)
+  /// Cost basis at time of waste (snapshot of current ingredient price Ã— qty)
+  costMicrocents    BigInt      @map("cost_microcents")
+  recipeId          String?     @map("recipe_id")
+  eventId           String?     @map("event_id")
+  notes             String?
+  occurredAt        DateTime    @default(now()) @map("occurred_at")
+  createdById       String?     @map("created_by_id")
+  ingredient        Ingredient  @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, occurredAt(sort: Desc)])
+  @@index([workspaceId, ingredientId])
+  @@index([workspaceId, reason])
+  @@map("waste_entries")
+}
+
+model CustomerProfile {
+  id          String          @id @default(cuid())
+  workspaceId String          @map("workspace_id")
+  email       String
+  fullName    String?         @map("full_name")
+  phone       String?
+  notes       String?
+  createdAt   DateTime        @default(now()) @map("created_at")
+  orders      CustomerOrder[]
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId])
+  @@map("customer_profiles")
+}
+
+model CustomerOrder {
+  id                      String              @id @default(cuid())
+  workspaceId             String              @map("workspace_id")
+  customerId              String              @map("customer_id")
+  status                  CustomerOrderStatus @default(DRAFT)
+  /// What they're ordering â€” array of { recipeId, quantity, portionSize }
+  itemsJson               Json                @map("items_json")
+  /// Add-ons: { utensils: bool, staffHours: number, deliveryMiles: number }
+  addonsJson              Json?               @map("addons_json")
+  serviceType             EventServiceType    @default(BOXED) @map("service_type")
+  guestCount              Int                 @map("guest_count")
+  scheduledFor            DateTime            @map("scheduled_for")
+  venueAddress            String?             @map("venue_address")
+  subtotalCents           Int                 @map("subtotal_cents")
+  addonsCents             Int                 @default(0) @map("addons_cents")
+  taxCents                Int                 @default(0) @map("tax_cents")
+  totalCents              Int                 @map("total_cents")
+  stripeCheckoutSessionId String?             @map("stripe_checkout_session_id")
+  stripePaymentIntentId   String?             @map("stripe_payment_intent_id")
+  paidAt                  DateTime?           @map("paid_at")
+  /// Linked event auto-created on PAID
+  createdEventId          String?             @unique @map("created_event_id")
+  notes                   String?
+  createdAt               DateTime            @default(now()) @map("created_at")
+  updatedAt               DateTime            @updatedAt @map("updated_at")
+  customer                CustomerProfile     @relation(fields: [customerId], references: [id])
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, scheduledFor])
+  @@map("customer_orders")
+}
+
+model BillingCustomer {
+  id                     String         @id @default(cuid())
+  workspaceId            String         @unique @map("workspace_id")
+  stripeCustomerId       String         @unique @map("stripe_customer_id")
+  billingEmail           String         @map("billing_email")
+  taxId                  String?        @map("tax_id")
+  defaultPaymentMethodId String?        @map("default_payment_method_id")
+  createdAt              DateTime       @default(now()) @map("created_at")
+  updatedAt              DateTime       @updatedAt @map("updated_at")
+  workspace              Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  paymentEvents          PaymentEvent[]
+  subscriptions          Subscription[]
+
+  @@index([workspaceId])
+  @@map("billing_customers")
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  workspaceId          String             @map("workspace_id")
+  customerId           String             @map("customer_id")
+  stripeSubscriptionId String             @unique @map("stripe_subscription_id")
+  plan                 BillingPlan
+  status               SubscriptionStatus
+  /// Stripe Price ID currently attached
+  stripePriceId        String             @map("stripe_price_id")
+  /// Seat-based quantity (number of MEMBERSHIPS with status=ACTIVE)
+  seatQuantity         Int                @default(1) @map("seat_quantity")
+  /// In whole cents per seat per billing period
+  unitAmountCents      Int                @map("unit_amount_cents")
+  currency             String             @default("USD")
+  /// e.g., "month" or "year"
+  interval             String             @default("month")
+  currentPeriodStart   DateTime           @map("current_period_start")
+  currentPeriodEnd     DateTime           @map("current_period_end")
+  trialEndsAt          DateTime?          @map("trial_ends_at")
+  cancelAt             DateTime?          @map("cancel_at")
+  canceledAt           DateTime?          @map("canceled_at")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+  customer             BillingCustomer    @relation(fields: [customerId], references: [id])
+
+  @@index([workspaceId, status])
+  @@map("subscriptions")
+}
+
+model PaymentEvent {
+  id              String          @id @default(cuid())
+  workspaceId     String          @map("workspace_id")
+  customerId      String          @map("customer_id")
+  /// e.g. "invoice.payment_succeeded", "invoice.payment_failed",
+  /// "customer.subscription.updated", "customer.subscription.deleted"
+  stripeEventType String          @map("stripe_event_type")
+  stripeEventId   String          @unique @map("stripe_event_id")
+  amountCents     Int?            @map("amount_cents")
+  currency        String?
+  /// Snapshot of the relevant Stripe object so we can render history
+  /// even if the row was deleted server-side later.
+  payloadJson     Json            @map("payload_json")
+  receivedAt      DateTime        @default(now()) @map("received_at")
+  customer        BillingCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, receivedAt(sort: Desc)])
+  @@map("payment_events")
+}
+
+model BillingPlanCatalog {
+  /// Reference catalog of available plans, seeded by ops; the source
+  /// of truth for "what can a customer pick" without round-tripping
+  /// to Stripe on every page load.
+  id                     String      @id @default(cuid())
+  plan                   BillingPlan @unique
+  displayName            String      @map("display_name")
+  stripePriceMonthlyId   String?     @map("stripe_price_monthly_id")
+  stripePriceYearlyId    String?     @map("stripe_price_yearly_id")
+  unitAmountMonthlyCents Int         @map("unit_amount_monthly_cents")
+  unitAmountYearlyCents  Int         @map("unit_amount_yearly_cents")
+  seatIncluded           Int         @map("seat_included")
+  features               Json
+  active                 Boolean     @default(true)
+  createdAt              DateTime    @default(now()) @map("created_at")
+  updatedAt              DateTime    @updatedAt @map("updated_at")
+
+  @@map("billing_plan_catalog")
+}
+
+model Insight {
+  id               String          @id @default(cuid())
+  workspaceId      String          @map("workspace_id")
+  kind             InsightKind
+  severity         InsightSeverity @default(INFO)
+  status           InsightStatus   @default(OPEN)
+  title            String
+  body             String
+  /// AI-generated suggested action (markdown)
+  recommendation   String?
+  /// Confidence (0-1) â€” how strongly the model believes this is actionable
+  confidence       Decimal         @default(0.5) @db.Decimal(3, 2)
+  /// Structured payload backing the insight â€” entity refs, deltas
+  metadataJson     Json            @map("metadata_json")
+  /// What entities this insight refers to (for click-through)
+  entityRefs       Json?           @map("entity_refs")
+  /// AI generation metadata
+  aiModel          String?         @map("ai_model")
+  aiTokensInput    Int?            @map("ai_tokens_input")
+  aiTokensOutput   Int?            @map("ai_tokens_output")
+  aiCostCents      Int?            @map("ai_cost_cents")
+  acknowledgedAt   DateTime?       @map("acknowledged_at")
+  acknowledgedById String?         @map("acknowledged_by_id")
+  dismissedAt      DateTime?       @map("dismissed_at")
+  expiresAt        DateTime?       @map("expires_at")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  @@index([workspaceId, status, severity])
+  @@index([workspaceId, kind, createdAt(sort: Desc)])
+  @@map("insights")
+}
+
+model Notification {
+  id          String           @id @default(cuid())
+  workspaceId String           @map("workspace_id")
+  /// Null = workspace-wide (everyone in the workspace sees it). Set = user-specific.
+  userId      String?          @map("user_id")
+  kind        NotificationKind
+  title       String
+  body        String?
+  /// Click-through destination â€” frontend route
+  linkPath    String?          @map("link_path")
+  /// Reference IDs for context
+  entityRefs  Json?            @map("entity_refs")
+  /// Lifecycle
+  readAt      DateTime?        @map("read_at")
+  dismissedAt DateTime?        @map("dismissed_at")
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  @@index([workspaceId, userId, readAt])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+enum WorkspaceStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELED
+
+  @@map("workspace_status")
+}
+
+enum Role {
+  OWNER
+  MANAGER
+  CHEF
+  STAFF
+  CUSTOMER
+
+  @@map("role")
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_PASSWORD_RESET
+
+  @@map("membership_status")
+}
+
+enum IngredientCategory {
+  PRODUCE
+  PROTEIN
+  DAIRY
+  DRY_GOODS
+  SPICES
+  OIL_VINEGAR
+  BEVERAGE
+  FROZEN
+  BAKERY
+  PACKAGING
+  CLEANING
+  OTHER
+
+  @@map("ingredient_category")
+}
+
+enum UnitDimension {
+  MASS
+  VOLUME
+  COUNT
+
+  @@map("unit_dimension")
+}
+
+enum AliasSource {
+  MANUAL
+  INVOICE
+  RECIPE
+  VENDOR_CATALOG
+  AI_MATCH
+
+  @@map("alias_source")
+}
+
+enum PriceSource {
+  INVOICE
+  VENDOR_API
+  MANUAL
+  IMPORTED
+
+  @@map("price_source")
+}
+
+enum VendorIntegrationType {
+  NONE
+  API
+  EDI
+  EMAIL
+  CSV
+
+  @@map("vendor_integration_type")
+}
+
+enum InvoiceStatus {
+  UPLOADING
+  EXTRACTING
+  EXTRACTION_FAILED
+  PENDING_REVIEW
+  CONFIRMED
+  ARCHIVED
+
+  @@map("invoice_status")
+}
+
+enum InvoicePaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+
+  @@map("invoice_payment_status")
+}
+
+enum InvoiceLineCategory {
+  FOOD_INGREDIENT
+  PACKAGING
+  LABOR
+  DELIVERY
+  TAX
+  DISCOUNT
+  IGNORED
+
+  @@map("invoice_line_category")
+}
+
+enum ExtractionJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+
+  @@map("extraction_job_status")
+}
+
+enum RecipeStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+
+  @@map("recipe_status")
+}
+
+enum RecipeCostStaleness {
+  FRESH
+  STALE
+  RECOSTING
+  COMPUTE_ERROR
+  NO_INGREDIENTS
+
+  @@map("recipe_cost_staleness")
+}
+
+enum InventoryTransactionKind {
+  RECEIVE
+  CONSUME
+  ADJUST
+  TRANSFER_OUT
+  TRANSFER_IN
+  WASTE
+
+  @@map("inventory_transaction_kind")
+}
+
+enum LowStockAlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+
+  @@map("low_stock_alert_status")
+}
+
+enum EventStatus {
+  DRAFT
+  CONFIRMED
+  PREP_IN_PROGRESS
+  IN_SERVICE
+  COMPLETED
+  CANCELLED
+
+  @@map("event_status")
+}
+
+enum EventServiceType {
+  BUFFET
+  PLATED
+  FAMILY_STYLE
+  COCKTAIL
+  BOXED
+  DROP_OFF
+  OTHER
+
+  @@map("event_service_type")
+}
+
+enum StaffAssignmentRole {
+  HEAD_CHEF
+  LINE_COOK
+  PREP_COOK
+  SERVER
+  BARTENDER
+  DRIVER
+  COORDINATOR
+  OTHER
+
+  @@map("staff_assignment_role")
+}
+
+enum KitchenStation {
+  GRILL
+  SAUTE
+  FRY
+  PASTRY
+  PREP
+  PIZZA
+  SALAD
+  GARDE_MANGER
+  EXPO
+  OTHER
+
+  @@map("kitchen_station")
+}
+
+enum KitchenTaskStatus {
+  PENDING
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+
+  @@map("kitchen_task_status")
+}
+
+enum WasteReason {
+  SPOILAGE
+  OVERPRODUCTION
+  TRIM_LOSS
+  COOKING_ERROR
+  CUSTOMER_RETURN
+  DROPPED
+  EXPIRED
+  OTHER
+
+  @@map("waste_reason")
+}
+
+enum CustomerOrderStatus {
+  DRAFT
+  AWAITING_PAYMENT
+  PAID
+  CANCELLED
+  REFUNDED
+
+  @@map("customer_order_status")
+}
+
+enum BillingPlan {
+  TRIAL
+  STARTER
+  GROWTH
+  SCALE
+  ENTERPRISE
+
+  @@map("billing_plan")
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  INCOMPLETE
+  INCOMPLETE_EXPIRED
+  PAUSED
+
+  @@map("subscription_status")
+}
+
+enum InsightKind {
+  PRICE_SPIKE
+  MARGIN_EROSION
+  WASTE_PATTERN
+  REORDER_RECOMMENDATION
+  VENDOR_OPPORTUNITY
+  MENU_OPTIMIZATION
+  DEMAND_FORECAST
+  GENERAL
+
+  @@map("insight_kind")
+}
+
+enum InsightSeverity {
+  INFO
+  WARNING
+  CRITICAL
+
+  @@map("insight_severity")
+}
+
+enum InsightStatus {
+  OPEN
+  ACKNOWLEDGED
+  ACTIONED
+  DISMISSED
+  EXPIRED
+
+  @@map("insight_status")
+}
+
+enum NotificationKind {
+  LOW_STOCK
+  INSIGHT
+  INVOICE_EXTRACTION_FAILED
+  KITCHEN_TASK_BLOCKED
+  EVENT_REMINDER
+  BILLING_PAYMENT_FAILED
+  GENERIC
+
+  @@map("notification_kind")
+}

@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: prisma-migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: migrate
+          image: ghcr.io/ibirdos/api:latest
+          command: ["pnpm", "--filter", "@ibirdos/db", "run", "deploy:migrate"]
+          envFrom:
+            - configMapRef: { name: ibirdos-config }
+            - secretRef: { name: ibirdos-secrets }
