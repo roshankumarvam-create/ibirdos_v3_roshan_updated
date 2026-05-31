@@ -177,3 +177,40 @@ export interface CreatedUserCredentials {
 // Phase 5+ additions
 export * from "./units";
 export * from "./ingredient";
+
+// ---------------------------------------------------------------------
+// Recipe creation — shared by web form and API validation
+// ---------------------------------------------------------------------
+
+export const CreateRecipeIngredientLineSchema = z.object({
+  ingredientId:     z.string().min(1),
+  externalCode:     z.string().optional(),
+  quantity:         z.number().positive(),
+  unit:             z.string().min(1),
+  percentUtilized:  z.number().min(1).max(200).optional().default(100),
+  weightOz:         z.number().positive().optional(),
+});
+
+export type CreateRecipeIngredientLine = z.infer<typeof CreateRecipeIngredientLineSchema>;
+
+export const CreateRecipeInputSchema = z.object({
+  name:                 z.string().min(1).max(200),
+  authorName:           z.string().max(120).optional(),
+  category:             z.string().max(80).optional(),
+  description:          z.string().max(2000).optional(),
+  totalPortions:        z.number().int().positive().optional(),
+  portionVolumeMl:      z.number().positive().optional(),
+  portionWeightG:       z.number().positive().optional(),
+  prepTimeMinutes:      z.number().int().min(0).optional(),
+  cookTimeMinutes:      z.number().int().min(0).optional(),
+  procedure:            z.string().max(20000).optional(),
+  goalFoodCostPct:      z.number().min(0).max(100).optional(),
+  paperCostCents:       z.number().int().min(0).optional(),
+  actualSellPriceCents: z.number().int().min(0).optional(),
+  prepPhotoUrl:         z.string().url().optional(),
+  finalPhotoUrl:        z.string().url().optional(),
+  videoUrl:             z.string().url().optional(),
+  ingredientLines:      z.array(CreateRecipeIngredientLineSchema).min(1, "Add at least one ingredient"),
+});
+
+export type CreateRecipeInput = z.infer<typeof CreateRecipeInputSchema>;

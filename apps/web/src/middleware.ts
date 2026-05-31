@@ -15,7 +15,9 @@ export function middleware(req: NextRequest) {
   // require coordination with the Next runtime).
   const csp = [
     "default-src 'self'",
-    `connect-src 'self' ${apiOrigin} ${wsOrigin}`,
+    process.env.NODE_ENV === "production"
+      ? `connect-src 'self' ${apiOrigin} ${wsOrigin} ${process.env.NEXT_PUBLIC_R2_PUBLIC_URL ?? "https:"}`
+      : `connect-src 'self' ${apiOrigin} ${wsOrigin} http://localhost:9000 http://localhost:3002 ws://localhost:3002`,
     "img-src 'self' data: blob: https:",
     "style-src 'self' 'unsafe-inline'",
     process.env.NODE_ENV === "production" ? "script-src 'self' 'unsafe-inline'" : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",  // Next.js inline scripts; dev needs unsafe-eval for react-refresh

@@ -13,6 +13,10 @@
 // worker can persist rows directly without a translation layer.
 // =====================================================================
 
+// TODO: OpenAI Vision API returns "400 Missing required parameter: messages[1].content[1].image_url.url"
+// even though the code appears to construct messages correctly per OpenAI spec.
+// Suspect: openai SDK version mismatch, or some message field being mutated/stripped before send.
+// Next debug step: dump exact JSON sent over wire via debug proxy or .withResponse() debug.
 import OpenAI from "openai";
 import { z } from "zod";
 
@@ -88,8 +92,10 @@ Return only the JSON object that matches the provided schema.`;
 // ---------------------------------------------------------------------
 
 export interface ExtractParams {
-  /** Public URL or base64 data URL of the invoice image/PDF */
-  imageUrl: string;
+  /** Raw file bytes fetched from storage */
+  buffer: Buffer;
+  /** MIME type of the file (e.g. "image/jpeg", "application/pdf") */
+  mimeType: string;
   /** Original filename for AI context */
   filename?: string;
 }
@@ -102,13 +108,30 @@ export interface ExtractResult {
   model: string;
 }
 
+const MAX_BYTES = 20 * 1024 * 1024; // 20 MB
+
 export async function extractInvoice(params: ExtractParams): Promise<ExtractResult> {
   if (!env.OPENAI_API_KEY) {
     log.warn("OPENAI_API_KEY not set — returning fixture data");
     return fixtureResult();
   }
 
+  if (params.buffer.length > MAX_BYTES) {
+    throw new Error(
+      `Image too large for OpenAI Vision: ${(params.buffer.length / 1024 / 1024).toFixed(1)} MB (max 20 MB)`,
+    );
+  }
+
+  const b64 = params.buffer.toString("base64");
+  const dataUrl = `data:${params.mimeType};base64,${b64}`;
+
+  log.info(
+    { model: env.OPENAI_VISION_MODEL, bytes: params.buffer.length, mimeType: params.mimeType },
+    "Calling OpenAI Vision",
+  );
+
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  const t0 = Date.now();
 
   const response = await client.chat.completions.create({
     model: env.OPENAI_VISION_MODEL,
@@ -122,21 +145,27 @@ export async function extractInvoice(params: ExtractParams): Promise<ExtractResu
             type: "text",
             text: `Extract this invoice. Filename: ${params.filename ?? "unknown"}. Return JSON matching the schema described in the system prompt.`,
           },
-          { type: "image_url", image_url: { url: params.imageUrl, detail: "high" } },
+          { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
         ],
       },
     ],
     max_tokens: 4096,
   });
 
+  const tokensInput = response.usage?.prompt_tokens ?? 0;
+  const tokensOutput = response.usage?.completion_tokens ?? 0;
+  log.info(
+    { durationMs: Date.now() - t0, tokensInput, tokensOutput },
+    "OpenAI Vision responded",
+  );
+
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error("OpenAI returned empty content");
 
   const parsed = ExtractedInvoiceSchema.parse(JSON.parse(content));
+  log.info({ lineCount: parsed.lines.length }, `Parsed ${parsed.lines.length} lines`);
 
   // Rough cost calc — gpt-4o pricing as of Q4 2025: $2.50/1M input, $10/1M output
-  const tokensInput = response.usage?.prompt_tokens ?? 0;
-  const tokensOutput = response.usage?.completion_tokens ?? 0;
   const costCents = Math.ceil((tokensInput * 0.00025 + tokensOutput * 0.001));
 
   return {

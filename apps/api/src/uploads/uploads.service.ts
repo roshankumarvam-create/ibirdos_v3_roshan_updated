@@ -9,7 +9,7 @@ import type { TenantContext } from "@ibirdos/db";
 
 const log = moduleLogger("UploadsService");
 
-const ALLOWED_PURPOSES = ["invoice", "recipe", "ingredient_photo"] as const;
+const ALLOWED_PURPOSES = ["invoice", "recipe", "ingredient_photo", "recipe_photo", "recipe_video"] as const;
 type UploadPurpose = (typeof ALLOWED_PURPOSES)[number];
 
 const MIME_BY_PURPOSE: Record<UploadPurpose, string[]> = {
@@ -21,12 +21,16 @@ const MIME_BY_PURPOSE: Record<UploadPurpose, string[]> = {
     "image/jpeg", "image/png", "image/webp",
   ],
   ingredient_photo: ["image/jpeg", "image/png", "image/webp"],
+  recipe_photo: ["image/jpeg", "image/png", "image/webp", "image/heic"],
+  recipe_video: ["video/mp4", "video/quicktime", "video/webm"],
 };
 
 const MAX_BYTES_BY_PURPOSE: Record<UploadPurpose, number> = {
-  invoice: 25 * 1024 * 1024,
-  recipe:  25 * 1024 * 1024,
-  ingredient_photo: 5 * 1024 * 1024,
+  invoice:          25 * 1024 * 1024,
+  recipe:           25 * 1024 * 1024,
+  ingredient_photo:  5 * 1024 * 1024,
+  recipe_photo:     10 * 1024 * 1024,
+  recipe_video:    100 * 1024 * 1024,
 };
 
 @Injectable()
@@ -54,7 +58,7 @@ export class UploadsService {
   async presignUpload(
     ctx: TenantContext,
     params: { purpose: UploadPurpose; filename: string; contentType: string; sizeBytes: number },
-  ): Promise<{ uploadUrl: string; key: string; expiresInSec: number }> {
+  ): Promise<{ uploadUrl: string; key: string; expiresInSec: number; publicUrl: string }> {
     if (!ALLOWED_PURPOSES.includes(params.purpose)) {
       throw new BadRequestException({ code: "validation_failed", message: "Invalid upload purpose" });
     }
@@ -91,7 +95,7 @@ export class UploadsService {
     const expiresInSec = 5 * 60;
     const uploadUrl = await getSignedUrl(this.s3, cmd, { expiresIn: expiresInSec });
     log.info({ workspaceId: ctx.workspaceId, key, purpose: params.purpose }, "presigned upload issued");
-    return { uploadUrl, key, expiresInSec };
+    return { uploadUrl, key, expiresInSec, publicUrl: this.publicUrl(key) };
   }
 
   /** Construct the public URL of an uploaded object (for display). */

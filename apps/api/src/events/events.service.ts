@@ -283,4 +283,130 @@ export class EventsService {
       data: { computedLaborCostCents: laborCents, computedFoodCostCents: foodCents, computedMarginPct: marginPct },
     });
   }
+
+  /**
+   * Pre-order requirement check: for every ingredient needed by this event's menu,
+   * compare required quantity against current stock and return shortfalls.
+   */
+  async ingredientRequirements(ctx: TenantContext, eventId: string): Promise<any[]> {
+    const event = await prisma.event.findFirst({
+      where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
+      include: {
+        menuItems: {
+          include: {
+            recipe: {
+              include: {
+                ingredients: {
+                  include: {
+                    ingredient: {
+                      select: {
+                        id: true, name: true, dimension: true, canonicalUnit: true,
+                        densityGPerMl: true, preferredDisplayUnit: true,
+                        currentStockCanonical: true, reorderThresholdCanonical: true,
+                        currentCostMicrocents: true, currentVendorId: true,
+                        defaultYieldPct: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+
+    const eventMultiplier = Number(event.portionMultiplier);
+    const agg = new Map<string, {
+      ingredientId: string; ingredientName: string;
+      canonicalUnit: string; dimension: string; preferredDisplayUnit: string | null;
+      requiredCanonical: number;
+      currentStockCanonical: number;
+    }>();
+
+    for (const mi of event.menuItems) {
+      const effectivePortions = mi.portions * (mi.perItemMultiplier ? Number(mi.perItemMultiplier) : eventMultiplier);
+      const recipePortions = mi.recipe.portionsYielded ?? 1;
+      const scale = effectivePortions / recipePortions;
+
+      for (const link of mi.recipe.ingredients) {
+        const ing = link.ingredient;
+        try {
+          const baseCanonical = toCanonical(Number(link.quantity), link.unit, {
+            dimension: ing.dimension,
+            densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
+          });
+          const yieldPct = Number(link.yieldPctOverride ?? ing.defaultYieldPct ?? 100);
+          const needed = baseCanonical * scale * (100 / Math.max(yieldPct, 1));
+
+          const existing = agg.get(ing.id);
+          if (existing) {
+            existing.requiredCanonical += needed;
+          } else {
+            agg.set(ing.id, {
+              ingredientId: ing.id, ingredientName: ing.name,
+              canonicalUnit: ing.canonicalUnit, dimension: ing.dimension,
+              preferredDisplayUnit: ing.preferredDisplayUnit,
+              requiredCanonical: needed,
+              currentStockCanonical: Number(ing.currentStockCanonical),
+            });
+          }
+        } catch {
+          // skip unconvertible units
+        }
+      }
+    }
+
+    // Fetch last vendor SKU from most recent invoice line per ingredient
+    const ingredientIds = Array.from(agg.keys());
+    const lastInvoiceLines = await prisma.invoiceLine.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        committedIngredientId: { in: ingredientIds },
+        excluded: false,
+        category: "FOOD_INGREDIENT",
+      },
+      orderBy: { createdAt: "desc" },
+      distinct: ["committedIngredientId"],
+      select: {
+        committedIngredientId: true,
+        unitPriceCents: true,
+        extendedPriceCents: true,
+        descriptionRaw: true,
+        quantity: true,
+        packSize: true,
+        packUnit: true,
+        unit: true,
+        invoice: { select: { vendorId: true } },
+      },
+    });
+    const lineByIngredient = new Map(lastInvoiceLines.map((l) => [l.committedIngredientId!, l]));
+
+    return Array.from(agg.values()).map((entry) => {
+      const gap = entry.requiredCanonical - entry.currentStockCanonical;
+      const lastLine = lineByIngredient.get(entry.ingredientId);
+      const displayUnit = entry.preferredDisplayUnit ?? entry.canonicalUnit;
+      const displayFactor = (() => {
+        try { return toCanonical(1, displayUnit, { dimension: entry.dimension as any }); } catch { return 1; }
+      })();
+
+      return {
+        ingredientId: entry.ingredientId,
+        ingredientName: entry.ingredientName,
+        canonicalUnit: entry.canonicalUnit,
+        displayUnit,
+        requiredCanonical: entry.requiredCanonical,
+        requiredDisplay: +(entry.requiredCanonical / displayFactor).toFixed(2),
+        currentStockCanonical: entry.currentStockCanonical,
+        currentStockDisplay: +(entry.currentStockCanonical / displayFactor).toFixed(2),
+        gap: +gap.toFixed(4),
+        gapDisplay: +(gap / displayFactor).toFixed(2),
+        isShort: gap > 0,
+        lastUnitPriceCents: lastLine?.unitPriceCents ?? null,
+        vendorId: lastLine?.invoice?.vendorId ?? null,
+        vendorSku: lastLine?.descriptionRaw ?? null,
+      };
+    }).sort((a, b) => (b.isShort ? 1 : 0) - (a.isShort ? 1 : 0));
+  }
 }

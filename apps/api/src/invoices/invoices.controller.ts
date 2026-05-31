@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { z } from "zod";
 import { ok } from "@ibirdos/types";
 import type { TenantContext } from "@ibirdos/db";
@@ -25,6 +25,29 @@ const UpdateLineSchema = z.object({
   committedIngredientId: z.string().nullable().optional(),
   excluded: z.boolean().optional(),
   notes: z.string().max(500).optional(),
+});
+
+const CreateLineSchema = z.object({
+  descriptionRaw: z.string().min(1),
+  quantity: z.number().positive(),
+  unit: z.string().min(1),
+  unitPriceCents: z.number().int().nonnegative(),
+  extendedPriceCents: z.number().int().nonnegative(),
+  category: z.enum(["FOOD_INGREDIENT", "PACKAGING", "LABOR", "DELIVERY", "TAX", "DISCOUNT", "IGNORED"]).default("FOOD_INGREDIENT"),
+  committedIngredientId: z.string().nullable().optional(),
+  packSize: z.number().positive().nullable().optional(),
+  packUnit: z.string().nullable().optional(),
+  notes: z.string().max(500).optional(),
+});
+
+const UpdateInvoiceHeaderSchema = z.object({
+  vendorId:      z.string().nullable().optional(),
+  invoiceNumber: z.string().nullable().optional(),
+  invoiceDate:   z.string().nullable().optional(),
+  dueDate:       z.string().nullable().optional(),
+  subtotalCents: z.number().int().nonnegative().nullable().optional(),
+  taxCents:      z.number().int().nonnegative().nullable().optional(),
+  totalCents:    z.number().int().nonnegative().nullable().optional(),
 });
 
 const ListQuerySchema = z.object({
@@ -59,6 +82,16 @@ export class InvoicesController {
     return ok(await this.svc.get(ctx, id));
   }
 
+  @Patch(":id")
+  @RequirePermission("invoice.review")
+  async updateHeader(
+    @CurrentCtx() ctx: TenantContext,
+    @Param("id") id: string,
+    @Body(new ZodValidationPipe(UpdateInvoiceHeaderSchema)) body: z.infer<typeof UpdateInvoiceHeaderSchema>,
+  ): Promise<any> {
+    return ok(await this.svc.updateHeader(ctx, id, body));
+  }
+
   @Patch(":id/lines/:lineId")
   @RequirePermission("invoice.review")
   async updateLine(
@@ -68,6 +101,26 @@ export class InvoicesController {
     @Body(new ZodValidationPipe(UpdateLineSchema)) body: z.infer<typeof UpdateLineSchema>,
   ): Promise<any> {
     return ok(await this.svc.updateLine(ctx, id, lineId, body));
+  }
+
+  @Post(":id/lines")
+  @RequirePermission("invoice.review")
+  async addLine(
+    @CurrentCtx() ctx: TenantContext,
+    @Param("id") id: string,
+    @Body(new ZodValidationPipe(CreateLineSchema)) body: z.infer<typeof CreateLineSchema>,
+  ): Promise<any> {
+    return ok(await this.svc.addLine(ctx, id, body));
+  }
+
+  @Delete(":id/lines/:lineId")
+  @RequirePermission("invoice.review")
+  async deleteLine(
+    @CurrentCtx() ctx: TenantContext,
+    @Param("id") id: string,
+    @Param("lineId") lineId: string,
+  ): Promise<any> {
+    return ok(await this.svc.deleteLine(ctx, id, lineId));
   }
 
   @Post(":id/confirm")

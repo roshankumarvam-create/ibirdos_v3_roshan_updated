@@ -285,32 +285,42 @@ model InvoiceExtractionJob {
 }
 
 model Recipe {
-  id                   String              @id @default(cuid())
-  workspaceId          String              @map("workspace_id")
-  name                 String
-  category             String?
-  status               RecipeStatus        @default(DRAFT)
-  prepTimeMin          Int?                @map("prep_time_min")
-  cookTimeMin          Int?                @map("cook_time_min")
-  portionsYielded      Int?                @map("portions_yielded")
-  totalYieldCanonical  Decimal?            @map("total_yield_canonical") @db.Decimal(14, 4)
-  totalYieldDimension  UnitDimension?      @map("total_yield_dimension")
-  salePriceCents       Int?                @map("sale_price_cents")
-  cachedCostMicrocents BigInt?             @map("cached_cost_microcents")
-  cachedCostUpdatedAt  DateTime?           @map("cached_cost_updated_at")
-  costStaleness        RecipeCostStaleness @default(NO_INGREDIENTS) @map("cost_staleness")
-  costComputeError     String?             @map("cost_compute_error")
-  cachedMarginPct      Decimal?            @map("cached_margin_pct") @db.Decimal(5, 2)
-  photoUrl             String?             @map("photo_url")
-  instructionsMd       String?             @map("instructions_md")
-  notes                String?
-  createdAt            DateTime            @default(now()) @map("created_at")
-  updatedAt            DateTime            @updatedAt @map("updated_at")
-  createdById          String?             @map("created_by_id")
-  deletedAt            DateTime?           @map("deleted_at")
-  eventMenuItems       EventMenuItem[]
-  costHistory          RecipeCostHistory[]
-  ingredients          RecipeIngredient[]
+  id                             String              @id @default(cuid())
+  workspaceId                    String              @map("workspace_id")
+  name                           String
+  authorName                     String?             @map("author_name")
+  category                       String?
+  status                         RecipeStatus        @default(DRAFT)
+  prepTimeMin                    Int?                @map("prep_time_min")
+  cookTimeMin                    Int?                @map("cook_time_min")
+  portionsYielded                Int?                @map("portions_yielded")
+  portionWeightG                 Float?              @map("portion_weight_g")
+  portionVolumeMl                Float?              @map("portion_volume_ml")
+  totalYieldCanonical            Decimal?            @map("total_yield_canonical") @db.Decimal(14, 4)
+  totalYieldDimension            UnitDimension?      @map("total_yield_dimension")
+  salePriceCents                 Int?                @map("sale_price_cents")
+  goalFoodCostPct                Float?              @map("goal_food_cost_pct")
+  paperCostCents                 Int?                @map("paper_cost_cents")
+  cachedCostMicrocents           BigInt?             @map("cached_cost_microcents")
+  cachedCostPerPortionMicrocents BigInt?             @map("cached_cost_per_portion_microcents")
+  cachedCostUpdatedAt            DateTime?           @map("cached_cost_updated_at")
+  costStaleness                  RecipeCostStaleness @default(NO_INGREDIENTS) @map("cost_staleness")
+  costComputeError               String?             @map("cost_compute_error")
+  cachedMarginPct                Decimal?            @map("cached_margin_pct") @db.Decimal(5, 2)
+  cachedMarginCents              Int?                @map("cached_margin_cents")
+  photoUrl                       String?             @map("photo_url")
+  prepPhotoUrl                   String?             @map("prep_photo_url")
+  finalPhotoUrl                  String?             @map("final_photo_url")
+  videoUrl                       String?             @map("video_url")
+  instructionsMd                 String?             @map("instructions_md") @db.Text
+  notes                          String?
+  createdAt                      DateTime            @default(now()) @map("created_at")
+  updatedAt                      DateTime            @updatedAt @map("updated_at")
+  createdById                    String?             @map("created_by_id")
+  deletedAt                      DateTime?           @map("deleted_at")
+  eventMenuItems                 EventMenuItem[]
+  costHistory                    RecipeCostHistory[]
+  ingredients                    RecipeIngredient[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId, status])
@@ -323,9 +333,11 @@ model RecipeIngredient {
   workspaceId      String     @map("workspace_id")
   recipeId         String     @map("recipe_id")
   ingredientId     String     @map("ingredient_id")
+  externalCode     String?    @map("external_code")
   quantity         Decimal    @db.Decimal(14, 4)
   unit             String
   yieldPctOverride Decimal?   @map("yield_pct_override") @db.Decimal(5, 2)
+  weightOz         Float?     @map("weight_oz")
   notes            String?
   displayOrder     Int        @default(0) @map("display_order")
   createdAt        DateTime   @default(now()) @map("created_at")

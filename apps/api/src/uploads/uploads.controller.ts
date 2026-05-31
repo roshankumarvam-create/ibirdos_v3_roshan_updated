@@ -8,7 +8,7 @@ import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 import { UploadsService } from "./uploads.service";
 
 const PresignSchema = z.object({
-  purpose: z.enum(["invoice", "recipe", "ingredient_photo"]),
+  purpose: z.enum(["invoice", "recipe", "ingredient_photo", "recipe_photo", "recipe_video"]),
   filename: z.string().min(1).max(255),
   contentType: z.string().min(1).max(127),
   sizeBytes: z.number().int().positive(),

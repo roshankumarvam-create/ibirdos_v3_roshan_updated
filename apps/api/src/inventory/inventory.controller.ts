@@ -36,4 +36,9 @@ export class InventoryController {
          @Body(new ZodValidationPipe(AdjustSchema)) body: z.infer<typeof AdjustSchema>): Promise<any> {
     return this.svc.adjust(ctx, id, body).then(ok);
   }
+
+  @Post("transactions/:id/reverse") @RequirePermission("inventory.adjust")
+  reverse(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.reverseTransaction(ctx, id).then(ok);
+  }
 }

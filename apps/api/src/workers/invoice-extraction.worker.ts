@@ -14,6 +14,8 @@
 
 import { Worker } from "bullmq";
 import { Redis } from "ioredis";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { Readable } from "stream";
 
 import { env } from "@ibirdos/config";
 import { prisma, writeAudit } from "@ibirdos/db";
@@ -21,6 +23,16 @@ import { moduleLogger } from "@ibirdos/logger";
 import { extractInvoice } from "@ibirdos/ai";
 
 import { INVOICE_EXTRACTION_QUEUE } from "../invoices/invoices.service";
+
+const s3 = new S3Client({
+  region: "auto",
+  endpoint: env.R2_ENDPOINT,
+  credentials: {
+    accessKeyId: env.R2_ACCESS_KEY_ID ?? "dev",
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY ?? "dev",
+  },
+  forcePathStyle: true, // required for MinIO
+});
 
 const log = moduleLogger("invoice-extraction.worker");
 
@@ -31,13 +43,14 @@ interface JobData {
   invoiceId: string;
   extractionJobId: string;
   uploadKey: string;
+  uploadMimeType: string;
   actorId: string;
 }
 
 const worker = new Worker<JobData>(
   INVOICE_EXTRACTION_QUEUE,
   async (job) => {
-    const { workspaceId, invoiceId, extractionJobId, uploadKey } = job.data;
+    const { workspaceId, invoiceId, extractionJobId, uploadKey, uploadMimeType } = job.data;
     log.info({ jobId: job.id, invoiceId }, "extraction starting");
 
     await prisma.invoiceExtractionJob.update({
@@ -46,8 +59,17 @@ const worker = new Worker<JobData>(
     });
 
     try {
-      const imageUrl = publicUrl(uploadKey);
-      const result = await extractInvoice({ imageUrl, filename: uploadKey });
+      // Fetch file bytes from storage so OpenAI never needs to reach localhost/internal URLs
+      log.info({ key: uploadKey, mimeType: uploadMimeType }, "Reading file from storage");
+      const getCmd = new GetObjectCommand({ Bucket: env.R2_BUCKET, Key: uploadKey });
+      const s3Res = await s3.send(getCmd);
+      const buffer = await streamToBuffer(s3Res.Body as Readable);
+      log.info(
+        { key: uploadKey, bytes: buffer.length, mimeType: uploadMimeType },
+        `Reading file from storage: ${uploadKey} (${buffer.length} bytes, ${uploadMimeType})`,
+      );
+
+      const result = await extractInvoice({ buffer, mimeType: uploadMimeType, filename: uploadKey });
 
       // Match each line text → existing ingredient (3-pass match)
       const lines = await Promise.all(
@@ -185,13 +207,17 @@ process.on("SIGTERM", async () => {
 });
 
 // ---------------------------------------------------------------------
-// Helpers (duplicated from IngredientsService.match — workers don't
-// instantiate the NestJS DI container)
+// Helpers
 // ---------------------------------------------------------------------
 
-function publicUrl(key: string): string {
-  if (env.R2_PUBLIC_URL) return `${env.R2_PUBLIC_URL}/${key}`;
-  return `${env.R2_ENDPOINT}/${env.R2_BUCKET}/${key}`;
+/** Collect a Node.js Readable stream into a Buffer. */
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+    stream.on("end", () => resolve(Buffer.concat(chunks)));
+    stream.on("error", reject);
+  });
 }
 
 interface MatchHit {

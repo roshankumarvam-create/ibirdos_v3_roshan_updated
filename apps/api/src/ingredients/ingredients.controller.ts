@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Param, Patch, Post, Query,
+  Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query,
 } from "@nestjs/common";
 import { z } from "zod";
 
@@ -98,5 +98,20 @@ export class IngredientsController {
     @Body(new ZodValidationPipe(MatchIngredientSchema)) body: MatchIngredientInput,
   ) {
     return ok({ matches: await this.svc.match(ctx, body) });
+  }
+
+  @Delete(":id")
+  @HttpCode(204)
+  @RequirePermission("ingredient.delete")
+  async delete(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<void> {
+    await this.svc.delete(ctx, id);
+  }
+
+  // One-shot migration: backfill preferredDisplayUnit for all ingredients
+  // where it is NULL. Idempotent — safe to call multiple times.
+  @Post("migrate-display-units")
+  @RequirePermission("ingredient.update")
+  async migrateDisplayUnits() {
+    return ok(await this.svc.migrateNullDisplayUnits());
   }
 }

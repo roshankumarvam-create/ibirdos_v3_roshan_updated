@@ -8,6 +8,7 @@ import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, Badge, Button, EmptyState } from "@ibirdos/ui";
 import type { IngredientDTO } from "@ibirdos/types";
+import { formatStock, formatCostPerUnit } from "@/lib/format";
 
 interface ListResponse {
   items: IngredientDTO[];
@@ -105,16 +106,15 @@ export default async function IngredientsPage({
                     {ing.preferredDisplayUnit ?? ing.canonicalUnit}
                   </td>
                   <td className="px-5 py-3 text-right tabular-nums">
-                    {ing.currentCostCents != null
-                      ? <span className="text-text-primary">${(ing.currentCostCents / 100).toFixed(4)}</span>
-                      : <span className="text-text-tertiary">—</span>}
-                    <span className="text-text-tertiary"> / {ing.canonicalUnit}</span>
+                    <span className={ing.currentCostCents != null ? "text-text-primary" : "text-text-tertiary"}>
+                      {formatCostPerUnit(ing.currentCostCents, ing.canonicalUnit, ing.preferredDisplayUnit)}
+                    </span>
                   </td>
                   <td className="px-5 py-3 text-right tabular-nums">
                     <span className={ing.reorderThresholdCanonical != null && ing.currentStockCanonical < ing.reorderThresholdCanonical
                       ? "text-warning"
                       : "text-text-secondary"}>
-                      {ing.currentStockCanonical.toFixed(0)}
+                      {formatStock(ing.currentStockCanonical, ing.canonicalUnit, ing.preferredDisplayUnit)}
                     </span>
                   </td>
                   <td className="px-5 py-3 text-text-tertiary text-xs">

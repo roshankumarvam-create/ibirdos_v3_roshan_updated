@@ -67,6 +67,7 @@ export const UNITS: Record<string, UnitDef> = {
 
   // ---- COUNT ----
   each:  { code: "each",  dimension: "COUNT", toCanonical: 1,    label: "each" },
+  slice: { code: "slice", dimension: "COUNT", toCanonical: 1,    label: "slice",  pluralLabel: "slices" },
   dozen: { code: "dozen", dimension: "COUNT", toCanonical: 12,   label: "dozen" },
   pack:  { code: "pack",  dimension: "COUNT", toCanonical: 1,    label: "pack" },  // pack-of-N captured separately in invoice metadata
   case:  { code: "case",  dimension: "COUNT", toCanonical: 1,    label: "case" },  // ditto
@@ -96,6 +97,7 @@ const ALIASES: Record<string, string> = {
   "fl oz": "floz", "fluid ounce": "floz", "fluid ounces": "floz",
   // Count
   ea: "each", units: "each", unit: "each", piece: "each", pieces: "each", pcs: "each", pc: "each",
+  slices: "slice",
   doz: "dozen",
   packs: "pack", packet: "pack", packets: "pack",
   cases: "case", cs: "case", CS: "case",

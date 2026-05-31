@@ -124,7 +124,7 @@ export class InventoryService {
       where, take: limit + 1,
       ...(opts.cursor ? { skip: 1, cursor: { id: opts.cursor } } : {}),
       orderBy: { createdAt: "desc" },
-      include: { ingredient: { select: { id: true, name: true, canonicalUnit: true } } },
+      include: { ingredient: { select: { id: true, name: true, canonicalUnit: true, preferredDisplayUnit: true } } },
     });
     return {
       items: (items.length > limit ? items.slice(0, limit) : items).map((t) => ({
@@ -145,7 +145,22 @@ export class InventoryService {
     });
   }
 
-  /** Manual adjustment helper â€” wraps recordTransaction with friendlier inputs. */
+  async reverseTransaction(ctx: TenantContext, transactionId: string): Promise<any> {
+    const tx = await prisma.inventoryTransaction.findFirst({
+      where: { id: transactionId, workspaceId: ctx.workspaceId },
+    });
+    if (!tx) throw new NotFoundException({ code: 'not_found', message: 'Transaction not found' });
+
+    return this.recordTransaction(ctx, {
+      ingredientId: tx.ingredientId,
+      kind: 'ADJUST',
+      quantityCanonical: -Number(tx.quantityCanonical),
+      sourceKind: 'Manual',
+      notes: `Reversed txn ${transactionId.slice(0, 8)}`,
+    });
+  }
+
+  /** Manual adjustment helper — wraps recordTransaction with friendlier inputs. */
   async adjust(ctx: TenantContext, ingredientId: string, params: { quantity: number; unit: string; reason: string }): Promise<any> {
     const ing = await prisma.ingredient.findFirst({
       where: { id: ingredientId, workspaceId: ctx.workspaceId, deletedAt: null },

@@ -10,30 +10,53 @@ import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 import { RecipesService } from "./recipes.service";
 
 const LineSchema = z.object({
-  ingredientId: z.string(),
-  quantity: z.number().positive(),
-  unit: z.string().min(1).max(16),
-  yieldPctOverride: z.number().min(0).max(100).nullable().optional(),
-  notes: z.string().max(500).optional(),
+  ingredientId:    z.string().min(1),
+  externalCode:    z.string().optional(),
+  quantity:        z.number().positive(),
+  unit:            z.string().min(1).max(32),
+  yieldPctOverride: z.number().min(0).max(200).nullable().optional(),
+  percentUtilized: z.number().min(1).max(200).optional(),
+  weightOz:        z.number().positive().optional(),
+  notes:           z.string().max(500).optional(),
 });
 
 const CreateRecipeSchema = z.object({
-  name: z.string().min(2).max(160),
-  category: z.string().max(80).optional(),
-  status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
-  prepTimeMin: z.number().int().nonnegative().optional(),
-  cookTimeMin: z.number().int().nonnegative().optional(),
-  portionsYielded: z.number().int().positive().optional(),
-  totalYieldCanonical: z.number().positive().optional(),
-  totalYieldDimension: z.enum(["MASS", "VOLUME", "COUNT"]).optional(),
-  salePriceCents: z.number().int().nonnegative().optional(),
-  photoUrl: z.string().url().optional(),
-  instructionsMd: z.string().max(20000).optional(),
-  notes: z.string().max(2000).optional(),
-  ingredients: z.array(LineSchema).optional(),
+  name:                 z.string().min(1).max(200),
+  authorName:           z.string().max(120).optional(),
+  category:             z.string().max(80).optional(),
+  description:          z.string().max(2000).optional(),
+  status:               z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).optional(),
+  prepTimeMin:          z.number().int().nonnegative().optional(),
+  prepTimeMinutes:      z.number().int().nonnegative().optional(),
+  cookTimeMin:          z.number().int().nonnegative().optional(),
+  cookTimeMinutes:      z.number().int().nonnegative().optional(),
+  portionsYielded:      z.number().int().positive().optional(),
+  totalPortions:        z.number().int().positive().optional(),
+  portionWeightG:       z.number().positive().optional(),
+  portionVolumeMl:      z.number().positive().optional(),
+  totalYieldCanonical:  z.number().positive().optional(),
+  totalYieldDimension:  z.enum(["MASS", "VOLUME", "COUNT"]).optional(),
+  salePriceCents:       z.number().int().nonnegative().optional(),
+  actualSellPriceCents: z.number().int().nonnegative().optional(),
+  goalFoodCostPct:      z.number().min(0).max(100).optional(),
+  paperCostCents:       z.number().int().nonnegative().optional(),
+  photoUrl:             z.string().url().optional(),
+  prepPhotoUrl:         z.string().url().optional(),
+  finalPhotoUrl:        z.string().url().optional(),
+  videoUrl:             z.string().url().optional(),
+  instructionsMd:       z.string().max(20000).optional(),
+  procedure:            z.string().max(20000).optional(),
+  notes:                z.string().max(2000).optional(),
+  ingredients:          z.array(LineSchema).optional(),
+  ingredientLines:      z.array(LineSchema).optional(),
 });
 
-const UpdateRecipeSchema = CreateRecipeSchema.partial().omit({ ingredients: true });
+const UpdateRecipeSchema = CreateRecipeSchema.partial().omit({ ingredients: true }).extend({
+  photoUrl:      z.union([z.string().url(), z.null()]).optional(),
+  prepPhotoUrl:  z.union([z.string().url(), z.null()]).optional(),
+  finalPhotoUrl: z.union([z.string().url(), z.null()]).optional(),
+  videoUrl:      z.union([z.string().url(), z.null()]).optional(),
+});
 const ListQuerySchema = z.object({
   search: z.string().optional(), category: z.string().optional(),
   status: z.string().optional(), cursor: z.string().optional(),
@@ -63,6 +86,11 @@ export class RecipesController {
   update(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
          @Body(new ZodValidationPipe(UpdateRecipeSchema)) body: any) {
     return this.svc.update(ctx, id, body).then(ok);
+  }
+
+  @Delete(":id") @RequirePermission("recipe.update")
+  delete(@CurrentCtx() ctx: TenantContext, @Param("id") id: string) {
+    return this.svc.delete(ctx, id).then(() => ok(null));
   }
 
   @Post(":id/ingredients") @RequirePermission("recipe.update")

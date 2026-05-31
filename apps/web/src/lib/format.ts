@@ -1,3 +1,39 @@
+import { UNITS, normalizeUnit } from "@ibirdos/types";
+
+/**
+ * Convert a canonical quantity (g, ml, each) to the preferred display unit and format it.
+ * e.g. formatStock(4535.9, "g", "lb") → "10.00 lb"
+ */
+export function formatStock(
+  canonicalValue: number,
+  canonicalUnit: string,
+  preferredDisplayUnit: string | null | undefined,
+): string {
+  const displayUnit = preferredDisplayUnit ?? canonicalUnit;
+  const normalized = normalizeUnit(displayUnit);
+  const unitDef = normalized ? UNITS[normalized] : null;
+  if (!unitDef) return `${Number(canonicalValue).toFixed(2)} ${canonicalUnit}`;
+  return `${(Number(canonicalValue) / unitDef.toCanonical).toFixed(2)} ${normalized}`;
+}
+
+/**
+ * Convert a cost (cents per canonical unit) to a human-readable per-preferred-unit price.
+ * e.g. formatCostPerUnit(1.932, "g", "lb") → "$8.76/lb"
+ */
+export function formatCostPerUnit(
+  costCentsPerCanonical: number | null | undefined,
+  canonicalUnit: string,
+  preferredDisplayUnit: string | null | undefined,
+): string {
+  if (costCentsPerCanonical == null) return "—";
+  const displayUnit = preferredDisplayUnit ?? canonicalUnit;
+  const normalized = normalizeUnit(displayUnit);
+  const unitDef = normalized ? UNITS[normalized] : null;
+  if (!unitDef) return `$${(Number(costCentsPerCanonical) / 100).toFixed(4)}/${canonicalUnit}`;
+  const dollarsPerPreferred = (Number(costCentsPerCanonical) / 100) * unitDef.toCanonical;
+  return `$${dollarsPerPreferred.toFixed(2)}/${normalized}`;
+}
+
 export function formatCents(cents: number | null | undefined, opts: { decimals?: number } = {}) {
   if (cents == null) return "—";
   const value = cents / 100;

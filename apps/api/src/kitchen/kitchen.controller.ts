@@ -25,6 +25,11 @@ export class KitchenController {
     return this.svc.listForBoard(ctx, { eventId: q.eventId, station: q.station, assignedToMe: q.mine === "true" }).then((items) => ok({ items }));
   }
 
+  @Get("tasks/:id") @RequirePermission("kitchen.read")
+  getTask(@CurrentCtx() ctx: TenantContext, @Param("id") id: string) {
+    return this.svc.getTask(ctx, id).then(ok);
+  }
+
   @Post("events/:eventId/explode") @RequirePermission("event.update")
   explode(@CurrentCtx() ctx: TenantContext, @Param("eventId") eventId: string) {
     return this.svc.explodeFromEvent(ctx, eventId).then(ok);

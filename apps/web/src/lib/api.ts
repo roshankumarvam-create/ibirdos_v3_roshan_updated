@@ -36,6 +36,47 @@ interface ApiOptions {
   noAuthRedirect?: boolean;
 }
 
+// ---- CSRF token support ----
+// The API CsrfGuard requires cookie ibirdos.csrf == X-Csrf-Token header
+// on every non-GET request. The cookie is NOT HttpOnly so JS can read it.
+// GET /auth/csrf issues it. We bootstrap lazily on the first mutation.
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+function readCsrfCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const m = document.cookie.match(/(?:^|;\s*)ibirdos\.csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]!) : null;
+}
+
+// Stored token (same value as the cookie, kept in module scope so concurrent
+// requests share it without racing to re-fetch).
+let _csrfToken: string | null = null;
+let _csrfInFlight: Promise<void> | null = null;
+
+async function ensureCsrfToken(): Promise<string | null> {
+  if (typeof window === "undefined") return null; // SSR — guard bypasses server-side calls
+  if (_csrfToken) return _csrfToken;
+
+  // Check cookie in case another tab/request already set it
+  const fromCookie = readCsrfCookie();
+  if (fromCookie) { _csrfToken = fromCookie; return _csrfToken; }
+
+  // Deduplicate concurrent bootstrap calls
+  if (!_csrfInFlight) {
+    _csrfInFlight = fetch(`${API_BASE}/auth/csrf`, {
+      credentials: "include",
+      cache: "no-store",
+    })
+      .then((r) => r.json())
+      .then((json) => { _csrfToken = json?.data?.token ?? readCsrfCookie() ?? null; })
+      .catch(() => { _csrfInFlight = null; }); // allow retry on next request
+  }
+
+  await _csrfInFlight;
+  return _csrfToken;
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -49,6 +90,12 @@ async function request<T>(
     headers["Cookie"] = opts.cookies.toString();
   }
 
+  // Attach CSRF token on client-side mutations (not SSR — opts.cookies marks SSR calls)
+  if (!SAFE_METHODS.has(method) && !opts.cookies) {
+    const csrf = await ensureCsrfToken();
+    if (csrf) headers["X-Csrf-Token"] = csrf;
+  }
+
   const init: RequestInit = {
     method,
     credentials: "include",
@@ -57,11 +104,25 @@ async function request<T>(
   };
   if (body !== undefined) init.body = JSON.stringify(body);
 
-  const res = await fetch(`${API_BASE}${path}`, init);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, init);
+  } catch (err: any) {
+    return {
+      data: null,
+      error: { code: "network_error", message: err?.message ?? "Network error — is the API running?" },
+    };
+  }
 
   if (res.status === 401 && !opts.noAuthRedirect && typeof window !== "undefined") {
     const next = encodeURIComponent(window.location.pathname);
     window.location.href = `/login?next=${next}`;
+  }
+
+  // If CSRF was rejected (stale/rotated token), clear so next call re-fetches
+  if (res.status === 403) {
+    _csrfToken = null;
+    _csrfInFlight = null;
   }
 
   // The API always returns ApiResponse envelope, even on errors

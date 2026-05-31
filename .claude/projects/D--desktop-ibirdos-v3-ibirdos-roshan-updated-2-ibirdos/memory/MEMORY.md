@@ -1,0 +1,3 @@
+- [IBirdOS Project Status](project_status.md) — all auth/domain bugs fixed on 2026-05-30, deploy-ready
+- [BigInt Serialization](feedback_bigint.md) — Prisma BigInt must be converted before API responses
+- [Recipe Build](project_recipe_build.md) — Create Recipe flow: schema additions, price cascade chain, photo upload, deferred inventory CONSUME

@@ -77,4 +77,9 @@ export class EventsController {
   generatePacket(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
     return this.svc.generateKitchenPacket(ctx, id).then(ok);
   }
+
+  @Get(":id/ingredient-requirements") @RequirePermission("event.read")
+  ingredientRequirements(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.ingredientRequirements(ctx, id).then(ok);
+  }
 }

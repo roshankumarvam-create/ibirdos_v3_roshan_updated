@@ -14,14 +14,14 @@
 // =====================================================================
 
 import {
-  Injectable, NotFoundException, BadRequestException, Inject,
+  Injectable, NotFoundException, BadRequestException, Inject, OnApplicationBootstrap,
 } from "@nestjs/common";
 
 import {
   prisma, tenantScoped, writeAudit, type TenantContext,
 } from "@ibirdos/db";
 import {
-  CANONICAL_UNIT, UNITS, normalizeUnit, type UnitDimension,
+  CANONICAL_UNIT, UNITS, normalizeUnit, toCanonical, type UnitDimension,
   type CreateIngredientInput, type UpdateIngredientInput,
   type IngredientDTO, type IngredientMatchResult, type MatchIngredientInput,
 } from "@ibirdos/types";
@@ -35,8 +35,18 @@ const log = moduleLogger("IngredientsService");
 const MICROCENTS_PER_CENT = 1000n;
 
 @Injectable()
-export class IngredientsService {
+export class IngredientsService implements OnApplicationBootstrap {
   constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
+
+  async onApplicationBootstrap() {
+    try {
+      const r1 = await this.migrateNullDisplayUnits();
+      const r2 = await this.repairPricesFromInventoryTransactions();
+      log.info({ displayUnitsFixed: r1.updated, pricesFixed: r2.fixed }, "startup migrations complete");
+    } catch (err: any) {
+      log.warn({ err: err.message }, "startup migration failed — non-fatal");
+    }
+  }
 
   // -----------------------------------------------------------------
   // CRUD
@@ -416,7 +426,98 @@ export class IngredientsService {
     }
   }
 
+  // Repair prices that were stored as cents-per-case instead of cents-per-gram.
+  // Uses the inventory RECEIVE transactions (which have correct canonical qty)
+  // to back-calculate the correct pricePerCanonicalMicrocents.
+  async repairPricesFromInventoryTransactions(): Promise<{ fixed: number }> {
+    const txs = await prisma.inventoryTransaction.findMany({
+      where: { kind: "RECEIVE", sourceKind: "Invoice", costMicrocents: { not: null } },
+      select: { ingredientId: true, quantityCanonical: true, costMicrocents: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    });
+
+    let fixed = 0;
+    const seen = new Set<string>();
+
+    for (const tx of txs) {
+      if (seen.has(tx.ingredientId)) continue;
+      seen.add(tx.ingredientId);
+
+      const canonicalQty = Number(tx.quantityCanonical);
+      if (canonicalQty <= 0) continue;
+
+      const totalCost = Number(tx.costMicrocents!);
+      const correctMicrocents = BigInt(Math.round(totalCost / canonicalQty));
+
+      const ing = await prisma.ingredient.findUnique({
+        where: { id: tx.ingredientId },
+        select: { currentCostMicrocents: true },
+      });
+      if (!ing || ing.currentCostMicrocents === correctMicrocents) continue;
+
+      await prisma.ingredient.update({
+        where: { id: tx.ingredientId },
+        data: { currentCostMicrocents: correctMicrocents },
+      });
+      log.info(
+        { ingredientId: tx.ingredientId, was: ing.currentCostMicrocents?.toString(), fixed: correctMicrocents.toString() },
+        "repaired ingredient price",
+      );
+      fixed++;
+    }
+
+    return { fixed };
+  }
+
+  async delete(ctx: TenantContext, id: string): Promise<void> {
+    const ing = await prisma.ingredient.findFirst({
+      where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
+    });
+    if (!ing) throw new NotFoundException({ code: "not_found", message: "Ingredient not found" });
+
+    await prisma.ingredient.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+
+    await writeAudit(ctx, {
+      action: "ingredient.deleted",
+      entityType: "Ingredient",
+      entityId: id,
+      metadata: { name: ing.name },
+    });
+  }
+
+  // One-shot migration: set preferredDisplayUnit on any ingredient where it is NULL.
+  // Safe to run multiple times (only touches NULL rows).
+  async migrateNullDisplayUnits(): Promise<{ updated: number }> {
+    const result = await prisma.$executeRaw`
+      UPDATE ingredients
+      SET preferred_display_unit = CASE
+        WHEN dimension = 'MASS'   THEN 'lb'
+        WHEN dimension = 'VOLUME' THEN 'floz'
+        WHEN dimension = 'COUNT'  THEN 'each'
+        ELSE preferred_display_unit
+      END
+      WHERE preferred_display_unit IS NULL AND deleted_at IS NULL
+    `;
+    log.info({ updated: result }, "migrateNullDisplayUnits complete");
+    return { updated: result };
+  }
+
   private toDTO(ing: any): IngredientDTO {
+    // Diagnostic: log stored microcents so we can verify unit-conversion math.
+    // Shows in API server logs when /ingredients is queried.
+    if (ing.currentCostMicrocents != null) {
+      const asCents = Number(ing.currentCostMicrocents) / 1000;
+      log.debug(
+        { name: ing.name, canonicalUnit: ing.canonicalUnit,
+          storedMicrocents: ing.currentCostMicrocents?.toString(),
+          asCentsPerCanonical: asCents },
+        "ingredient cost stored",
+      );
+    }
+
     return {
       id: ing.id,
       name: ing.name,

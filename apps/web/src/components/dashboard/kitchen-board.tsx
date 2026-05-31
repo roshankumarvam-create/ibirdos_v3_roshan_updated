@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { api } from "@/lib/api";
@@ -91,7 +92,12 @@ export function KitchenBoard({ workspaceSlug }: { workspaceSlug: string }) {
             {byStation[station]!.map((task) => (
               <div key={task.id} className="rounded border border-bg-border bg-bg-elevated p-3 text-xs space-y-2">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="font-medium text-text-primary leading-tight">{task.title}</div>
+                  <Link
+                    href={`/${workspaceSlug}/kitchen/${task.id}` as any}
+                    className="font-medium text-text-primary hover:text-accent-500 leading-tight"
+                  >
+                    {task.title}
+                  </Link>
                   <Badge tone={STATUS_TONE[task.status]}>{task.status.toLowerCase().replace(/_/g, " ")}</Badge>
                 </div>
                 <div className="text-text-tertiary tabular-nums">

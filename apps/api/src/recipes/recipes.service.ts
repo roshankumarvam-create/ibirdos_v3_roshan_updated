@@ -44,29 +44,54 @@ const MICROCENTS_PER_CENT = 1000n;
 
 export interface RecipeIngredientLineInput {
   ingredientId: string;
+  externalCode?: string;
   quantity: number;
   unit: string;
   yieldPctOverride?: number | null;
+  /** percentUtilized maps to yieldPctOverride (1–200, default 100) */
+  percentUtilized?: number;
+  weightOz?: number;
   notes?: string;
 }
 
 export interface CreateRecipeInput {
   name: string;
+  authorName?: string;
   category?: string;
+  description?: string;
   status?: "DRAFT" | "ACTIVE" | "ARCHIVED";
   prepTimeMin?: number;
+  prepTimeMinutes?: number;
   cookTimeMin?: number;
+  cookTimeMinutes?: number;
   portionsYielded?: number;
+  totalPortions?: number;
+  portionWeightG?: number;
+  portionVolumeMl?: number;
   totalYieldCanonical?: number;
   totalYieldDimension?: UnitDimension;
   salePriceCents?: number;
+  actualSellPriceCents?: number;
+  goalFoodCostPct?: number;
+  paperCostCents?: number;
   photoUrl?: string;
+  prepPhotoUrl?: string;
+  finalPhotoUrl?: string;
+  videoUrl?: string;
   instructionsMd?: string;
+  procedure?: string;
   notes?: string;
   ingredients?: RecipeIngredientLineInput[];
+  /** ingredientLines is the new-form alias for ingredients */
+  ingredientLines?: RecipeIngredientLineInput[];
 }
 
-export type UpdateRecipeInput = Partial<Omit<CreateRecipeInput, "ingredients">>;
+export type UpdateRecipeInput = Partial<Omit<CreateRecipeInput, "ingredients" | "ingredientLines">> & {
+  photoUrl?: string | null;
+  prepPhotoUrl?: string | null;
+  finalPhotoUrl?: string | null;
+  videoUrl?: string | null;
+};
 
 // ---------------------------------------------------------------------
 // Compute result
@@ -99,30 +124,48 @@ export class RecipesService {
   // -----------------------------------------------------------------
 
   async create(ctx: TenantContext, input: CreateRecipeInput) {
+    // Normalize aliased field names from the new-form API
+    const lines = input.ingredientLines ?? input.ingredients ?? [];
+    const portionsYielded = input.totalPortions ?? input.portionsYielded ?? null;
+    const prepTimeMin = input.prepTimeMinutes ?? input.prepTimeMin ?? null;
+    const cookTimeMin = input.cookTimeMinutes ?? input.cookTimeMin ?? null;
+    const salePriceCents = input.actualSellPriceCents ?? input.salePriceCents ?? null;
+    const instructionsMd = input.procedure ?? input.instructionsMd ?? null;
+
     const recipe = await prisma.recipe.create({
       data: {
         workspaceId: ctx.workspaceId,
         createdById: ctx.userId,
         name: input.name.trim(),
+        authorName: input.authorName ?? null,
         category: input.category ?? null,
         status: input.status ?? "DRAFT",
-        prepTimeMin: input.prepTimeMin ?? null,
-        cookTimeMin: input.cookTimeMin ?? null,
-        portionsYielded: input.portionsYielded ?? null,
+        prepTimeMin,
+        cookTimeMin,
+        portionsYielded,
+        portionWeightG: input.portionWeightG ?? null,
+        portionVolumeMl: input.portionVolumeMl ?? null,
         totalYieldCanonical: input.totalYieldCanonical ?? null,
         totalYieldDimension: input.totalYieldDimension ?? null,
-        salePriceCents: input.salePriceCents ?? null,
+        salePriceCents,
+        goalFoodCostPct: input.goalFoodCostPct ?? null,
+        paperCostCents: input.paperCostCents ?? null,
         photoUrl: input.photoUrl ?? null,
-        instructionsMd: input.instructionsMd ?? null,
-        notes: input.notes ?? null,
-        ingredients: input.ingredients?.length
+        prepPhotoUrl: input.prepPhotoUrl ?? null,
+        finalPhotoUrl: input.finalPhotoUrl ?? null,
+        videoUrl: input.videoUrl ?? null,
+        instructionsMd,
+        notes: input.notes ?? (input.description ?? null),
+        ingredients: lines.length
           ? {
-              create: input.ingredients.map((line, idx) => ({
+              create: lines.map((line, idx) => ({
                 workspaceId: ctx.workspaceId,
                 ingredientId: line.ingredientId,
+                externalCode: line.externalCode ?? null,
                 quantity: line.quantity,
                 unit: line.unit,
-                yieldPctOverride: line.yieldPctOverride ?? null,
+                yieldPctOverride: line.percentUtilized ?? line.yieldPctOverride ?? null,
+                weightOz: line.weightOz ?? null,
                 notes: line.notes ?? null,
                 displayOrder: idx,
               })),
@@ -139,7 +182,7 @@ export class RecipesService {
     });
 
     // Trigger initial cost compute
-    if (input.ingredients?.length) {
+    if (lines.length) {
       await this.recost(ctx, recipe.id, "recipe_edit");
     }
 
@@ -200,20 +243,34 @@ export class RecipesService {
     });
     if (!existing) throw new NotFoundException({ code: "not_found", message: "Recipe not found" });
 
+    const salePriceCents = input.actualSellPriceCents ?? input.salePriceCents;
+    const portionsYielded = input.totalPortions ?? input.portionsYielded;
+    const prepTimeMin = input.prepTimeMinutes ?? input.prepTimeMin;
+    const cookTimeMin = input.cookTimeMinutes ?? input.cookTimeMin;
+    const instructionsMd = input.procedure ?? input.instructionsMd;
+
     const updated = await prisma.recipe.update({
       where: { id },
       data: {
         ...(input.name !== undefined ? { name: input.name.trim() } : {}),
+        ...(input.authorName !== undefined ? { authorName: input.authorName } : {}),
         ...(input.category !== undefined ? { category: input.category } : {}),
         ...(input.status !== undefined ? { status: input.status } : {}),
-        ...(input.prepTimeMin !== undefined ? { prepTimeMin: input.prepTimeMin } : {}),
-        ...(input.cookTimeMin !== undefined ? { cookTimeMin: input.cookTimeMin } : {}),
-        ...(input.portionsYielded !== undefined ? { portionsYielded: input.portionsYielded } : {}),
+        ...(prepTimeMin !== undefined ? { prepTimeMin } : {}),
+        ...(cookTimeMin !== undefined ? { cookTimeMin } : {}),
+        ...(portionsYielded !== undefined ? { portionsYielded } : {}),
+        ...(input.portionWeightG !== undefined ? { portionWeightG: input.portionWeightG } : {}),
+        ...(input.portionVolumeMl !== undefined ? { portionVolumeMl: input.portionVolumeMl } : {}),
         ...(input.totalYieldCanonical !== undefined ? { totalYieldCanonical: input.totalYieldCanonical } : {}),
         ...(input.totalYieldDimension !== undefined ? { totalYieldDimension: input.totalYieldDimension } : {}),
-        ...(input.salePriceCents !== undefined ? { salePriceCents: input.salePriceCents } : {}),
+        ...(salePriceCents !== undefined ? { salePriceCents } : {}),
+        ...(input.goalFoodCostPct !== undefined ? { goalFoodCostPct: input.goalFoodCostPct } : {}),
+        ...(input.paperCostCents !== undefined ? { paperCostCents: input.paperCostCents } : {}),
         ...(input.photoUrl !== undefined ? { photoUrl: input.photoUrl } : {}),
-        ...(input.instructionsMd !== undefined ? { instructionsMd: input.instructionsMd } : {}),
+        ...(input.prepPhotoUrl !== undefined ? { prepPhotoUrl: input.prepPhotoUrl } : {}),
+        ...(input.finalPhotoUrl !== undefined ? { finalPhotoUrl: input.finalPhotoUrl } : {}),
+        ...(input.videoUrl !== undefined ? { videoUrl: input.videoUrl } : {}),
+        ...(instructionsMd !== undefined ? { instructionsMd } : {}),
         ...(input.notes !== undefined ? { notes: input.notes } : {}),
       },
     });
@@ -225,11 +282,27 @@ export class RecipesService {
       metadata: { changes: Object.keys(input) },
     });
 
-    // Sale price change â†’ recompute margin even though cost unchanged
-    if (input.salePriceCents !== undefined) {
+    // Sale price change → recompute margin even though cost unchanged
+    if (salePriceCents !== undefined || portionsYielded !== undefined) {
       await this.recost(ctx, id, "recipe_edit");
     }
     return updated;
+  }
+
+  async delete(ctx: TenantContext, id: string) {
+    const existing = await prisma.recipe.findFirst({
+      where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
+    });
+    if (!existing) throw new NotFoundException({ code: "not_found", message: "Recipe not found" });
+
+    await prisma.recipe.update({ where: { id }, data: { deletedAt: new Date() } });
+
+    await writeAudit(ctx, {
+      action: "recipe.deleted",
+      entityType: "Recipe",
+      entityId: id,
+      metadata: { name: existing.name },
+    });
   }
 
   // -----------------------------------------------------------------

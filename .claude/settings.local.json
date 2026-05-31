@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-Content *)",
+      "PowerShell(pnpm *)",
+      "PowerShell(docker exec ibirdos-postgres *)",
+      "PowerShell(netstat *)",
+      "PowerShell(Get-Process *)",
+      "Read(//mnt/d/desktop/ibirdos/v3/ibirdos_roshan_updated/2/**)",
+      "Bash(DATABASE_URL=\"postgresql://ibirdos:ibirdos_dev_password@localhost:5432/ibirdos\" pnpm --filter @ibirdos/db run prisma:migrate -- --name init)",
+      "Read(//mnt/d/desktop/ibirdos/**)",
+      "Read(//mnt/**)",
+      "PowerShell($env:DATABASE_URL = \"postgresql://ibirdos:ibirdos_dev_password@localhost:5432/ibirdos\"; cd \"D:\\\\desktop\\\\ibirdos\\\\v3\\\\ibirdos_roshan_updated\\\\2\\\\ibirdos\\\\packages\\\\db\"; cmd /c \"pnpm exec prisma migrate dev --name init\" 2>&1)",
+      "PowerShell(pnpm exec *)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:3000\" -TimeoutSec 5 -UseBasicParsing; Write-Output \"Status: $\\($r.StatusCode\\)\"; Write-Output \\($r.Content | Select-String \"login|Login|sign.in|Sign.in\" -AllMatches | Select-Object -First 1\\) } catch { Write-Output \"Error: $_\" })",
+      "PowerShell(Get-ChildItem \"D:\\\\desktop\\\\ibirdos\\\\v3\\\\ibirdos_roshan_updated\\\\2\\\\ibirdos\\\\apps\\\\api\\\\dist\" | Select-Object Name, @{N=\"Type\";E={if\\($_.PSIsContainer\\){\"dir\"}else{\"file\"}}})",
+      "PowerShell(pnpm run *)",
+      "Bash(pnpm --filter './packages/**' run build)",
+      "PowerShell(node --version)",
+      "PowerShell(pnpm *\\)\rPowerShell\\(npx *\\)\rPowerShell\\(node *\\)\rPowerShell\\(docker *\\)\rPowerShell\\(Invoke-WebRequest *\\)\rPowerShell\\(Test-Path *\\)\rPowerShell\\(Set-Content *\\)\rPowerShell\\(Copy-Item *\\)\rPowerShell\\(Out-File *\\)\rPowerShell\\($env:* *\\)\rEdit\\(*\\)\rWrite\\(*\\)\rRead\\(*)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell($web = Invoke-WebRequest http://localhost:3000 -UseBasicParsing; $api = Invoke-WebRequest http://localhost:3001/api/v1/health/ready -UseBasicParsing; \"Web: $\\($web.StatusCode\\)  API: $\\($api.StatusCode\\)\")",
+      "PowerShell(docker compose *)"
+    ]
+  }
+}

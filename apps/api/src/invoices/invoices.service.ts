@@ -83,6 +83,7 @@ export class InvoicesService {
         invoiceId: invoice.id,
         extractionJobId: job.id,
         uploadKey: input.uploadKey,
+        uploadMimeType: input.uploadMimeType,
         actorId: ctx.userId,
       },
       { jobId: job.id },
@@ -195,62 +196,98 @@ export class InvoicesService {
       });
     }
 
-    const eligible = invoice.lines.filter(
-      (l) => !l.excluded && l.category === "FOOD_INGREDIENT" && l.committedIngredientId,
-    );
+    // All non-excluded FOOD_INGREDIENT lines -- matched OR unmatched (auto-create for unmatched)
+    const processable = invoice.lines.filter((l) => !l.excluded && l.category === "FOOD_INGREDIENT");
 
+    let matched = 0;
+    let created = 0;
     let priceUpdates = 0;
-    for (const line of eligible) {
-      // Compute per-canonical price. unitPriceCents is per (unit Ã— packSize packUnit).
-      // The IngredientsService.updatePrice handles the math via its canonical-unit
-      // assumption: pricePerCanonicalCents is already-normalized cents per gram/ml/each.
-      //
-      // Simplification: assume the line's quantity Ã— pack normalizes to canonical
-      // through the worker's prep step. For now we compute a naive per-canonical
-      // price using line.quantity Ã— pack to canonical, then divide cost.
-      const totalCents = line.extendedPriceCents;
-      // The worker computed canonical quantity into a private field; lacking
-      // that here, we conservatively use unit price as-is. The proper
-      // normalization is in the worker â€” this fallback simply records
-      // the cost AT THE INVOICE'S OWN UNIT (close enough until the
-      // unit-engine integration is finalized in Phase 7 recosting).
-      const denom = Number(line.quantity) || 1;
-      const pricePerUnitCents = totalCents / denom;
+    let inventoryTransactionsCreated = 0;
 
-      await this.ingredients.updatePrice(ctx, line.committedIngredientId!, {
-        pricePerCanonicalCents: pricePerUnitCents,
+    for (const line of processable) {
+      let ingredientId = line.committedIngredientId;
+
+      if (!ingredientId) {
+        const name = cleanIngredientName(line.descriptionRaw);
+        const { dimension, canonicalUnit, preferredDisplayUnit } = inferDimension(line.packUnit ?? line.unit);
+
+        const existing = await prisma.ingredient.findFirst({
+          where: { workspaceId: ctx.workspaceId, name, deletedAt: null },
+          select: { id: true },
+        });
+
+        if (existing) {
+          ingredientId = existing.id;
+          matched++;
+        } else {
+          try {
+            const ing = await this.ingredients.create(ctx, {
+              name,
+              category: "OTHER",
+              dimension,
+              canonicalUnit,
+              preferredDisplayUnit,
+              vendorId: invoice.vendorId ?? undefined,
+            });
+            ingredientId = ing.id;
+            created++;
+          } catch (err: any) {
+            log.warn({ lineId: line.id, name, err: err.message }, "auto-create ingredient failed -- skipping line");
+            continue;
+          }
+        }
+      } else {
+        matched++;
+      }
+
+      // Fetch ingredient metadata to compute price per canonical unit correctly.
+      // Without this, we'd store cents-per-case instead of cents-per-gram.
+      const ingMeta = await prisma.ingredient.findUnique({
+        where: { id: ingredientId },
+        select: { dimension: true, densityGPerMl: true },
+      }).catch(() => null);
+
+      const totalUnitQty = line.packSize
+        ? Number(line.quantity) * Number(line.packSize)
+        : Number(line.quantity);
+      const resolvedUnit = line.packSize ? (line.packUnit ?? line.unit) : line.unit;
+
+      let canonicalQty = totalUnitQty;
+      if (ingMeta) {
+        try {
+          canonicalQty = toCanonical(totalUnitQty, resolvedUnit, {
+            dimension: ingMeta.dimension,
+            densityGPerMl: ingMeta.densityGPerMl != null ? Number(ingMeta.densityGPerMl) : null,
+          });
+        } catch {
+          // unknown unit — canonicalQty stays as totalUnitQty (count fallback)
+        }
+      }
+
+      // extendedPriceCents / canonicalQty gives cents-per-canonical-unit (e.g. cents/g)
+      const pricePerCanonicalCents = canonicalQty > 0
+        ? Number(line.extendedPriceCents) / canonicalQty
+        : Number(line.extendedPriceCents) / (Number(line.quantity) || 1);
+
+      await this.ingredients.updatePrice(ctx, ingredientId, {
+        pricePerCanonicalCents,
         source: "INVOICE",
         sourceRef: invoice.id,
         vendorId: invoice.vendorId ?? undefined,
       });
       priceUpdates++;
 
-      // Inventory: record RECEIVE transaction in canonical units.
-      // Best-effort â€” if unit conversion fails, log and skip (price update still applied).
       try {
-        const ingMeta = await prisma.ingredient.findUnique({
-          where: { id: line.committedIngredientId! },
-          select: { dimension: true, densityGPerMl: true },
+        await this.inventory.recordTransaction(ctx, {
+          ingredientId,
+          kind: "RECEIVE",
+          quantityCanonical: canonicalQty,
+          costMicrocents: BigInt(Math.round(Number(line.extendedPriceCents) * 1000)),
+          sourceKind: "Invoice",
+          sourceRef: invoice.id,
+          notes: `line ${line.position}`,
         });
-        if (ingMeta) {
-          // Treat the line as: line.quantity Ã— (packSize unit) if pack info present,
-          // else line.quantity in line.unit.
-          const totalUnitQty = line.packSize ? Number(line.quantity) * Number(line.packSize) : Number(line.quantity);
-          const unit = line.packSize ? (line.packUnit ?? line.unit) : line.unit;
-          const canonicalQty = toCanonical(totalUnitQty, unit, {
-            dimension: ingMeta.dimension,
-            densityGPerMl: ingMeta.densityGPerMl != null ? Number(ingMeta.densityGPerMl) : null,
-          });
-          await this.inventory.recordTransaction(ctx, {
-            ingredientId: line.committedIngredientId!,
-            kind: "RECEIVE",
-            quantityCanonical: canonicalQty,
-            costMicrocents: BigInt(Math.round(line.extendedPriceCents * 1000)),
-            sourceKind: "Invoice",
-            sourceRef: invoice.id,
-            notes: `line ${line.position}`,
-          });
-        }
+        inventoryTransactionsCreated++;
       } catch (err: any) {
         log.warn({ lineId: line.id, err: err.message }, "inventory receive skipped");
       }
@@ -273,6 +310,8 @@ export class InvoicesService {
         totalCents: invoice.totalCents,
         lineCount: invoice.lines.length,
         priceUpdates,
+        matched,
+        created,
       },
     });
 
@@ -281,12 +320,124 @@ export class InvoicesService {
         workspaceId: ctx.workspaceId,
         invoiceId,
         priceUpdates,
+        created,
         at: new Date().toISOString(),
       }))
       .catch((err) => log.warn({ err: err.message }, "publish failed"));
 
-    log.info({ invoiceId, priceUpdates }, "invoice confirmed");
-    return confirmed;
+    log.info({ invoiceId, priceUpdates, matched, created }, "invoice confirmed");
+    return { invoice: confirmed, matched, created, priceUpdates, inventoryTransactionsCreated };
+  }
+
+  // -----------------------------------------------------------------
+  // Invoice header patch (vendor, dates, totals)
+  // -----------------------------------------------------------------
+
+  async updateHeader(
+    ctx: TenantContext,
+    invoiceId: string,
+    patch: {
+      vendorId?: string | null;
+      invoiceNumber?: string | null;
+      invoiceDate?: string | null;
+      dueDate?: string | null;
+      subtotalCents?: number | null;
+      taxCents?: number | null;
+      totalCents?: number | null;
+    },
+  ) {
+    const inv = await prisma.invoice.findFirst({
+      where: { id: invoiceId, workspaceId: ctx.workspaceId, deletedAt: null },
+      select: { id: true, status: true },
+    });
+    if (!inv) throw new NotFoundException({ code: "not_found", message: "Invoice not found" });
+
+    return prisma.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        ...(patch.vendorId !== undefined      ? { vendorId: patch.vendorId }                                              : {}),
+        ...(patch.invoiceNumber !== undefined ? { invoiceNumber: patch.invoiceNumber }                                    : {}),
+        ...(patch.invoiceDate !== undefined   ? { invoiceDate: patch.invoiceDate   ? new Date(patch.invoiceDate)   : null } : {}),
+        ...(patch.dueDate !== undefined       ? { dueDate:     patch.dueDate       ? new Date(patch.dueDate)       : null } : {}),
+        ...(patch.subtotalCents !== undefined ? { subtotalCents: patch.subtotalCents }                                    : {}),
+        ...(patch.taxCents !== undefined      ? { taxCents:     patch.taxCents }                                          : {}),
+        ...(patch.totalCents !== undefined    ? { totalCents:   patch.totalCents }                                        : {}),
+      },
+      include: { vendor: { select: { id: true, name: true } } },
+    });
+  }
+
+  // -----------------------------------------------------------------
+  // Manual line entry
+  // -----------------------------------------------------------------
+
+  async addLine(
+    ctx: TenantContext,
+    invoiceId: string,
+    data: {
+      descriptionRaw: string;
+      quantity: number;
+      unit: string;
+      unitPriceCents: number;
+      extendedPriceCents: number;
+      category?: string;
+      committedIngredientId?: string | null;
+      packSize?: number | null;
+      packUnit?: string | null;
+      notes?: string;
+    },
+  ) {
+    const invoice = await prisma.invoice.findFirst({
+      where: { id: invoiceId, workspaceId: ctx.workspaceId, deletedAt: null },
+      select: { id: true, status: true },
+    });
+    if (!invoice) throw new NotFoundException({ code: "not_found", message: "Invoice not found" });
+    if (invoice.status === "CONFIRMED" || invoice.status === "ARCHIVED") {
+      throw new BadRequestException({ code: "validation_failed", message: "Cannot add lines to a confirmed invoice" });
+    }
+
+    const agg = await prisma.invoiceLine.aggregate({
+      where: { invoiceId },
+      _max: { position: true },
+    });
+    const nextPosition = (agg._max.position ?? 0) + 1;
+
+    const line = await prisma.invoiceLine.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        invoiceId,
+        position: nextPosition,
+        descriptionRaw: data.descriptionRaw,
+        quantity: data.quantity,
+        unit: data.unit,
+        unitPriceCents: data.unitPriceCents,
+        extendedPriceCents: data.extendedPriceCents,
+        category: (data.category ?? "FOOD_INGREDIENT") as any,
+        committedIngredientId: data.committedIngredientId ?? null,
+        packSize: data.packSize ?? null,
+        packUnit: data.packUnit ?? null,
+        notes: data.notes ?? null,
+      },
+    });
+
+    // Transition stuck statuses so the existing confirm flow works
+    if (!["PENDING_REVIEW", "EXTRACTING"].includes(invoice.status)) {
+      await prisma.invoice.update({
+        where: { id: invoiceId },
+        data: { status: "PENDING_REVIEW" },
+      });
+    }
+
+    return line;
+  }
+
+  async deleteLine(ctx: TenantContext, invoiceId: string, lineId: string) {
+    const line = await prisma.invoiceLine.findFirst({
+      where: { id: lineId, invoiceId, workspaceId: ctx.workspaceId },
+    });
+    if (!line) throw new NotFoundException({ code: "not_found", message: "Invoice line not found" });
+    await prisma.invoiceLine.delete({ where: { id: lineId } });
+    return { deleted: true };
   }
 
   // -----------------------------------------------------------------
@@ -312,9 +463,33 @@ export class InvoicesService {
       invoiceId,
       extractionJobId: job.id,
       uploadKey: inv.uploadKey,
+      uploadMimeType: inv.uploadMimeType,
       actorId: ctx.userId,
     }, { jobId: job.id });
 
     return { queued: true };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helpers for auto-create logic
+// ---------------------------------------------------------------------------
+
+function inferDimension(unit: string): { dimension: "MASS" | "VOLUME" | "COUNT"; canonicalUnit: string; preferredDisplayUnit: string } {
+  const u = (unit ?? "").toUpperCase().replace(/[^A-Z]/g, "");
+  // All weight units → always display in lb (grams stay as internal canonical storage)
+  if (["LB", "LBS", "OZ", "KG", "G", "GRAM", "GRAMS", "MG"].includes(u))
+    return { dimension: "MASS",   canonicalUnit: "g",    preferredDisplayUnit: "lb"   };
+  // Gallon-scale volumes → gal display; smaller volumes → floz display
+  if (u === "GAL")
+    return { dimension: "VOLUME", canonicalUnit: "ml",   preferredDisplayUnit: "gal"  };
+  if (["QT", "PT", "L", "LITER", "LITERS", "ML", "FLOZ"].includes(u))
+    return { dimension: "VOLUME", canonicalUnit: "ml",   preferredDisplayUnit: "floz" };
+  return { dimension: "COUNT",  canonicalUnit: "each", preferredDisplayUnit: "each" };
+}
+
+function cleanIngredientName(raw: string): string {
+  // Strip leading all-caps SKU token (e.g. "BBRLIMP", "SYS", "IMP/MCC") followed by a space
+  const cleaned = raw.replace(/^[A-Z][A-Z0-9/_]{2,}\s+/, "").trim();
+  return (cleaned || raw.trim()).slice(0, 120);
 }

@@ -14,7 +14,15 @@ const NAV_ITEMS: Array<{ href: string; label: string; permission?: string }> = [
   { href: "/waste-yield", label: "Waste & yield", permission: "waste.read" },
   { href: "/vendors",    label: "Vendors",      permission: "vendor.read" },
   { href: "/billing",    label: "Billing",      permission: "billing.read" },
-  { href: "/settings",   label: "Settings" },
+];
+
+const SETTINGS_ITEMS: Array<{
+  href: string;
+  label: string;
+  roles: Role[];
+}> = [
+  { href: "/settings",       label: "Settings",    roles: ["OWNER", "MANAGER"] },
+  { href: "/settings/users", label: "Team & Roles", roles: ["OWNER"] },
 ];
 
 export function Sidebar({
@@ -22,6 +30,8 @@ export function Sidebar({
 }: {
   workspaceSlug: string; workspaceName: string; role: Role; username: string;
 }) {
+  const settingsItems = SETTINGS_ITEMS.filter(item => item.roles.includes(role));
+
   return (
     <aside className="w-60 shrink-0 border-r border-bg-border bg-bg-surface flex flex-col h-screen sticky top-0">
       <div className="px-5 py-5 border-b border-bg-border">
@@ -41,6 +51,21 @@ export function Sidebar({
             </Link>
           );
         })}
+
+        {settingsItems.length > 0 && (
+          <div className="pt-3">
+            <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-text-tertiary">Settings</div>
+            {settingsItems.map(item => (
+              <Link
+                key={item.href}
+                href={`/${workspaceSlug}${item.href}` as any}
+                className="block px-3 py-2 rounded text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+              >
+                {item.label}
+              </Link>
+            ))}
+          </div>
+        )}
       </nav>
       <div className="px-5 py-4 border-t border-bg-border space-y-2">
         <div className="text-xs">
