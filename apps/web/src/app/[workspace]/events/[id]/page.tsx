@@ -24,8 +24,13 @@ interface EventDetail {
   computedLaborCostCents: number | null;
   computedMarginPct: number | null;
   notes: string | null;
+  // Cost freeze fields
+  frozenAt: string | null;
+  frozenRecipeCostsCents: Record<string, number> | null;
+  frozenIngredientPricesCents: Record<string, number> | null;
   menuItems: Array<{
     id: string;
+    recipeId: string;
     portions: number;
     displayOrder: number;
     recipe: { id: string; name: string; portionsYielded: number | null; cachedCostMicrocents: string | null; salePriceCents: number | null };
@@ -106,10 +111,22 @@ export default async function EventDetailPage({
             {event.customerName && ` · ${event.customerName}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Badge tone={STATUS_TONE[event.status] ?? "neutral"}>
             {event.status.toLowerCase().replace(/_/g, " ")}
           </Badge>
+          {event.frozenAt ? (
+            <span
+              className="inline-flex items-center gap-1 rounded border border-accent-500/30 bg-accent-500/10 px-2 py-0.5 text-[10px] font-medium text-accent-400"
+              title={`Costs locked at ${new Date(event.frozenAt).toLocaleString()}`}
+            >
+              🔒 Frozen quote · {new Date(event.frozenAt).toLocaleDateString()}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
+              Live quote
+            </span>
+          )}
         </div>
       </div>
 
@@ -118,7 +135,7 @@ export default async function EventDetailPage({
         <KpiCard label="Guests" value={event.guestCount.toString()} />
         <KpiCard label="Revenue" value={formatCents(event.quotedPriceCents)} />
         <KpiCard
-          label="Food cost"
+          label={event.frozenAt ? "Food cost (frozen)" : "Food cost"}
           value={formatCents(event.computedFoodCostCents)}
           {...(event.quotedPriceCents && event.computedFoodCostCents
             ? { sub: `${formatPct((event.computedFoodCostCents / event.quotedPriceCents) * 100)} of revenue` }

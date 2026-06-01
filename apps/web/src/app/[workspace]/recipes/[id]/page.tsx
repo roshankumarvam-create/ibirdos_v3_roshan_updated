@@ -21,6 +21,16 @@ interface RecipeIngredientLine {
   lineCostMicrocents: number | null;
 }
 
+interface LiveBreakdownLine {
+  ingredientId: string;
+  name: string;
+  quantity: number;
+  unit: string;
+  currentPricePerCanonicalCents: number | null;
+  lineCostCents: number | null;
+  error: string | null;
+}
+
 interface RecipeDetail {
   id: string;
   name: string;
@@ -38,6 +48,17 @@ interface RecipeDetail {
   goalFoodCostPct: number | null;
   paperCostCents: number | null;
   salePriceCents: number | null;
+  // Live cost fields (source of truth)
+  liveCostCents: number;
+  livePerPortionCostCents: number | null;
+  liveFoodCostPct: number | null;
+  liveMarginPct: number | null;
+  liveStaleness: "FRESH" | "MISSING_PRICE" | "MISSING_INGREDIENT";
+  liveBreakdown: LiveBreakdownLine[];
+  // Cached (may lag by recost debounce window)
+  cachedCostCents: number | null;
+  cachedCostUpdatedAt: string | null;
+  // Legacy — kept for backwards compat with non-upgraded clients
   cachedCostMicrocents: number | null;
   cachedCostPerPortionMicrocents: number | null;
   prepPhotoUrl: string | null;
@@ -78,19 +99,42 @@ export default async function RecipeDetailPage({
 
   const statusTone = recipe.status === "ACTIVE" ? "success" : recipe.status === "ARCHIVED" ? "neutral" : "warning";
 
-  // API returns microcents; convert to cents for display
-  const cachedCostCents = recipe.cachedCostMicrocents != null ? recipe.cachedCostMicrocents / 1000 : null;
-  const portionCostCents = recipe.cachedCostPerPortionMicrocents != null
-    ? recipe.cachedCostPerPortionMicrocents / 1000
-    : (cachedCostCents && recipe.portionsYielded ? Math.round(cachedCostCents / recipe.portionsYielded) : null);
-
-  const foodCostPct: number | null = portionCostCents && recipe.salePriceCents && recipe.salePriceCents > 0
-    ? (portionCostCents / recipe.salePriceCents) * 100
-    : null;
-
-  const marginCents: number | null = portionCostCents && recipe.salePriceCents
+  // Live cost — always reflects current ingredient prices (source of truth)
+  const liveCostCents = recipe.liveCostCents;
+  const portionCostCents = recipe.livePerPortionCostCents;
+  const foodCostPct = recipe.liveFoodCostPct;
+  const marginCents: number | null = portionCostCents != null && recipe.salePriceCents != null
     ? recipe.salePriceCents - portionCostCents
     : null;
+
+  // Cache timestamp for tooltip
+  const cacheUpdatedAt = recipe.cachedCostUpdatedAt
+    ? new Date(recipe.cachedCostUpdatedAt).toLocaleString()
+    : null;
+
+  function FoodCostBadge({ pct }: { pct: number | null }) {
+    if (pct === null) {
+      return (
+        <div className="rounded-lg border border-bg-border bg-bg-inset px-4 py-2 text-center">
+          <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Food cost</div>
+          <div className="mt-1 text-lg font-semibold text-text-tertiary">—</div>
+          <div className="text-[10px] text-text-tertiary">No sell price</div>
+        </div>
+      );
+    }
+    const { label, colorClass, bgClass } = pct <= 30
+      ? { label: "OK", colorClass: "text-success", bgClass: "bg-success/10 border-success/30" }
+      : pct <= 35
+        ? { label: "WATCH", colorClass: "text-warning", bgClass: "bg-warning/10 border-warning/30" }
+        : { label: "HIGH", colorClass: "text-danger", bgClass: "bg-danger/10 border-danger/30" };
+    return (
+      <div className={`rounded-lg border px-4 py-2 text-center ${bgClass}`}>
+        <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Food cost</div>
+        <div className={`mt-1 text-lg font-semibold ${colorClass}`}>{pct.toFixed(1)}%</div>
+        <div className={`text-xs font-medium ${colorClass}`}>{label}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-[1200px] pb-10">
@@ -231,9 +275,20 @@ export default async function RecipeDetailPage({
         <div className="lg:col-span-1">
           <div className="sticky top-6">
             <Card>
-              <CardHeader><CardTitle>Cost summary</CardTitle></CardHeader>
-              <CardBody className="space-y-2 text-sm">
-                <CostRow label="Total ingredient cost" value={fmtCents(cachedCostCents)} />
+              <CardHeader>
+                <CardTitle>Cost summary</CardTitle>
+                {cacheUpdatedAt && (
+                  <p className="text-[10px] text-text-tertiary mt-0.5" title={`Cache last written: ${cacheUpdatedAt}`}>
+                    Cache updated {cacheUpdatedAt}
+                  </p>
+                )}
+              </CardHeader>
+              <CardBody className="space-y-3 text-sm">
+                <FoodCostBadge pct={foodCostPct} />
+                {recipe.liveStaleness === "MISSING_PRICE" && (
+                  <p className="text-[10px] text-warning">Some ingredients have no price set — cost is partial.</p>
+                )}
+                <CostRow label="Live ingredient cost" value={fmtCents(liveCostCents)} />
                 {recipe.paperCostCents != null && recipe.portionsYielded && (
                   <CostRow
                     label="Paper cost (total)"

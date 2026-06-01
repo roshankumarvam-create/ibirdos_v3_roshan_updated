@@ -27,7 +27,7 @@ const ListQuerySchema = z.object({
   search: z.string().optional(),
   category: z.string().optional(),
   cursor: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
 });
 
 const AddAliasSchema = z.object({

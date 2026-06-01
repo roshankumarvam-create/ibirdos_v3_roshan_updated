@@ -23,6 +23,88 @@ export class EventsService {
     private readonly recipes: RecipesService,
   ) {}
 
+  // -----------------------------------------------------------------
+  // Status transitions — freeze costs on PAID / COMPLETED / ARCHIVED
+  // -----------------------------------------------------------------
+
+  async updateStatus(ctx: TenantContext, eventId: string, newStatus: string): Promise<any> {
+    const event = await prisma.event.findFirst({
+      where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
+      include: {
+        menuItems: { include: { recipe: { select: { id: true, cachedCostMicrocents: true } } } },
+      },
+    });
+    if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+
+    const freezeStatuses = ["CONFIRMED", "PREP_IN_PROGRESS", "IN_SERVICE", "COMPLETED", "CANCELLED"];
+    const shouldFreeze = freezeStatuses.includes(newStatus) && !(event as any).frozenAt;
+
+    let freezeData: Record<string, any> = {};
+    if (shouldFreeze) {
+      const recipeSnap: Record<string, number> = {};
+      for (const mi of event.menuItems) {
+        recipeSnap[mi.recipeId] = mi.recipe.cachedCostMicrocents != null
+          ? Math.round(Number(mi.recipe.cachedCostMicrocents) / 1000)
+          : 0;
+      }
+
+      const ingredientIds = new Set<string>();
+      event.menuItems.forEach((mi) => {});  // populated below
+      const recipeIds = event.menuItems.map((mi) => mi.recipeId);
+      const recipeIngredients = await prisma.recipeIngredient.findMany({
+        where: { recipeId: { in: recipeIds }, workspaceId: ctx.workspaceId },
+        select: { ingredientId: true },
+      });
+      recipeIngredients.forEach((ri) => ingredientIds.add(ri.ingredientId));
+
+      const ingredients = await prisma.ingredient.findMany({
+        where: { id: { in: Array.from(ingredientIds) }, deletedAt: null },
+        select: { id: true, currentCostMicrocents: true },
+      });
+      const ingredientSnap: Record<string, number> = {};
+      ingredients.forEach((ing) => {
+        ingredientSnap[ing.id] = ing.currentCostMicrocents != null
+          ? Math.round(Number(ing.currentCostMicrocents) / 1000)
+          : 0;
+      });
+
+      freezeData = {
+        frozenAt: new Date(),
+        frozenRecipeCostsCents: recipeSnap,
+        frozenIngredientPricesCents: ingredientSnap,
+      };
+      log.info({ eventId, newStatus, recipeCount: Object.keys(recipeSnap).length }, "event costs frozen");
+    }
+
+    const updated = await prisma.event.update({
+      where: { id: eventId },
+      data: { status: newStatus as any, ...freezeData },
+    });
+
+    await writeAudit(ctx, {
+      action: "event.status_changed",
+      entityType: "Event",
+      entityId: eventId,
+      metadata: { from: event.status, to: newStatus, frozen: shouldFreeze },
+    });
+
+    return updated;
+  }
+
+  // -----------------------------------------------------------------
+  // Freeze helper (idempotent — call for already-confirmed events)
+  // -----------------------------------------------------------------
+
+  async freezeEvent(ctx: TenantContext, eventId: string): Promise<any> {
+    const event = await prisma.event.findFirst({
+      where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
+    }) as any;
+    if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+    if (event.frozenAt) return event; // already frozen, idempotent
+
+    return this.updateStatus(ctx, eventId, event.status);
+  }
+
   async create(ctx: TenantContext, input: any): Promise<any> {
     const event = await prisma.event.create({
       data: {

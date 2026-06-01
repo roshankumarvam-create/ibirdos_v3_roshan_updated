@@ -16,3 +16,4 @@ export { StatTile } from "./components/stat-tile";
 export { DataTable } from "./components/data-table";
 export type { Column } from "./components/data-table";
 export { SectionHeader } from "./components/section-header";
+export { Switch } from "./components/switch";

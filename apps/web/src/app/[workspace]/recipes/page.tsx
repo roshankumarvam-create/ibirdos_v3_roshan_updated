@@ -12,10 +12,40 @@ interface RecipeListItem {
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   portionsYielded: number | null;
   salePriceCents: number | null;
+  // Live cost — always current; source of truth
+  liveCostCents: number;
+  livePerPortionCostCents: number | null;
+  liveFoodCostPct: number | null;
+  liveMarginPct: number | null;
+  liveStaleness: "FRESH" | "MISSING_PRICE" | "MISSING_INGREDIENT";
+  autoReprice: boolean;
+  // Cached — backup, may lag briefly after ingredient price changes
   cachedCostCents: number | null;
-  cachedMarginPct: number | null;
+  cachedCostUpdatedAt: string | null;
   costStaleness: string;
   ingredientCount: number;
+}
+
+function MarginBadge({ pct }: { pct: number | null }) {
+  if (pct === null) {
+    return <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-bg-inset text-text-tertiary border border-bg-border">—</span>;
+  }
+  if (pct <= 30) {
+    return <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-success/10 text-success border border-success/20">OK</span>;
+  }
+  if (pct <= 35) {
+    return <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-warning/10 text-warning border border-warning/20">WATCH</span>;
+  }
+  return <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-danger/10 text-danger border border-danger/20">HIGH</span>;
+}
+
+function fmtRelTime(iso: string | null) {
+  if (!iso) return null;
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 export default async function RecipesPage({ searchParams }: { searchParams: Promise<{ search?: string; status?: string }> }) {
@@ -39,7 +69,7 @@ export default async function RecipesPage({ searchParams }: { searchParams: Prom
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Recipes</h1>
           <p className="mt-1 text-xs font-mono text-text-secondary">
-            {items.length} recipe{items.length === 1 ? "" : "s"} · costs auto-recalculate on ingredient price changes
+            {items.length} recipe{items.length === 1 ? "" : "s"} · costs computed live from current ingredient prices
           </p>
         </div>
         {canCreate && (
@@ -80,43 +110,53 @@ export default async function RecipesPage({ searchParams }: { searchParams: Prom
                 <th className="text-left px-5 py-3 font-medium">Category</th>
                 <th className="text-left px-5 py-3 font-medium">Status</th>
                 <th className="text-right px-5 py-3 font-medium">Portions</th>
-                <th className="text-right px-5 py-3 font-medium">Cost</th>
+                <th className="text-right px-5 py-3 font-medium">Live cost</th>
                 <th className="text-right px-5 py-3 font-medium">Sale</th>
                 <th className="text-right px-5 py-3 font-medium">Margin</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-bg-border">
-              {items.map((r) => (
-                <tr key={r.id} className="hover:bg-bg-hover/30 transition-colors">
-                  <td className="px-5 py-3">
-                    <Link href={`/${user.workspaceSlug}/recipes/${r.id}` as any} className="text-text-primary hover:text-accent-500">
-                      {r.name}
-                    </Link>
-                    {r.costStaleness === "COMPUTE_ERROR" && (
-                      <Badge tone="danger" className="ml-2 text-[10px]">cost error</Badge>
-                    )}
-                    {r.costStaleness === "STALE" && (
-                      <Badge tone="warning" className="ml-2 text-[10px]">recalc pending</Badge>
-                    )}
-                  </td>
-                  <td className="px-5 py-3 text-text-secondary text-xs">{r.category ?? "—"}</td>
-                  <td className="px-5 py-3">
-                    <Badge tone={r.status === "ACTIVE" ? "success" : r.status === "DRAFT" ? "neutral" : "neutral"}>
-                      {r.status.toLowerCase()}
-                    </Badge>
-                  </td>
-                  <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{r.portionsYielded ?? "—"}</td>
-                  <td className="px-5 py-3 text-right tabular-nums">{formatCents(r.cachedCostCents)}</td>
-                  <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(r.salePriceCents)}</td>
-                  <td className="px-5 py-3 text-right tabular-nums">
-                    <span className={r.cachedMarginPct == null ? "text-text-tertiary" :
-                      r.cachedMarginPct < 30 ? "text-danger" :
-                      r.cachedMarginPct < 50 ? "text-warning" : "text-success"}>
-                      {formatPct(r.cachedMarginPct)}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {items.map((r) => {
+                const cacheTs = fmtRelTime(r.cachedCostUpdatedAt);
+                return (
+                  <tr key={r.id} className="hover:bg-bg-hover/30 transition-colors">
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Link href={`/${user.workspaceSlug}/recipes/${r.id}` as any} className="text-text-primary hover:text-accent-500">
+                          {r.name}
+                        </Link>
+                        <MarginBadge pct={r.liveFoodCostPct} />
+                        {!r.autoReprice && r.liveFoodCostPct != null && r.liveFoodCostPct > 35 && (
+                          <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-bg-inset text-text-tertiary border border-bg-border">LOCKED</span>
+                        )}
+                        {r.liveStaleness === "MISSING_PRICE" && (
+                          <Badge tone="warning" className="text-[10px]">missing price</Badge>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3 text-text-secondary text-xs">{r.category ?? "—"}</td>
+                    <td className="px-5 py-3">
+                      <Badge tone={r.status === "ACTIVE" ? "success" : "neutral"}>
+                        {r.status.toLowerCase()}
+                      </Badge>
+                    </td>
+                    <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{r.portionsYielded ?? "—"}</td>
+                    <td className="px-5 py-3 text-right tabular-nums">
+                      <span title={cacheTs ? `Cache updated ${cacheTs}` : undefined}>
+                        {formatCents(r.liveCostCents)}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(r.salePriceCents)}</td>
+                    <td className="px-5 py-3 text-right tabular-nums">
+                      <span className={r.liveMarginPct == null ? "text-text-tertiary" :
+                        r.liveMarginPct < 30 ? "text-danger" :
+                        r.liveMarginPct < 50 ? "text-warning" : "text-success"}>
+                        {r.liveMarginPct != null ? `${r.liveMarginPct.toFixed(1)}%` : "—"}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

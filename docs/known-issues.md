@@ -1,5 +1,23 @@
 # Known Issues
 
+## Recipe Costing (Phase 2)
+
+### KI-C1: Kitchen packet post-freeze uses live prices
+When `generateKitchenPacket()` is called on a frozen event, it reads `ingredient.currentCostMicrocents` for line costs rather than `frozenIngredientPricesCents`. Ingredient demand aggregation is correct; only cost display in the packet could drift.
+**Workaround:** Don't regenerate the kitchen packet after the event is paid.
+**Fix:** Pass frozen prices into packet generation when `event.frozenAt` is set.
+
+### KI-C2: Prisma client needs regeneration after schema changes
+After Phase 1 (`targetMarginPct`) and Phase 2 (`frozenAt`, `frozenRecipeCostsCents`, `frozenIngredientPricesCents`) the Prisma client types are stale. Columns exist in Postgres but TypeScript won't show them until `prisma generate` runs. Requires restart (DLL locked while dev runs).
+
+### KI-C3: `computeLiveRecipeCost` in API package, not `packages/db`
+Depends on `@ibirdos/types` which isn't a dep of `packages/db`. Lives at `apps/api/src/recipes/recipe-cost.helper.ts`. Move if worker is ever extracted into its own package.
+
+### KI-C4: Events list page doesn't show Live/Frozen badge
+Only the event detail page shows the freeze state. Low priority.
+
+---
+
 ## Invoice OCR: "400 Missing required parameter: messages[1].content[1].image_url.url"
 
 **Status:** Deferred. OCR hidden behind `NEXT_PUBLIC_ENABLE_OCR=false` feature flag.

@@ -31,6 +31,10 @@ const AddMenuSchema = z.object({
   notes: z.string().max(500).optional(),
 });
 
+const UpdateStatusSchema = z.object({
+  status: z.enum(["DRAFT", "CONFIRMED", "PREP_IN_PROGRESS", "IN_SERVICE", "COMPLETED", "CANCELLED"]),
+});
+
 const AssignStaffSchema = z.object({
   userId: z.string().optional(),
   role: z.enum(["HEAD_CHEF", "LINE_COOK", "PREP_COOK", "SERVER", "BARTENDER", "DRIVER", "COORDINATOR", "OTHER"]),
@@ -76,6 +80,17 @@ export class EventsController {
   @Post(":id/kitchen-packet/generate") @RequirePermission("event.update")
   generatePacket(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
     return this.svc.generateKitchenPacket(ctx, id).then(ok);
+  }
+
+  @Patch(":id/status") @RequirePermission("event.update")
+  updateStatus(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+               @Body(new ZodValidationPipe(UpdateStatusSchema)) body: any): Promise<any> {
+    return this.svc.updateStatus(ctx, id, body.status).then(ok);
+  }
+
+  @Post(":id/freeze") @RequirePermission("event.update")
+  freeze(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.freezeEvent(ctx, id).then(ok);
   }
 
   @Get(":id/ingredient-requirements") @RequirePermission("event.read")

@@ -17,9 +17,6 @@
 import {
   Injectable, NotFoundException, BadRequestException, Inject,
 } from "@nestjs/common";
-// Decimal is reached via the Prisma namespace (avoids the
-// "@prisma/client/runtime/library" subpath, which some bundler
-// configurations fail to resolve under exports-map restrictions).
 import { Prisma } from "@ibirdos/db";
 type Decimal = Prisma.Decimal;
 const Decimal = Prisma.Decimal;
@@ -33,6 +30,7 @@ import {
 } from "@ibirdos/types";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
+import { computeLiveRecipeCost } from "./recipe-cost.helper";
 
 const log = moduleLogger("RecipesService");
 
@@ -73,7 +71,9 @@ export interface CreateRecipeInput {
   salePriceCents?: number;
   actualSellPriceCents?: number;
   goalFoodCostPct?: number;
+  targetMarginPct?: number;
   paperCostCents?: number;
+  autoReprice?: boolean;
   photoUrl?: string;
   prepPhotoUrl?: string;
   finalPhotoUrl?: string;
@@ -149,7 +149,9 @@ export class RecipesService {
         totalYieldDimension: input.totalYieldDimension ?? null,
         salePriceCents,
         goalFoodCostPct: input.goalFoodCostPct ?? null,
+        targetMarginPct: input.targetMarginPct ?? null,
         paperCostCents: input.paperCostCents ?? null,
+        autoReprice: input.autoReprice ?? true,
         photoUrl: input.photoUrl ?? null,
         prepPhotoUrl: input.prepPhotoUrl ?? null,
         finalPhotoUrl: input.finalPhotoUrl ?? null,
@@ -199,12 +201,27 @@ export class RecipesService {
     if (opts.category) where.category = opts.category;
     if (opts.search) where.name = { contains: opts.search, mode: "insensitive" };
 
+    // Single query — ingredient includes are necessary for live cost computation.
+    // This avoids N+1 while keeping the total query count at 1.
     const items = await prisma.recipe.findMany({
       where,
       take: limit + 1,
       ...(opts.cursor ? { skip: 1, cursor: { id: opts.cursor } } : {}),
       orderBy: { name: "asc" },
-      include: { _count: { select: { ingredients: true } } },
+      include: {
+        _count: { select: { ingredients: true } },
+        ingredients: {
+          select: {
+            id: true, quantity: true, unit: true, yieldPctOverride: true,
+            ingredient: {
+              select: {
+                id: true, name: true, dimension: true, canonicalUnit: true,
+                densityGPerMl: true, currentCostMicrocents: true, defaultYieldPct: true,
+              },
+            },
+          },
+        },
+      },
     });
     const hasNext = items.length > limit;
     return {
@@ -234,7 +251,21 @@ export class RecipesService {
       },
     });
     if (!r) throw new NotFoundException({ code: "not_found", message: "Recipe not found" });
-    return r;
+
+    // Compute live cost from current ingredient prices (source of truth)
+    const live = computeLiveRecipeCost(r);
+    return {
+      ...r,
+      liveCostCents: live.totalCostCents,
+      livePerPortionCostCents: live.perPortionCostCents,
+      liveFoodCostPct: live.foodCostPct,
+      liveMarginPct: live.marginPct,
+      liveStaleness: live.staleness,
+      liveBreakdown: live.breakdown,
+      // Keep cached values for comparison / staleness display
+      cachedCostCents: r.cachedCostMicrocents != null ? Number(r.cachedCostMicrocents) / 1000 : null,
+      cachedCostUpdatedAt: r.cachedCostUpdatedAt,
+    };
   }
 
   async update(ctx: TenantContext, id: string, input: UpdateRecipeInput) {
@@ -243,11 +274,12 @@ export class RecipesService {
     });
     if (!existing) throw new NotFoundException({ code: "not_found", message: "Recipe not found" });
 
-    const salePriceCents = input.actualSellPriceCents ?? input.salePriceCents;
+    const salePriceCents = input.actualSellPriceCents !== undefined ? input.actualSellPriceCents : input.salePriceCents;
     const portionsYielded = input.totalPortions ?? input.portionsYielded;
     const prepTimeMin = input.prepTimeMinutes ?? input.prepTimeMin;
     const cookTimeMin = input.cookTimeMinutes ?? input.cookTimeMin;
-    const instructionsMd = input.procedure ?? input.instructionsMd;
+    // Use !== undefined so null passes through (clears the field)
+    const instructionsMd = input.procedure !== undefined ? input.procedure : input.instructionsMd;
 
     const updated = await prisma.recipe.update({
       where: { id },
@@ -265,7 +297,9 @@ export class RecipesService {
         ...(input.totalYieldDimension !== undefined ? { totalYieldDimension: input.totalYieldDimension } : {}),
         ...(salePriceCents !== undefined ? { salePriceCents } : {}),
         ...(input.goalFoodCostPct !== undefined ? { goalFoodCostPct: input.goalFoodCostPct } : {}),
+        ...(input.targetMarginPct !== undefined ? { targetMarginPct: input.targetMarginPct } : {}),
         ...(input.paperCostCents !== undefined ? { paperCostCents: input.paperCostCents } : {}),
+        ...(input.autoReprice !== undefined ? { autoReprice: input.autoReprice } : {}),
         ...(input.photoUrl !== undefined ? { photoUrl: input.photoUrl } : {}),
         ...(input.prepPhotoUrl !== undefined ? { prepPhotoUrl: input.prepPhotoUrl } : {}),
         ...(input.finalPhotoUrl !== undefined ? { finalPhotoUrl: input.finalPhotoUrl } : {}),
@@ -386,6 +420,26 @@ export class RecipesService {
     const breakdown = this.computeBreakdown(recipe);
 
     // ---- Persist ----
+    // If autoReprice is ON and recipe has a target margin, recalculate sell price.
+    // newSellPrice = newCostPerPortion / (1 - targetMarginPct/100)
+    const recipeAny = recipe as any;
+    let recalcSalePriceCents: number | undefined;
+    if (
+      breakdown.staleness === "FRESH" &&
+      recipeAny.autoReprice !== false &&
+      recipeAny.targetMarginPct != null &&
+      recipe.portionsYielded &&
+      recipe.portionsYielded > 0
+    ) {
+      const targetMargin = Number(recipeAny.targetMarginPct) / 100;
+      if (targetMargin < 1) {
+        const newCostCents = Number(breakdown.totalMicrocents) / 1000;
+        const perPortionCost = newCostCents / recipe.portionsYielded;
+        recalcSalePriceCents = Math.round(perPortionCost / (1 - targetMargin));
+      }
+    }
+
+    const oldCostMicrocents = recipe.cachedCostMicrocents;
     await prisma.recipe.update({
       where: { id: recipeId },
       data: {
@@ -398,6 +452,7 @@ export class RecipesService {
         cachedMarginPct: breakdown.marginPct != null
           ? new Decimal(breakdown.marginPct.toFixed(2))
           : null,
+        ...(recalcSalePriceCents !== undefined ? { salePriceCents: recalcSalePriceCents } : {}),
       },
     });
 
@@ -422,11 +477,13 @@ export class RecipesService {
     log.info(
       {
         recipeId, recipeName: recipe.name,
-        totalCents: Number(breakdown.totalMicrocents) / 1000,
+        oldCostCents: oldCostMicrocents != null ? Number(oldCostMicrocents) / 1000 : null,
+        newCostCents: Number(breakdown.totalMicrocents) / 1000,
         staleness: breakdown.staleness,
         triggerKind,
+        ...(recalcSalePriceCents !== undefined ? { recalcSalePriceCents } : {}),
       },
-      "recipe recosted",
+      "[recipe-recost.worker] picked up job for recipe, old cost → new cost",
     );
 
     return breakdown;
@@ -546,53 +603,104 @@ export class RecipesService {
    * Bulk recost: find every recipe in a workspace that uses the given
    * ingredient and recompute. Called by the recost worker.
    */
-  async recostAllUsingIngredient(workspaceId: string, ingredientId: string, triggerRef?: string) {
+  async recostAllUsingIngredient(
+    workspaceId: string,
+    ingredientId: string,
+    triggerRef?: string,
+    ingredientMeta?: { name: string; oldPriceCents: number | null; newPriceCents: number | null },
+  ) {
     const recipes = await prisma.recipe.findMany({
       where: {
         workspaceId,
         deletedAt: null,
         ingredients: { some: { ingredientId } },
       },
-      select: { id: true },
+      select: { id: true, name: true, cachedCostMicrocents: true },
     });
-    log.info({ workspaceId, ingredientId, recipeCount: recipes.length }, "bulk recost triggered");
+    log.info(
+      { workspaceId, ingredientId, recipeCount: recipes.length, triggerRef },
+      "[recipe-recost.worker] bulk recost triggered",
+    );
 
     let ok = 0, errors = 0;
+    const affected: Array<{ recipeId: string; recipeName: string; oldCostCents: number | null; newCostCents: number | null }> = [];
+
     for (const r of recipes) {
       try {
-        await this.recost(
+        const breakdown = await this.recost(
           { workspaceId, userId: null as any },
           r.id,
           "ingredient_change",
           triggerRef,
         );
+        const newCostCents = breakdown.staleness === "FRESH"
+          ? Number(breakdown.totalMicrocents) / 1000
+          : null;
+        affected.push({
+          recipeId: r.id,
+          recipeName: r.name,
+          oldCostCents: r.cachedCostMicrocents != null ? Number(r.cachedCostMicrocents) / 1000 : null,
+          newCostCents,
+        });
         ok++;
       } catch (err: any) {
         errors++;
-        log.error({ recipeId: r.id, err: err.message }, "recost failed");
+        log.error({ recipeId: r.id, err: err.message }, "[recipe-recost.worker] recost failed");
       }
     }
-    return { recosted: ok, errors, total: recipes.length };
+
+    // Audit log — one entry per ingredient change summarising affected recipes
+    if (ok > 0) {
+      await prisma.auditLog.create({
+        data: {
+          workspaceId,
+          actorId: null,
+          action: "recipe.bulk_recosted",
+          entityType: "Ingredient",
+          entityId: ingredientId,
+          metadata: { triggerRef: triggerRef ?? null, recipesAffected: ok, errors, affected },
+        },
+      }).catch((err: any) => log.warn({ err: err.message }, "audit log failed"));
+    }
+
+    return {
+      recosted: ok,
+      errors,
+      total: recipes.length,
+      affected,
+      ingredientMeta: ingredientMeta ?? null,
+    };
   }
 
   // -----------------------------------------------------------------
   // Helpers
   // -----------------------------------------------------------------
 
-  private toListDTO = (r: any) => ({
-    id: r.id,
-    name: r.name,
-    category: r.category,
-    status: r.status,
-    portionsYielded: r.portionsYielded,
-    salePriceCents: r.salePriceCents,
-    cachedCostCents: r.cachedCostMicrocents != null
-      ? Number(r.cachedCostMicrocents) / 1000
-      : null,
-    cachedMarginPct: r.cachedMarginPct != null ? Number(r.cachedMarginPct) : null,
-    costStaleness: r.costStaleness,
-    ingredientCount: r._count?.ingredients ?? 0,
-    photoUrl: r.photoUrl,
-    updatedAt: r.updatedAt,
-  });
+  private toListDTO = (r: any) => {
+    // Compute live cost from included ingredient relations
+    const live = computeLiveRecipeCost(r);
+    return {
+      id: r.id,
+      name: r.name,
+      category: r.category,
+      status: r.status,
+      portionsYielded: r.portionsYielded,
+      salePriceCents: r.salePriceCents,
+      // Live cost — always reflects current ingredient prices (source of truth)
+      liveCostCents: live.totalCostCents,
+      livePerPortionCostCents: live.perPortionCostCents,
+      liveFoodCostPct: live.foodCostPct,
+      liveMarginPct: live.marginPct,
+      liveStaleness: live.staleness,
+      // Cached cost — backup value, may lag by up to the recost debounce window
+      cachedCostCents: r.cachedCostMicrocents != null ? Number(r.cachedCostMicrocents) / 1000 : null,
+      cachedMarginPct: r.cachedMarginPct != null ? Number(r.cachedMarginPct) : null,
+      cachedCostUpdatedAt: r.cachedCostUpdatedAt,
+      costStaleness: r.costStaleness,
+      ingredientCount: r._count?.ingredients ?? 0,
+      autoReprice: r.autoReprice,
+      photoUrl: r.photoUrl,
+      updatedAt: r.updatedAt,
+    };
+  };
 }

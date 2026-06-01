@@ -97,6 +97,55 @@ export class AnalyticsService {
     });
   }
 
+  // ---------------------------------------------------------------
+  // High food-cost recipes (foodCostPct > threshold)
+  // foodCostPct = portionCost / salePriceCents * 100
+  //             = 100 - cachedMarginPct  (given how margin is computed)
+  // ---------------------------------------------------------------
+
+  async highCostRecipes(ctx: TenantContext, thresholdPct = 35, limit = 50): Promise<any> {
+    const recipes = await prisma.recipe.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        deletedAt: null,
+        cachedCostMicrocents: { not: null },
+        salePriceCents: { not: null, gt: 0 },
+        portionsYielded: { not: null, gt: 0 },
+      },
+      select: {
+        id: true, name: true, category: true, status: true,
+        cachedCostMicrocents: true, salePriceCents: true, portionsYielded: true,
+        cachedMarginPct: true, costStaleness: true,
+      },
+      orderBy: { cachedMarginPct: "asc" },
+      take: limit * 3, // fetch extra so we can filter by foodCostPct in JS
+    });
+
+    const results = recipes
+      .map((r) => {
+        const cachedCostCents = Number(r.cachedCostMicrocents!) / 1000;
+        const portionCostCents = cachedCostCents / r.portionsYielded!;
+        const foodCostPct = (portionCostCents / r.salePriceCents!) * 100;
+        return {
+          id: r.id,
+          name: r.name,
+          category: r.category,
+          status: r.status,
+          cachedCostCents,
+          salePriceCents: r.salePriceCents,
+          portionsYielded: r.portionsYielded,
+          foodCostPct: Math.round(foodCostPct * 10) / 10,
+          cachedMarginPct: r.cachedMarginPct != null ? Number(r.cachedMarginPct) : null,
+          costStaleness: r.costStaleness,
+        };
+      })
+      .filter((r) => r.foodCostPct > thresholdPct)
+      .sort((a, b) => b.foodCostPct - a.foodCostPct)
+      .slice(0, limit);
+
+    return results;
+  }
+
   async lowMarginRecipes(ctx: TenantContext, thresholdPct = 30, limit = 10): Promise<any> {
     return prisma.recipe.findMany({
       where: {

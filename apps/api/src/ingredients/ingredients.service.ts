@@ -212,6 +212,15 @@ export class IngredientsService implements OnApplicationBootstrap {
       metadata: { changes: Object.keys(input) },
     });
 
+    // If the PATCH body includes a price, route it through updatePrice() so the
+    // ingredient.cost_changed event fires and recipes get recosted.
+    if (input.initialCostPerCanonicalCents != null) {
+      return this.updatePrice(ctx, id, {
+        pricePerCanonicalCents: input.initialCostPerCanonicalCents,
+        source: "MANUAL",
+      });
+    }
+
     return this.toDTO(updated);
   }
 

@@ -308,6 +308,8 @@ model Recipe {
   costComputeError               String?             @map("cost_compute_error")
   cachedMarginPct                Decimal?            @map("cached_margin_pct") @db.Decimal(5, 2)
   cachedMarginCents              Int?                @map("cached_margin_cents")
+  targetMarginPct                Decimal?            @map("target_margin_pct") @db.Decimal(5, 2)
+  autoReprice                    Boolean             @default(true) @map("auto_reprice")
   photoUrl                       String?             @map("photo_url")
   prepPhotoUrl                   String?             @map("prep_photo_url")
   finalPhotoUrl                  String?             @map("final_photo_url")
@@ -435,6 +437,12 @@ model Event {
   /// Margin = (revenue - food - labor) / revenue * 100, cached
   computedMarginPct      Decimal?               @map("computed_margin_pct") @db.Decimal(5, 2)
   notes                  String?
+  /// When costs were locked in (set on PAID or COMPLETED transition)
+  frozenAt               DateTime?              @map("frozen_at")
+  /// Snapshot: { recipeId: costInCentsAtFreeze } — frozen events use this, not live prices
+  frozenRecipeCostsCents Json?                  @map("frozen_recipe_costs_cents")
+  /// Snapshot: { ingredientId: priceInCentsAtFreeze }
+  frozenIngredientPricesCents Json?             @map("frozen_ingredient_prices_cents")
   createdAt              DateTime               @default(now()) @map("created_at")
   updatedAt              DateTime               @updatedAt @map("updated_at")
   createdById            String?                @map("created_by_id")

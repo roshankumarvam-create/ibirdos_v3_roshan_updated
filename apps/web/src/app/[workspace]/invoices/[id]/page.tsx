@@ -183,7 +183,7 @@ export default function InvoiceReviewPage({
           {isEditable && (
             <Button
               loading={confirming}
-              disabled={confirming || invoice.lines.length === 0}
+              disabled={confirming || eligibleLines.length === 0}
               onClick={async () => {
                 setConfirming(true);
                 setError(null);

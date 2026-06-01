@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label, Textarea, Select } from "@ibirdos/ui";
+import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label, Textarea, Select, Switch } from "@ibirdos/ui";
 import { toCanonical } from "@ibirdos/types";
 import { api } from "@/lib/api";
 import type { Route } from "next";
@@ -72,7 +72,9 @@ function computeLineCostCents(line: IngredientLine): number | null {
       dimension: line.dimension,
       densityGPerMl: line.densityGPerMl,
     });
-    return canonical * line.pricePerCanonicalCents * (pct / 100);
+    // Divide by yield fraction: need MORE raw to produce the recipe quantity
+    const effectiveCanonical = pct > 0 ? canonical * (100 / pct) : canonical;
+    return effectiveCanonical * line.pricePerCanonicalCents;
   } catch {
     return null;
   }
@@ -112,6 +114,8 @@ export default function NewRecipePage() {
   const [procedure, setProcedure] = useState("");
   const [paperCostDollar, setPaperCostDollar] = useState("");
   const [goalFoodCostPct, setGoalFoodCostPct] = useState("");
+  const [targetMarginPct, setTargetMarginPct] = useState("35");
+  const [autoReprice, setAutoReprice] = useState(true);
   const [actualSellPriceDollar, setActualSellPriceDollar] = useState("");
   const [prepPhotoUrl, setPrepPhotoUrl] = useState("");
   const [finalPhotoUrl, setFinalPhotoUrl] = useState("");
@@ -146,8 +150,9 @@ export default function NewRecipePage() {
   // --- Derived costs ---
   const portions = parseInt(totalPortions) || null;
   const paperCostCents = parseDollar(paperCostDollar);
-  const actualSellPriceCents = parseDollar(actualSellPriceDollar);
+  const manualSellPriceCents = parseDollar(actualSellPriceDollar);
   const goalPct = parseFloat(goalFoodCostPct) || null;
+  const targetMarginNum = parseFloat(targetMarginPct) || null;
 
   const totalIngredientCostCents = lines.reduce((sum, l) => {
     const c = computeLineCostCents(l);
@@ -157,10 +162,16 @@ export default function NewRecipePage() {
   const paperPerRecipeCents = portions && paperCostCents ? paperCostCents * portions : (paperCostCents ?? 0);
   const totalRecipeCostCents = totalIngredientCostCents + paperPerRecipeCents;
   const portionCostCents = portions ? totalRecipeCostCents / portions : null;
-  const foodCostPct = portionCostCents && actualSellPriceCents && actualSellPriceCents > 0
-    ? (portionCostCents / actualSellPriceCents) * 100 : null;
-  const marginCents = portionCostCents && actualSellPriceCents
-    ? actualSellPriceCents - portionCostCents : null;
+
+  const autoSellPriceCents = autoReprice && targetMarginNum && targetMarginNum < 100 && portionCostCents
+    ? portionCostCents / (1 - targetMarginNum / 100)
+    : null;
+  const effectiveSellPriceCents = autoReprice ? autoSellPriceCents : manualSellPriceCents;
+
+  const foodCostPct = portionCostCents && effectiveSellPriceCents && effectiveSellPriceCents > 0
+    ? (portionCostCents / effectiveSellPriceCents) * 100 : null;
+  const marginCents = portionCostCents && effectiveSellPriceCents
+    ? effectiveSellPriceCents - portionCostCents : null;
   const minSellPrice = goalPct && portionCostCents && goalPct > 0
     ? portionCostCents / (goalPct / 100) : null;
 
@@ -310,8 +321,10 @@ export default function NewRecipePage() {
         cookTimeMinutes: cookTimeMinutes ? parseInt(cookTimeMinutes) : undefined,
         procedure: procedure.trim() || undefined,
         goalFoodCostPct: goalPct ?? undefined,
+        targetMarginPct: targetMarginNum ?? undefined,
         paperCostCents: paperCostCents ?? undefined,
-        actualSellPriceCents: actualSellPriceCents ?? undefined,
+        autoReprice,
+        actualSellPriceCents: !autoReprice ? (manualSellPriceCents ?? undefined) : undefined,
         prepPhotoUrl: prepPhotoUrl || undefined,
         finalPhotoUrl: finalPhotoUrl || undefined,
         videoUrl: videoUrl || undefined,
@@ -540,7 +553,7 @@ export default function NewRecipePage() {
                       <th className="text-left px-3 py-2 font-medium w-24">SKU / Code</th>
                       <th className="text-left px-3 py-2 font-medium w-20">Qty</th>
                       <th className="text-left px-3 py-2 font-medium w-24">Unit</th>
-                      <th className="text-left px-3 py-2 font-medium w-20">% Utilized</th>
+                      <th className="text-left px-3 py-2 font-medium w-20" title="% of raw ingredient that becomes usable after prep (trim, bones, cooking loss). 70% = you need 1.43× raw. Default 100.">% Utilized</th>
                       <th className="text-right px-3 py-2 font-medium w-24">Line cost</th>
                       <th className="w-8" />
                     </tr>
@@ -828,31 +841,76 @@ export default function NewRecipePage() {
                       </p>
                     )}
                   </div>
-
                   <div>
-                    <Label htmlFor="actualSellPrice">Actual sell price ($)</Label>
-                    <Input
-                      id="actualSellPrice"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={actualSellPriceDollar}
-                      onChange={e => setActualSellPriceDollar(e.target.value)}
-                      placeholder="0.00"
-                    />
+                    <Label htmlFor="actualSellPrice">Sell price ($)</Label>
+                    {autoReprice ? (
+                      <div className="mt-1 rounded border border-bg-border bg-bg-inset px-3 py-2 text-sm text-text-secondary">
+                        {autoSellPriceCents != null
+                          ? `Auto: ${fmtCents(autoSellPriceCents)}${targetMarginNum ? ` (${targetMarginNum}% margin)` : ""}`
+                          : "Set portions + target margin to auto-calculate"}
+                      </div>
+                    ) : (
+                      <Input
+                        id="actualSellPrice"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={actualSellPriceDollar}
+                        onChange={e => setActualSellPriceDollar(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    )}
                   </div>
-
                   <Row
-                    label="Actual product cost %"
+                    label="Actual food cost %"
                     value={foodCostPct != null ? `${foodCostPct.toFixed(1)}%` : "—"}
+                    valueClass={foodCostPct != null
+                      ? (foodCostPct > 35 ? "text-danger tabular-nums font-medium" : "text-success tabular-nums font-medium")
+                      : undefined}
                   />
                   <Row
-                    label="Margin"
+                    label="Margin per portion"
                     value={marginCents != null ? fmtCents(marginCents) : "—"}
-                    valueClass={marginCents != null ? (marginCents >= 0 ? "text-success" : "text-danger") : undefined}
+                    valueClass={marginCents != null ? (marginCents >= 0 ? "text-success tabular-nums font-medium" : "text-danger tabular-nums font-medium") : undefined}
                   />
                 </div>
 
+              </CardBody>
+            </Card>
+
+            {/* Pricing strategy — standalone card */}
+            <Card>
+              <CardHeader><CardTitle>Pricing strategy</CardTitle></CardHeader>
+              <CardBody className="space-y-4">
+                <div className="flex items-start justify-between gap-4">
+                  <Label htmlFor="autoReprice" className="cursor-pointer flex-1">
+                    <div className="font-medium text-sm">Auto-reprice when costs change</div>
+                    <div className="text-xs text-text-secondary mt-1 leading-relaxed">
+                      {autoReprice
+                        ? "Sell price will auto-update to maintain target margin when ingredient costs change."
+                        : "Sell price is locked. Margin will fluctuate as costs change."}
+                    </div>
+                  </Label>
+                  <Switch
+                    id="autoReprice"
+                    checked={autoReprice}
+                    onCheckedChange={setAutoReprice}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="targetMarginPct">Target margin %</Label>
+                  <Input
+                    id="targetMarginPct"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={targetMarginPct}
+                    onChange={e => setTargetMarginPct(e.target.value)}
+                    placeholder="e.g. 65"
+                    disabled={!autoReprice}
+                  />
+                </div>
               </CardBody>
             </Card>
 

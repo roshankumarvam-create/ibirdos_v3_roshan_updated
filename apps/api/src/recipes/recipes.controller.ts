@@ -39,7 +39,9 @@ const CreateRecipeSchema = z.object({
   salePriceCents:       z.number().int().nonnegative().optional(),
   actualSellPriceCents: z.number().int().nonnegative().optional(),
   goalFoodCostPct:      z.number().min(0).max(100).optional(),
+  targetMarginPct:      z.number().min(0).max(100).optional(),
   paperCostCents:       z.number().int().nonnegative().optional(),
+  autoReprice:          z.boolean().optional(),
   photoUrl:             z.string().url().optional(),
   prepPhotoUrl:         z.string().url().optional(),
   finalPhotoUrl:        z.string().url().optional(),
@@ -56,6 +58,11 @@ const UpdateRecipeSchema = CreateRecipeSchema.partial().omit({ ingredients: true
   prepPhotoUrl:  z.union([z.string().url(), z.null()]).optional(),
   finalPhotoUrl: z.union([z.string().url(), z.null()]).optional(),
   videoUrl:      z.union([z.string().url(), z.null()]).optional(),
+  authorName:    z.union([z.string().max(120), z.null()]).optional(),
+  category:      z.union([z.string().max(80), z.null()]).optional(),
+  notes:         z.union([z.string().max(2000), z.null()]).optional(),
+  procedure:     z.union([z.string().max(20000), z.null()]).optional(),
+  instructionsMd: z.union([z.string().max(20000), z.null()]).optional(),
 });
 const ListQuerySchema = z.object({
   search: z.string().optional(), category: z.string().optional(),

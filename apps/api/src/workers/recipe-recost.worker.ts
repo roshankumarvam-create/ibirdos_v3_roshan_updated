@@ -32,27 +32,47 @@ const queue = new Queue(RECOST_QUEUE, {
   },
 });
 
+// Keep the ingredient metadata so the job handler can pass it to the
+// recost function for richer notification messages.
+const ingredientMetaCache = new Map<string, { name: string; oldPriceCents: number | null; newPriceCents: number | null }>();
+
 // Pub/sub bridge: turn events into queued jobs
 subscriber.subscribe("ingredient.cost_changed", "invoice.confirmed", (err) => {
   if (err) log.error({ err }, "subscribe failed");
+  else log.info("subscribed to ingredient.cost_changed + invoice.confirmed");
 });
 
 subscriber.on("message", async (channel, raw) => {
   try {
     const msg = JSON.parse(raw);
     if (channel === "ingredient.cost_changed") {
-      // Debounce per ingredient with deterministic job id
       const jobId = `ing:${msg.workspaceId}:${msg.ingredientId}`;
-      await queue.add("recost-by-ingredient",
-        { workspaceId: msg.workspaceId, ingredientId: msg.ingredientId, triggerRef: msg.invoiceId ?? null },
-        { jobId, delay: 1500 }, // 1.5s coalesce window
-      ).catch(() => {/* already queued */});
+      log.info(
+        { channel, ingredientId: msg.ingredientId, workspaceId: msg.workspaceId, jobId },
+        "[recipe-recost.worker] enqueueing recost-by-ingredient",
+      );
+      // Stash price change metadata so the job can build a notification message
+      const cacheKey = `${msg.workspaceId}:${msg.ingredientId}`;
+      ingredientMetaCache.set(cacheKey, {
+        name: msg.ingredientName ?? "ingredient",
+        oldPriceCents: msg.fromMicrocents != null ? Number(msg.fromMicrocents) / 1000 : null,
+        newPriceCents: msg.toMicrocents != null ? Number(msg.toMicrocents) / 1000 : null,
+      });
+      const added = await queue.add("recost-by-ingredient",
+        { workspaceId: msg.workspaceId, ingredientId: msg.ingredientId, triggerRef: msg.sourceRef ?? null },
+        { jobId, delay: 1500 },
+      ).catch((err: any) => {
+        log.warn({ jobId, err: err.message }, "[recipe-recost.worker] enqueue skipped (dedup or error)");
+        return null;
+      });
+      if (added) log.info({ jobId, jobBullId: added.id }, "[recipe-recost.worker] job added");
     } else if (channel === "invoice.confirmed") {
       const jobId = `inv:${msg.invoiceId}`;
+      log.info({ channel, invoiceId: msg.invoiceId, jobId }, "[recipe-recost.worker] enqueueing recost-by-invoice");
       await queue.add("recost-by-invoice",
         { workspaceId: msg.workspaceId, invoiceId: msg.invoiceId },
         { jobId, delay: 1500 },
-      ).catch(() => {/* already queued */});
+      ).catch((err: any) => log.warn({ jobId, err: err.message }, "[recipe-recost.worker] enqueue skipped"));
     }
   } catch (err: any) {
     log.error({ channel, err: err.message }, "message handler failed");
@@ -63,28 +83,76 @@ subscriber.on("message", async (channel, raw) => {
 // the DI container. Instantiate with a minimal redis dep.
 const svc = new RecipesService(connection as any);
 
+async function publishRecostNotification(workspaceId: string, result: Awaited<ReturnType<typeof svc.recostAllUsingIngredient>>) {
+  const changed = result.affected.filter(
+    (r) => r.oldCostCents != null && r.newCostCents != null && Math.abs(r.newCostCents - r.oldCostCents) > 0.01,
+  );
+  if (changed.length === 0) return;
+
+  const meta = result.ingredientMeta;
+  const ingName = meta?.name ?? "an ingredient";
+  const oldFmt = meta?.oldPriceCents != null ? `$${(meta.oldPriceCents / 100).toFixed(2)}` : null;
+  const newFmt = meta?.newPriceCents != null ? `$${(meta.newPriceCents / 100).toFixed(2)}` : null;
+  const priceChange = oldFmt && newFmt ? ` from ${oldFmt} to ${newFmt}` : "";
+
+  const title = `${changed.length} recipe${changed.length === 1 ? "" : "s"} automatically recalculated`;
+  const body = `${ingName} cost changed${priceChange}. ${changed.length} recipe${changed.length === 1 ? "" : "s"} affected: ${changed.map((r) => r.recipeName).slice(0, 5).join(", ")}${changed.length > 5 ? ` and ${changed.length - 5} more` : ""}.`;
+
+  await prisma.notification.create({
+    data: {
+      workspaceId,
+      userId: null, // workspace-wide
+      kind: "GENERIC",
+      title,
+      body,
+      linkPath: `/recipes`,
+      entityRefs: {},
+    },
+  }).catch((err: any) => log.warn({ err: err.message }, "notification create failed"));
+
+  // Push real-time via Redis pub/sub
+  await connection.publish(
+    `workspace:${workspaceId}:notifications`,
+    JSON.stringify({ workspaceId, kind: "GENERIC", title, body, linkPath: "/recipes" }),
+  ).catch((err: any) => log.warn({ err: err.message }, "notification publish failed"));
+
+  log.info({ workspaceId, changed: changed.length }, "[recipe-recost.worker] recost notification sent");
+}
+
 const worker = new Worker(RECOST_QUEUE, async (job) => {
   if (job.name === "recost-by-ingredient") {
     const { workspaceId, ingredientId, triggerRef } = job.data as any;
-    const result = await svc.recostAllUsingIngredient(workspaceId, ingredientId, triggerRef);
-    log.info({ workspaceId, ingredientId, ...result }, "recost-by-ingredient done");
+    log.info({ jobId: job.id, ingredientId, workspaceId }, "[recipe-recost.worker] picked up recost-by-ingredient");
+    const cacheKey = `${workspaceId}:${ingredientId}`;
+    const ingredientMeta = ingredientMetaCache.get(cacheKey) ?? undefined;
+    ingredientMetaCache.delete(cacheKey); // clean up after use
+    const result = await svc.recostAllUsingIngredient(workspaceId, ingredientId, triggerRef, ingredientMeta);
+    log.info({ jobId: job.id, ingredientId, recosted: result.recosted, errors: result.errors }, "[recipe-recost.worker] recost-by-ingredient done");
+    await publishRecostNotification(workspaceId, result);
     return result;
   }
   if (job.name === "recost-by-invoice") {
     const { workspaceId, invoiceId } = job.data as any;
-    // Find every ingredient touched by this invoice's lines, recost each
+    log.info({ jobId: job.id, invoiceId }, "[recipe-recost.worker] picked up recost-by-invoice");
     const lines = await prisma.invoiceLine.findMany({
       where: { invoiceId, workspaceId, committedIngredientId: { not: null }, category: "FOOD_INGREDIENT", excluded: false },
       select: { committedIngredientId: true },
     });
     const ids = [...new Set<string>(lines.map((l) => l.committedIngredientId).filter((x): x is string => Boolean(x)))];
-    for (const id of ids) await svc.recostAllUsingIngredient(workspaceId, id, invoiceId);
-    return { recipesTouched: ids.length };
+    log.info({ invoiceId, ingredientCount: ids.length }, "[recipe-recost.worker] recost-by-invoice ingredients");
+    let totalRecosted = 0;
+    for (const id of ids) {
+      const result = await svc.recostAllUsingIngredient(workspaceId, id, invoiceId);
+      totalRecosted += result.recosted;
+      await publishRecostNotification(workspaceId, result);
+    }
+    return { recipesTouched: totalRecosted };
   }
 }, { connection, concurrency: 2 });
 
-worker.on("ready", () => log.info("recost worker ready"));
-worker.on("failed", (j, e) => log.error({ jobId: j?.id, err: e.message }, "recost job failed"));
+worker.on("ready", () => log.info("[recipe-recost.worker] ready"));
+worker.on("completed", (j, r) => log.info({ jobId: j.id, jobName: j.name, result: r }, "[recipe-recost.worker] job completed"));
+worker.on("failed", (j, e) => log.error({ jobId: j?.id, jobName: j?.name, err: e.message }, "[recipe-recost.worker] job failed"));
 
 process.on("SIGTERM", async () => {
   await worker.close(); await queue.close();

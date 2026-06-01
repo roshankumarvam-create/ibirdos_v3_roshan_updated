@@ -20,6 +20,13 @@ export class AnalyticsController {
     return this.svc.topRecipesByMargin(ctx, limit ? Number(limit) : 10).then((items) => ok({ items }));
   }
 
+  @Get("recipes/high-cost") @RequirePermission("analytics.read")
+  highCost(@CurrentCtx() ctx: TenantContext, @Query() q: any): Promise<any> {
+    const threshold = q.threshold ? Number(q.threshold) : 35;
+    const limit = q.limit ? Number(q.limit) : 50;
+    return this.svc.highCostRecipes(ctx, threshold, limit).then((items) => ok({ items, threshold }));
+  }
+
   @Get("recipes/low-margin") @RequirePermission("analytics.read")
   lowMargin(@CurrentCtx() ctx: TenantContext, @Query() q: any): Promise<any> {
     return this.svc.lowMarginRecipes(ctx, q.threshold ? Number(q.threshold) : 30, q.limit ? Number(q.limit) : 10).then((items) => ok({ items }));

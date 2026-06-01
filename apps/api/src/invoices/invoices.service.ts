@@ -16,10 +16,12 @@ import { REDIS_CLIENT } from "../common/constants/tokens";
 const log = moduleLogger("InvoicesService");
 
 export const INVOICE_EXTRACTION_QUEUE = "invoice-extraction";
+export const RECIPE_RECOST_QUEUE = "recipe-recost";
 
 @Injectable()
 export class InvoicesService {
   private readonly queue: Queue;
+  private readonly recostQueue: Queue;
 
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -33,6 +35,15 @@ export class InvoicesService {
         attempts: 3,
         backoff: { type: "exponential", delay: 5000 },
         removeOnComplete: 100,
+        removeOnFail: 500,
+      },
+    });
+    this.recostQueue = new Queue(RECIPE_RECOST_QUEUE, {
+      connection: this.redis.duplicate(),
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 2000 },
+        removeOnComplete: 200,
         removeOnFail: 500,
       },
     });
@@ -187,22 +198,31 @@ export class InvoicesService {
     });
     if (!invoice) throw new NotFoundException({ code: "not_found", message: "Invoice not found" });
     if (invoice.status === "CONFIRMED") {
-      throw new BadRequestException({ code: "conflict", message: "Invoice already confirmed" });
+      throw new BadRequestException({ code: "conflict", message: "Invoice is already confirmed. Cannot confirm twice." });
     }
-    if (invoice.status !== "PENDING_REVIEW") {
+    const CONFIRMABLE = new Set(["UPLOADING", "EXTRACTING", "EXTRACTION_FAILED", "PENDING_REVIEW", "MANUAL"]);
+    if (!CONFIRMABLE.has(invoice.status)) {
       throw new BadRequestException({
         code: "validation_failed",
-        message: `Cannot confirm invoice in status ${invoice.status}`,
+        message: invoice.status === "ARCHIVED" ? "Invoice was archived and cannot be confirmed." : `Cannot confirm invoice in status ${invoice.status}`,
       });
     }
 
     // All non-excluded FOOD_INGREDIENT lines -- matched OR unmatched (auto-create for unmatched)
     const processable = invoice.lines.filter((l) => !l.excluded && l.category === "FOOD_INGREDIENT");
+    if (processable.length === 0) {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: "Cannot confirm an invoice with no lines. Add at least one line.",
+      });
+    }
 
     let matched = 0;
     let created = 0;
     let priceUpdates = 0;
     let inventoryTransactionsCreated = 0;
+    // Track which ingredients had price changes so we can enqueue recost jobs
+    const updatedIngredientIds = new Set<string>();
 
     for (const line of processable) {
       let ingredientId = line.committedIngredientId;
@@ -236,6 +256,12 @@ export class InvoicesService {
             continue;
           }
         }
+
+        // Write back committedIngredientId so the recost-by-invoice path can also find it
+        await prisma.invoiceLine.update({
+          where: { id: line.id },
+          data: { committedIngredientId: ingredientId },
+        }).catch((err: any) => log.warn({ lineId: line.id, err: err.message }, "committedIngredientId writeback failed"));
       } else {
         matched++;
       }
@@ -269,12 +295,18 @@ export class InvoicesService {
         ? Number(line.extendedPriceCents) / canonicalQty
         : Number(line.extendedPriceCents) / (Number(line.quantity) || 1);
 
+      log.info(
+        { invoiceId, ingredientId, pricePerCanonicalCents: pricePerCanonicalCents.toFixed(6) },
+        "[invoices.service] updating ingredient price",
+      );
+
       await this.ingredients.updatePrice(ctx, ingredientId, {
         pricePerCanonicalCents,
         source: "INVOICE",
         sourceRef: invoice.id,
         vendorId: invoice.vendorId ?? undefined,
       });
+      updatedIngredientIds.add(ingredientId);
       priceUpdates++;
 
       try {
@@ -291,6 +323,20 @@ export class InvoicesService {
       } catch (err: any) {
         log.warn({ lineId: line.id, err: err.message }, "inventory receive skipped");
       }
+    }
+
+    // Directly enqueue recipe-recost jobs for every ingredient whose price changed.
+    // Belt-and-suspenders: the worker also enqueues via Redis pub/sub, but that path
+    // can fail silently (job deduplication collisions are caught by .catch(()=>{}) in
+    // the subscriber). Enqueueing here from the API ensures the recost always fires.
+    for (const ingredientId of updatedIngredientIds) {
+      const jobId = `ing:${ctx.workspaceId}:${ingredientId}`;
+      await this.recostQueue.add(
+        "recost-by-ingredient",
+        { workspaceId: ctx.workspaceId, ingredientId, triggerRef: invoiceId },
+        { jobId, delay: 500 }, // short delay so all price writes finish first
+      ).catch((err: any) => log.warn({ ingredientId, err: err.message }, "[invoices.service] recost enqueue failed"));
+      log.info({ ingredientId, jobId }, "[invoices.service] enqueueing recost for ingredient");
     }
 
     const confirmed = await prisma.invoice.update({
