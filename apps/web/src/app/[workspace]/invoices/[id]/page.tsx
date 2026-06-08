@@ -31,6 +31,9 @@ interface InvoiceLineDTO {
   proposedIngredientId: string | null;
   proposedConfidence: number | string | null;
   committedIngredientId: string | null;
+  vendorItemCode: string | null;
+  needsReview: boolean;
+  lineStatus: "in_stock" | "out_of_stock" | null;
   packSize: number | string | null;
   packUnit: string | null;
   excluded: boolean;
@@ -71,6 +74,7 @@ export default function InvoiceReviewPage({
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [reconciliationDismissed, setReconciliationDismissed] = useState(false);
   const [ingredients, setIngredients] = useState<IngredientDTO[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
 
@@ -109,9 +113,7 @@ export default function InvoiceReviewPage({
   }
 
   async function handleDeleteLine(lineId: string) {
-    console.log("[invoice] delete line:", lineId);
     const res = await api.delete(`/invoices/${id}/lines/${lineId}`);
-    console.log("[invoice] delete result:", res);
     if (res.error) {
       setError(res.error.message);
     } else {
@@ -150,6 +152,13 @@ export default function InvoiceReviewPage({
   const unmatched = invoice.lines.filter(
     (l) => !l.excluded && l.category === "FOOD_INGREDIENT" && !l.committedIngredientId,
   );
+
+  // Client-side reconciliation: sum non-excluded lines vs invoice total
+  const lineSum = invoice.lines
+    .filter((l) => !l.excluded)
+    .reduce((s, l) => s + Number(l.extendedPriceCents), 0);
+  const totalCents = invoice.totalCents ?? 0;
+  const reconciles = totalCents === 0 || Math.abs(lineSum - totalCents) <= 1;
 
   return (
     <div className="space-y-6 max-w-[1200px]">
@@ -208,6 +217,28 @@ export default function InvoiceReviewPage({
           )}
         </div>
       </div>
+
+      {/* Part 7 — Reconciliation banner */}
+      {!reconciles && !reconciliationDismissed && totalCents > 0 && (
+        <Card className="border-warning/40 bg-warning/5">
+          <CardBody>
+            <div className="flex items-center justify-between gap-4">
+              <div className="text-sm">
+                <span className="text-warning font-medium">⚠ Lines don't match invoice total</span>
+                <span className="text-text-secondary">
+                  {" "}(${(lineSum / 100).toFixed(2)} vs ${(totalCents / 100).toFixed(2)}) — review highlighted lines.
+                </span>
+              </div>
+              <button
+                onClick={() => setReconciliationDismissed(true)}
+                className="text-[10px] text-text-tertiary hover:text-text-secondary uppercase tracking-wider shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {/* Extraction failed banner */}
       {invoice.status === "EXTRACTION_FAILED" && (
@@ -270,10 +301,11 @@ export default function InvoiceReviewPage({
           <thead className="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-bg-border">
             <tr>
               <th className="text-left px-4 py-2 font-medium w-8">#</th>
-              <th className="text-left px-4 py-2 font-medium">Description</th>
+              <th className="text-left px-4 py-2 font-medium">Description · SKU · Size</th>
               <th className="text-right px-4 py-2 font-medium w-16">Qty</th>
               <th className="text-left px-4 py-2 font-medium w-14">Unit</th>
-              <th className="text-right px-4 py-2 font-medium w-24">Price</th>
+              <th className="text-right px-4 py-2 font-medium w-24">Unit Price</th>
+              <th className="text-right px-4 py-2 font-medium w-24">Ext. Price</th>
               <th className="text-left px-4 py-2 font-medium w-28">Category</th>
               <th className="text-left px-4 py-2 font-medium">Ingredient</th>
               <th className="text-right px-4 py-2 font-medium w-28"></th>
@@ -327,12 +359,6 @@ export default function InvoiceReviewPage({
           </div>
         )}
       </Card>
-
-      {invoice.aiCostCents != null && (
-        <div className="text-xs font-mono text-text-tertiary text-right">
-          AI extraction cost: ${(invoice.aiCostCents / 100).toFixed(4)}
-        </div>
-      )}
     </div>
   );
 }
@@ -757,7 +783,7 @@ function AddLineRow({
   );
 }
 
-// ─── Existing line row ────────────────────────────────────────────────────────
+// ─── Existing line row (Part 6 — editable fields) ────────────────────────────
 
 function LineRow({
   line, invoiceId, disabled, ingredients, onChanged, onDelete, onError,
@@ -771,15 +797,20 @@ function LineRow({
   onError?: (msg: string) => void;
 }) {
   const [patchError, setPatchError] = useState<string | null>(null);
+  const [desc, setDesc] = useState(line.descriptionRaw);
+  const [sku, setSku] = useState(line.vendorItemCode ?? "");
+  const [packUnit, setPackUnit] = useState(line.packUnit ?? "");
+  const [unit, setUnit] = useState(line.unit);
+  const [qty, setQty] = useState(String(line.quantity));
+  const [unitPrice, setUnitPrice] = useState((Number(line.unitPriceCents) / 100).toFixed(4));
+  const [extPrice, setExtPrice] = useState((Number(line.extendedPriceCents) / 100).toFixed(2));
 
   async function patch(updates: Partial<InvoiceLineDTO>) {
-    console.log("[invoice] patch line:", line.id, updates);
     setPatchError(null);
     const res = await api.patch<InvoiceLineDTO>(
       `/invoices/${invoiceId}/lines/${line.id}`,
       updates,
     );
-    console.log("[invoice] patch result:", res);
     if (res.error) {
       setPatchError(res.error.message);
       onError?.(res.error.message);
@@ -788,44 +819,207 @@ function LineRow({
     }
   }
 
+  function computeExt(qtyVal: string, upVal: string): number {
+    const q = parseFloat(qtyVal);
+    const u = parseFloat(upVal);
+    if (!isNaN(q) && !isNaN(u) && q >= 0 && u >= 0) return Math.round(q * u * 100);
+    return Number(line.extendedPriceCents);
+  }
+
+  function handleQtyChange(val: string) {
+    setQty(val);
+    const ext = computeExt(val, unitPrice);
+    setExtPrice((ext / 100).toFixed(2));
+  }
+
+  function handleUnitPriceChange(val: string) {
+    setUnitPrice(val);
+    const ext = computeExt(qty, val);
+    setExtPrice((ext / 100).toFixed(2));
+  }
+
   const isExcluded = line.excluded;
+  const isOutOfStock = line.lineStatus === "out_of_stock";
+  const isMiscCharge = line.category === "DELIVERY" || line.category === "LABOR" || line.category === "TAX";
   const confidence = line.proposedConfidence != null ? Number(line.proposedConfidence) : null;
 
+  const rowCls = [
+    isExcluded ? "opacity-40" : "",
+    isOutOfStock ? "opacity-50" : "",
+    line.needsReview && !isExcluded && !isOutOfStock ? "border-l-2 border-l-warning/60 bg-warning/5" : "",
+  ].filter(Boolean).join(" ");
+
+  const inputCls =
+    "w-full rounded bg-bg-inset border border-bg-border text-xs px-2 py-1 focus:outline-none focus:border-accent-500/60 text-text-primary placeholder:text-text-tertiary disabled:opacity-40";
+
   return (
-    <tr className={isExcluded ? "opacity-40" : ""}>
-      <td className="px-4 py-2 text-text-tertiary tabular-nums">{line.position}</td>
-      <td className="px-4 py-2">
-        <div className="text-text-primary">{line.descriptionRaw}</div>
+    <tr className={rowCls}>
+      <td className="px-4 py-2 text-text-tertiary tabular-nums">
+        {line.needsReview && !isExcluded && !isOutOfStock && (
+          <span title="Needs review" className="text-warning mr-1">⚠</span>
+        )}
+        {line.position}
+      </td>
+      <td className="px-4 py-2 min-w-[200px]">
+        {/* Description — editable */}
+        {disabled ? (
+          <div className="text-text-primary">{line.descriptionRaw}</div>
+        ) : (
+          <input
+            className={inputCls}
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            onBlur={() => {
+              if (desc.trim() && desc !== line.descriptionRaw) {
+                patch({ descriptionRaw: desc.trim() });
+              }
+            }}
+            placeholder="Description"
+          />
+        )}
+        {/* Out-of-stock tag */}
+        {isOutOfStock && (
+          <span className="inline-flex items-center px-1.5 py-0.5 mt-0.5 rounded text-[9px] font-medium bg-danger/10 text-danger border border-danger/20 uppercase tracking-wider">
+            Out of stock
+          </span>
+        )}
+        {/* Vendor item code — editable */}
+        {disabled ? (
+          line.vendorItemCode && (
+            <div className="text-[10px] text-text-tertiary mt-0.5 font-mono">SKU: {line.vendorItemCode}</div>
+          )
+        ) : (
+          <input
+            className={`${inputCls} mt-1 font-mono`}
+            value={sku}
+            onChange={(e) => setSku(e.target.value)}
+            onBlur={() => patch({ vendorItemCode: sku.trim() || null })}
+            placeholder="Vendor SKU"
+          />
+        )}
+        {/* Pack/size — editable */}
+        {disabled ? (
+          line.packUnit && (
+            <div className="text-[10px] text-text-tertiary mt-0.5">
+              {line.packSize ? `${line.packSize} ` : ""}{line.packUnit}
+            </div>
+          )
+        ) : (
+          <input
+            className={`${inputCls} mt-1`}
+            value={packUnit}
+            onChange={(e) => setPackUnit(e.target.value)}
+            onBlur={() => patch({ packUnit: packUnit.trim() || null } as any)}
+            placeholder="Pack/size (e.g. 4/10 LB)"
+          />
+        )}
         {patchError && <div className="text-[10px] text-danger mt-0.5">{patchError}</div>}
-        {line.packSize && (
-          <div className="text-[10px] text-text-tertiary mt-0.5">
-            pack: {line.packSize} {line.packUnit}
+      </td>
+      {/* Qty — editable, min 64px wide */}
+      <td className="px-4 py-2 text-right tabular-nums">
+        {disabled ? (
+          <span className="text-text-secondary">{line.quantity}</span>
+        ) : (
+          <input
+            className={`${inputCls} text-right min-w-[64px]`}
+            type="number" min="0" step="any"
+            value={qty}
+            onChange={(e) => handleQtyChange(e.target.value)}
+            onBlur={() => {
+              const n = parseFloat(qty);
+              if (!isNaN(n) && n >= 0) {
+                const ext = computeExt(qty, unitPrice);
+                patch({ quantity: n, extendedPriceCents: ext });
+                setExtPrice((ext / 100).toFixed(2));
+              }
+            }}
+          />
+        )}
+      </td>
+      {/* Unit — editable */}
+      <td className="px-2 py-2">
+        {disabled ? (
+          <span className="font-mono text-xs text-text-secondary uppercase">{line.unit}</span>
+        ) : (
+          <input
+            className={`${inputCls} uppercase font-mono w-14 text-center`}
+            value={unit}
+            onChange={(e) => setUnit(e.target.value.toUpperCase())}
+            onBlur={() => {
+              if (unit.trim() && unit !== line.unit) patch({ unit: unit.trim().toUpperCase() });
+            }}
+            placeholder="CS"
+          />
+        )}
+      </td>
+      {/* Unit price — editable, auto-computes ext price */}
+      <td className="px-4 py-2 text-right tabular-nums">
+        {disabled ? (
+          <span className="text-text-secondary">${(Number(line.unitPriceCents) / 100).toFixed(4).replace(/\.?0+$/, "")}</span>
+        ) : (
+          <div className="relative">
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary text-xs pointer-events-none">$</span>
+            <input
+              className={`${inputCls} pl-4 text-right w-24`}
+              type="number" min="0" step="0.0001"
+              value={unitPrice}
+              onChange={(e) => handleUnitPriceChange(e.target.value)}
+              onBlur={() => {
+                const cents = Math.round((parseFloat(unitPrice) || 0) * 100);
+                const ext = computeExt(qty, unitPrice);
+                patch({ unitPriceCents: cents, extendedPriceCents: ext });
+                setExtPrice((ext / 100).toFixed(2));
+              }}
+            />
           </div>
         )}
       </td>
-      <td className="px-4 py-2 text-right tabular-nums text-text-secondary">{line.quantity}</td>
-      <td className="px-4 py-2 font-mono text-xs text-text-secondary uppercase">{line.unit}</td>
+      {/* Extended price — editable */}
       <td className="px-4 py-2 text-right tabular-nums">
-        ${(line.extendedPriceCents / 100).toFixed(2)}
+        {disabled ? (
+          <span>${(Number(line.extendedPriceCents) / 100).toFixed(2)}</span>
+        ) : (
+          <div className="relative">
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary text-xs pointer-events-none">$</span>
+            <input
+              className={`${inputCls} pl-4 text-right w-24`}
+              type="number" min="0" step="0.01"
+              value={extPrice}
+              onChange={(e) => setExtPrice(e.target.value)}
+              onBlur={() => {
+                const cents = Math.round((parseFloat(extPrice) || 0) * 100);
+                if (cents !== Number(line.extendedPriceCents)) patch({ extendedPriceCents: cents });
+              }}
+            />
+          </div>
+        )}
       </td>
+      {/* Category */}
       <td className="px-4 py-2">
-        <select
-          disabled={disabled}
-          value={line.category}
-          onChange={(e) => patch({ category: e.target.value as any })}
-          className="rounded bg-bg-inset border border-bg-border text-xs px-2 py-1 focus:outline-none focus:border-accent-500/60 disabled:opacity-50"
-        >
-          <option value="FOOD_INGREDIENT">Food</option>
-          <option value="PACKAGING">Packaging</option>
-          <option value="LABOR">Labor</option>
-          <option value="DELIVERY">Delivery</option>
-          <option value="TAX">Tax</option>
-          <option value="DISCOUNT">Discount</option>
-          <option value="IGNORED">Ignored</option>
-        </select>
+        {isMiscCharge ? (
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-bg-inset text-text-tertiary border border-bg-border uppercase tracking-wider">
+            Misc charge
+          </span>
+        ) : (
+          <select
+            disabled={disabled}
+            value={line.category}
+            onChange={(e) => patch({ category: e.target.value as any })}
+            className="rounded bg-bg-inset border border-bg-border text-xs px-2 py-1 focus:outline-none focus:border-accent-500/60 disabled:opacity-50"
+          >
+            <option value="FOOD_INGREDIENT">Food</option>
+            <option value="PACKAGING">Packaging</option>
+            <option value="LABOR">Labor</option>
+            <option value="DELIVERY">Delivery</option>
+            <option value="TAX">Tax</option>
+            <option value="DISCOUNT">Discount</option>
+            <option value="IGNORED">Ignored</option>
+          </select>
+        )}
       </td>
+      {/* Ingredient picker — hidden for misc charges and out-of-stock */}
       <td className="px-4 py-2">
-        {line.category !== "FOOD_INGREDIENT" ? (
+        {isMiscCharge || isOutOfStock ? (
           <span className="text-xs text-text-tertiary">—</span>
         ) : (
           <div className="flex items-center gap-2">

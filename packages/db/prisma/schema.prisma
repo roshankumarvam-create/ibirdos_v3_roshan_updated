@@ -143,6 +143,7 @@ model Ingredient {
   reorderThresholdCanonical Decimal?                 @map("reorder_threshold_canonical") @db.Decimal(14, 4)
   preferredDisplayUnit      String?                  @map("preferred_display_unit")
   defaultYieldPct           Decimal                  @default(100) @map("default_yield_pct") @db.Decimal(5, 2)
+  vendorItemCode            String?                  @map("vendor_item_code")
   photoUrl                  String?                  @map("photo_url")
   notes                     String?
   createdAt                 DateTime                 @default(now()) @map("created_at")
@@ -162,6 +163,7 @@ model Ingredient {
   @@index([workspaceId])
   @@index([workspaceId, category])
   @@index([workspaceId, deletedAt])
+  @@index([currentVendorId, vendorItemCode], map: "ingredient_vendor_sku_idx")
   @@map("ingredients")
 }
 
@@ -254,8 +256,12 @@ model InvoiceLine {
   proposedIngredientId  String?             @map("proposed_ingredient_id")
   proposedConfidence    Decimal?            @map("proposed_confidence") @db.Decimal(3, 2)
   committedIngredientId String?             @map("committed_ingredient_id")
+  vendorItemCode        String?             @map("vendor_item_code")
+  gtin                  String?
+  lineStatus            String?             @map("line_status")
   packSize              Decimal?            @map("pack_size") @db.Decimal(14, 4)
   packUnit              String?             @map("pack_unit")
+  needsReview           Boolean             @default(false) @map("needs_review")
   excluded              Boolean             @default(false)
   notes                 String?
   createdAt             DateTime            @default(now()) @map("created_at")

@@ -24,7 +24,7 @@ export const ExtractedIngredientLineSchema = z.object({
   name:            z.string().min(1),
   quantity:        z.number().nullish().transform(v => v ?? 1),
   unit:            z.string().nullish().transform(v => v ?? "each"),
-  percentUtilized: z.number().min(0).max(200).nullish().transform(v => v ?? 100),
+  percentUtilized: z.number().min(0).max(200).nullish().transform(v => v ?? null),
   externalCode:    z.string().nullish(),
   needsMatch:      z.boolean().default(true),
 });
@@ -75,12 +75,12 @@ Extract the recipe data and return JSON with these fields:
 - actualSellPriceCents: selling price in CENTS as integer (e.g. $12.50 → 1250) (number or null)
 - ingredientLines: array of { name, quantity, unit, percentUtilized } where:
     - name: ingredient name as written
-    - quantity: numeric amount
-    - unit: unit string (oz, lb, Tbsp, tsp, cup, each, etc.)
-    - percentUtilized: yield/utilization %, default 100 if not specified
+    - quantity: numeric amount as printed
+    - unit: the EXACT unit as printed in the document — read from the "Volume Measure", "Weight", or unit column. Use ML, L, G, KG, EACH, OZ, LB, TBSP, TSP, CUP, FL OZ, BUNCH, SLICE, etc. NEVER default to "oz" or any unit — only use what is printed. If no unit column exists, use "each".
+    - percentUtilized: yield/utilization percentage as printed (number or null). ONLY populate if explicitly printed — return null if not shown on the recipe sheet. Do NOT default to 100.
 
 Critical rules:
-- Use US units (oz, lb, Tbsp, tsp, cup, pint, qt, gal, fl oz, each, slice)
+- Read units from the actual column — "Volume Measure" values are typically ML or L; "Weight" values are G or KG; count items are EACH.
 - Return null for any field not found — do NOT guess
 - Numbers must be numeric types, not strings
 - Return only the JSON object`;

@@ -1,0 +1,80 @@
+{
+  "name": "Passionfruit Custard With Pistachio Crumbs",
+  "authorName": null,
+  "category": "DESSERT",
+  "description": "Silky passionfruit custard topped with pistachio crumb",
+  "totalPortions": 20,
+  "portionWeightOz": null,
+  "portionVolumeFloz": null,
+  "prepTimeMinutes": 30,
+  "cookTimeMinutes": 45,
+  "procedure": "1. Heat milk and cream together. 2. Whisk egg yolks and sugar. 3. Temper cream into yolks. 4. Add passionfruit juice. 5. Cook until thickened. 6. Chill. 7. Top with pistachio crumbs.",
+  "goalFoodCostPct": null,
+  "actualSellPriceCents": null,
+  "ingredientLines": [
+    {
+      "name": "Milk",
+      "quantity": 1250,
+      "unit": "ML",
+      "percentUtilized": null,
+      "externalCode": null,
+      "needsMatch": true
+    },
+    {
+      "name": "Cream",
+      "quantity": 2000,
+      "unit": "ML",
+      "percentUtilized": null,
+      "externalCode": null,
+      "needsMatch": true
+    },
+    {
+      "name": "Egg Yolks",
+      "quantity": 20,
+      "unit": "EACH",
+      "percentUtilized": null,
+      "externalCode": null,
+      "needsMatch": true
+    },
+    {
+      "name": "Corn Flour",
+      "quantity": 100,
+      "unit": "G",
+      "percentUtilized": null,
+      "externalCode": null,
+      "needsMatch": true
+    },
+    {
+      "name": "Caster Sugar",
+      "quantity": 1125,
+      "unit": "G",
+      "percentUtilized": null,
+      "externalCode": null,
+      "needsMatch": true
+    },
+    {
+      "name": "Passionfruit",
+      "quantity": 20,
+      "unit": "EACH",
+      "percentUtilized": 60,
+      "externalCode": null,
+      "needsMatch": true
+    },
+    {
+      "name": "Fresh Passionfruit Juice",
+      "quantity": 2000,
+      "unit": "ML",
+      "percentUtilized": null,
+      "externalCode": null,
+      "needsMatch": true
+    },
+    {
+      "name": "Orange Juice",
+      "quantity": 1000,
+      "unit": "ML",
+      "percentUtilized": null,
+      "externalCode": null,
+      "needsMatch": true
+    }
+  ]
+}

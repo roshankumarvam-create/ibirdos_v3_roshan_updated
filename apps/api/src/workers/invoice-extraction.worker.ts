@@ -47,6 +47,11 @@ interface JobData {
   actorId: string;
 }
 
+// Maps extraction lineType to DB InvoiceLineCategory enum value
+function lineTypeToCategory(lineType: string): string {
+  return lineType === "misc_charge" ? "DELIVERY" : "FOOD_INGREDIENT";
+}
+
 const worker = new Worker<JobData>(
   INVOICE_EXTRACTION_QUEUE,
   async (job) => {
@@ -71,16 +76,7 @@ const worker = new Worker<JobData>(
 
       const result = await extractInvoice({ buffer, mimeType: uploadMimeType, filename: uploadKey });
 
-      // Match each line text → existing ingredient (3-pass match)
-      const lines = await Promise.all(
-        result.data.lines.map(async (line) => {
-          const matches = await matchIngredient(workspaceId, line.descriptionRaw);
-          const top = matches[0];
-          return { line, top };
-        }),
-      );
-
-      // Try to resolve vendor: match by name (case-insensitive)
+      // Resolve vendor by name BEFORE line matching (vendorId needed for SKU lookup)
       let vendorId: string | null = null;
       if (result.data.vendorName) {
         const v = await prisma.vendor.findFirst({
@@ -93,6 +89,46 @@ const worker = new Worker<JobData>(
         });
         vendorId = v?.id ?? null;
       }
+
+      // Match each line to existing ingredients (skip misc_charge lines)
+      const lines = await Promise.all(
+        result.data.lines.map(async (line) => {
+          const lineType = line.lineType ?? "inventory";
+
+          // misc_charge lines never link to an ingredient
+          if (lineType === "misc_charge") {
+            return { line, top: null };
+          }
+
+          // Pass 1: SKU match — try vendorItemCode + vendorId first
+          if (line.vendorItemCode && vendorId) {
+            const skuMatch = await prisma.ingredient.findFirst({
+              where: {
+                workspaceId,
+                currentVendorId: vendorId,
+                vendorItemCode: line.vendorItemCode,
+                deletedAt: null,
+              },
+              select: { id: true, name: true },
+            });
+            if (skuMatch) {
+              return {
+                line,
+                top: {
+                  ingredientId: skuMatch.id,
+                  ingredientName: skuMatch.name,
+                  matchType: "exact" as const,
+                  confidence: 1.0,
+                },
+              };
+            }
+          }
+
+          // Pass 2+3: name-based matching (alias exact → fuzzy trigram)
+          const matches = await matchIngredient(workspaceId, line.descriptionRaw);
+          return { line, top: matches[0] ?? null };
+        }),
+      );
 
       // Atomically: update invoice header, create lines, mark job done
       await prisma.$transaction(async (tx) => {
@@ -120,12 +156,12 @@ const worker = new Worker<JobData>(
         // Drop any prior lines (retry case)
         await tx.invoiceLine.deleteMany({ where: { invoiceId } });
 
-        // Insert lines with AI proposal
-        const VALID_CATEGORIES = ["FOOD_INGREDIENT", "PACKAGING", "LABOR", "DELIVERY", "TAX", "DISCOUNT", "IGNORED"];
+        // Insert lines
         for (let i = 0; i < lines.length; i++) {
           const { line, top } = lines[i]!;
-          const rawCat = line.category ?? "";
-          const category = VALID_CATEGORIES.includes(rawCat) ? rawCat : "FOOD_INGREDIENT";
+          const lineType = line.lineType ?? "inventory";
+          const category = lineTypeToCategory(lineType);
+
           await tx.invoiceLine.create({
             data: {
               workspaceId,
@@ -137,13 +173,18 @@ const worker = new Worker<JobData>(
               unitPriceCents: Math.round(line.unitPriceCents),
               extendedPriceCents: Math.round(line.extendedPriceCents),
               category: category as any,
+              vendorItemCode: line.vendorItemCode ?? null,
+              gtin: line.gtin ?? null,
+              lineStatus: line.lineStatus ?? "in_stock",
               packSize: line.packSize ?? null,
-              packUnit: line.packUnit ?? null,
+              // Save size text to packUnit for display and confirm-service unit inference
+              packUnit: line.packUnit ?? line.size ?? null,
+              needsReview: line.needsReview ?? false,
               proposedIngredientId:
                 top && top.matchType !== "none" ? top.ingredientId : null,
               proposedConfidence:
                 top && top.matchType !== "none" ? top.confidence : null,
-              // Auto-commit on high-confidence exact match
+              // Auto-commit on high-confidence exact match (SKU or alias)
               committedIngredientId:
                 top && top.matchType === "exact" ? top.ingredientId : null,
             },
@@ -164,6 +205,7 @@ const worker = new Worker<JobData>(
             entityId: invoiceId,
             metadata: {
               lineCount: result.data.lines.length,
+              reconciles: result.data.reconciles,
               aiTokens: result.tokensInput + result.tokensOutput,
               aiCostCents: result.costCents,
               model: result.model,
@@ -172,7 +214,10 @@ const worker = new Worker<JobData>(
         });
       });
 
-      log.info({ invoiceId, lineCount: result.data.lines.length }, "extraction complete");
+      log.info(
+        { invoiceId, lineCount: result.data.lines.length, reconciles: result.data.reconciles },
+        "extraction complete",
+      );
     } catch (err: any) {
       const isZodError = err?.name === "ZodError";
       const extractionError = isZodError
@@ -239,7 +284,7 @@ async function matchIngredient(workspaceId: string, text: string): Promise<Match
   const normalized = text.trim().toLowerCase();
   if (!normalized) return [];
 
-  // Pass 1: exact
+  // Pass 1: exact alias match
   const exact = await prisma.ingredientAlias.findFirst({
     where: { workspaceId, text: normalized },
     include: { ingredient: { select: { id: true, name: true, deletedAt: true } } },
@@ -253,7 +298,7 @@ async function matchIngredient(workspaceId: string, text: string): Promise<Match
     }];
   }
 
-  // Pass 2: trigram
+  // Pass 2: trigram fuzzy match
   try {
     const fuzzy = await prisma.$queryRaw<Array<{ id: string; name: string; sim: number }>>`
       SELECT i.id, i.name, similarity(LOWER(i.name), ${normalized}) AS sim
