@@ -23,6 +23,8 @@ const UpdateLineSchema = z.object({
   extendedPriceCents: z.number().int().optional(),
   category: z.enum(["FOOD_INGREDIENT", "PACKAGING", "LABOR", "DELIVERY", "TAX", "DISCOUNT", "IGNORED"]).optional(),
   committedIngredientId: z.string().nullable().optional(),
+  vendorItemCode: z.string().nullable().optional(),
+  needsReview: z.boolean().optional(),
   excluded: z.boolean().optional(),
   notes: z.string().max(500).optional(),
 });

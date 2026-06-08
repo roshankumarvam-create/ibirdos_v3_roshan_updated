@@ -171,6 +171,8 @@ export class InvoicesService {
       extendedPriceCents?: number;
       category?: "FOOD_INGREDIENT" | "PACKAGING" | "LABOR" | "DELIVERY" | "TAX" | "DISCOUNT" | "IGNORED";
       committedIngredientId?: string | null;
+      vendorItemCode?: string | null;
+      needsReview?: boolean;
       excluded?: boolean;
       notes?: string;
     },
