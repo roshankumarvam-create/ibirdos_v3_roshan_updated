@@ -21,29 +21,28 @@ const log = moduleLogger("recipe-extraction");
 // ---------------------------------------------------------------------
 
 export const ExtractedIngredientLineSchema = z.object({
-  name:            z.string(),
-  quantity:        z.number().positive(),
-  unit:            z.string(),
-  percentUtilized: z.number().min(1).max(200).optional(),
-  externalCode:    z.string().optional(),
-  // Frontend will resolve this to ingredientId via search
+  name:            z.string().min(1),
+  quantity:        z.number().nullish().transform(v => v ?? 1),
+  unit:            z.string().nullish().transform(v => v ?? "each"),
+  percentUtilized: z.number().min(0).max(200).nullish().transform(v => v ?? 100),
+  externalCode:    z.string().nullish(),
   needsMatch:      z.boolean().default(true),
 });
 
 export const ExtractedRecipeSchema = z.object({
-  name:             z.string().nullable(),
-  authorName:       z.string().nullable(),
-  category:         z.string().nullable(),
-  description:      z.string().nullable(),
-  totalPortions:    z.number().int().positive().nullable(),
-  portionWeightOz:  z.number().positive().nullable(),
-  portionVolumeFloz: z.number().positive().nullable(),
-  prepTimeMinutes:  z.number().int().min(0).nullable(),
-  cookTimeMinutes:  z.number().int().min(0).nullable(),
-  procedure:        z.string().nullable(),
-  goalFoodCostPct:  z.number().min(0).max(100).nullable(),
-  actualSellPriceCents: z.number().int().min(0).nullable(),
-  ingredientLines:  z.array(ExtractedIngredientLineSchema),
+  name:             z.string().nullish().transform(v => v ?? null),
+  authorName:       z.string().nullish().transform(v => v ?? null),
+  category:         z.string().nullish().transform(v => v ?? null),
+  description:      z.string().nullish().transform(v => v ?? null),
+  totalPortions:    z.number().int().positive().nullish().transform(v => v ?? null),
+  portionWeightOz:  z.number().positive().nullish().transform(v => v ?? null),
+  portionVolumeFloz: z.number().positive().nullish().transform(v => v ?? null),
+  prepTimeMinutes:  z.number().int().min(0).nullish().transform(v => v ?? null),
+  cookTimeMinutes:  z.number().int().min(0).nullish().transform(v => v ?? null),
+  procedure:        z.string().nullish().transform(v => v ?? null),
+  goalFoodCostPct:  z.number().min(0).max(100).nullish().transform(v => v ?? null),
+  actualSellPriceCents: z.number().int().min(0).nullish().transform(v => v ?? null),
+  ingredientLines:  z.array(ExtractedIngredientLineSchema).nullish().transform(v => v ?? []),
 });
 
 export type ExtractedRecipe = z.infer<typeof ExtractedRecipeSchema>;

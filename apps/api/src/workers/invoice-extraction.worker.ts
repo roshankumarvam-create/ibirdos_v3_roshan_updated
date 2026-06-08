@@ -74,7 +74,7 @@ const worker = new Worker<JobData>(
       // Match each line text → existing ingredient (3-pass match)
       const lines = await Promise.all(
         result.data.lines.map(async (line) => {
-          const matches = await matchIngredient(workspaceId, line.description);
+          const matches = await matchIngredient(workspaceId, line.descriptionRaw);
           const top = matches[0];
           return { line, top };
         }),
@@ -121,18 +121,22 @@ const worker = new Worker<JobData>(
         await tx.invoiceLine.deleteMany({ where: { invoiceId } });
 
         // Insert lines with AI proposal
-        for (const { line, top } of lines) {
+        const VALID_CATEGORIES = ["FOOD_INGREDIENT", "PACKAGING", "LABOR", "DELIVERY", "TAX", "DISCOUNT", "IGNORED"];
+        for (let i = 0; i < lines.length; i++) {
+          const { line, top } = lines[i]!;
+          const rawCat = line.category ?? "";
+          const category = VALID_CATEGORIES.includes(rawCat) ? rawCat : "FOOD_INGREDIENT";
           await tx.invoiceLine.create({
             data: {
               workspaceId,
               invoiceId,
-              position: line.position,
-              descriptionRaw: line.description,
+              position: i + 1,
+              descriptionRaw: line.descriptionRaw,
               quantity: line.quantity,
               unit: line.unit,
-              unitPriceCents: line.unitPriceCents,
-              extendedPriceCents: line.extendedPriceCents,
-              category: line.categoryHint,
+              unitPriceCents: Math.round(line.unitPriceCents),
+              extendedPriceCents: Math.round(line.extendedPriceCents),
+              category: category as any,
               packSize: line.packSize ?? null,
               packUnit: line.packUnit ?? null,
               proposedIngredientId:
@@ -170,6 +174,10 @@ const worker = new Worker<JobData>(
 
       log.info({ invoiceId, lineCount: result.data.lines.length }, "extraction complete");
     } catch (err: any) {
+      const isZodError = err?.name === "ZodError";
+      const extractionError = isZodError
+        ? "AI could not read line items from this image. Please add manually."
+        : err.message?.slice(0, 2000);
       log.error({ invoiceId, err: err.message, stack: err.stack }, "extraction failed");
       await prisma.$transaction([
         prisma.invoiceExtractionJob.update({
@@ -184,11 +192,11 @@ const worker = new Worker<JobData>(
           where: { id: invoiceId },
           data: {
             status: "EXTRACTION_FAILED",
-            extractionError: err.message?.slice(0, 2000),
+            extractionError,
           },
         }),
       ]);
-      throw err; // let BullMQ apply retry policy
+      if (!isZodError) throw err; // let BullMQ retry non-Zod errors
     }
   },
   { connection, concurrency: 4 },
