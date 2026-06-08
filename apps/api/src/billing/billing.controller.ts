@@ -13,8 +13,8 @@ import { BillingService } from "./billing.service";
 import { env } from "@ibirdos/config";
 
 const CheckoutSchema = z.object({
-  plan: z.enum(["STARTER", "GROWTH", "SCALE", "ENTERPRISE"]),
-  interval: z.enum(["month", "year"]),
+  plan: z.enum(["SOLO", "KITCHEN"]),
+  interval: z.enum(["month", "year"]).default("month"),
   billingEmail: z.string().email(),
   successUrl: z.string().url(),
   cancelUrl: z.string().url(),

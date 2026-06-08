@@ -24,6 +24,41 @@ interface SummaryDTO {
 export default async function DashboardPage() {
   const user = await requireSession();
   const c = await cookies();
+
+  // STAFF and CHEF don't have analytics access — show a limited kitchen-focused view
+  if (user.role === "STAFF" || user.role === "CHEF") {
+    const tasksRes = await api.get<{ items: Array<{ id: string; status: string }> }>(
+      `/kitchen/tasks?status=PENDING,IN_PROGRESS`,
+      { cookies: c },
+    );
+    const openTasks = (tasksRes.data?.items ?? []).filter(
+      (t) => t.status === "PENDING" || t.status === "IN_PROGRESS",
+    ).length;
+
+    return (
+      <div className="space-y-6">
+        <header>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Welcome, {user.displayName ?? user.username}!
+          </h1>
+          <p className="mt-1 text-xs font-mono text-text-secondary">{user.workspaceSlug} · kitchen view</p>
+        </header>
+        <Card>
+          <CardBody className="space-y-4">
+            <div className="text-sm text-text-secondary">
+              You have{" "}
+              <span className="font-semibold text-text-primary tabular-nums">{openTasks}</span>{" "}
+              open prep task{openTasks !== 1 ? "s" : ""} today.
+            </div>
+            <Link href={`/${user.workspaceSlug}/kitchen` as any}>
+              <Button variant="primary">View kitchen tasks →</Button>
+            </Link>
+          </CardBody>
+        </Card>
+      </div>
+    );
+  }
+
   const sumRes = await api.get<SummaryDTO>(`/analytics/summary?days=30`, { cookies: c });
   const summary = sumRes.data;
 
@@ -45,7 +80,7 @@ export default async function DashboardPage() {
       <LowStockBanner workspaceSlug={user.workspaceSlug} />
 
       {!summary ? (
-        <Card><CardBody>Failed to load analytics.</CardBody></Card>
+        <Card><CardBody><p className="text-sm text-text-secondary">Analytics unavailable. Check API connection.</p></CardBody></Card>
       ) : (
         <>
           {/* KPI tiles */}

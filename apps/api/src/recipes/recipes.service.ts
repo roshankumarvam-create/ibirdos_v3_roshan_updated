@@ -195,7 +195,7 @@ export class RecipesService {
     ctx: TenantContext,
     opts: { search?: string; category?: string; status?: string; cursor?: string; limit?: number },
   ) {
-    const limit = Math.min(opts.limit ?? 50, 100);
+    const limit = Math.min(opts.limit ?? 50, 500);
     const where: any = { workspaceId: ctx.workspaceId, deletedAt: null };
     if (opts.status) where.status = opts.status;
     if (opts.category) where.category = opts.category;

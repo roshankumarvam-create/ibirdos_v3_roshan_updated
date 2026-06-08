@@ -91,6 +91,7 @@ async function detectPriceSpikes({ workspaceId, lookbackDays }: DetectorContext)
     arr.push(r);
     byIng.set(r.ingredientId, arr);
   }
+  const LB_PER_G = 453.592;
   const signals: DetectorSignal[] = [];
   for (const [ingId, rows] of byIng) {
     if (rows.length < 2) continue;
@@ -100,11 +101,16 @@ async function detectPriceSpikes({ workspaceId, lookbackDays }: DetectorContext)
     const pctChange = ((latest - baseline) / baseline) * 100;
     if (pctChange >= 10) {
       const ing = rows[0]!.ingredient;
+      const isGram = ing.canonicalUnit === "g";
+      const displayUnit = isGram ? "lb" : ing.canonicalUnit;
+      // microcents/canonical ÷ 1000 = cents/canonical ÷ 100 = $/canonical; × LB_PER_G if gram → $/lb
+      const baselineDisplay = (baseline / 1000 / 100) * (isGram ? LB_PER_G : 1);
+      const latestDisplay = (latest / 1000 / 100) * (isGram ? LB_PER_G : 1);
       signals.push({
         signalKey: `price-spike:${ingId}:${rows[rows.length - 1]!.effectiveAt.toISOString().slice(0, 10)}`,
         kind: "PRICE_SPIKE",
-        summary: `${ing.name} jumped ${pctChange.toFixed(1)}% (from ${(baseline / 1000 / 100).toFixed(4)} to ${(latest / 1000 / 100).toFixed(4)} per ${ing.canonicalUnit}).`,
-        context: { ingredientName: ing.name, baselineCents: baseline / 1000, latestCents: latest / 1000, pctChange: pctChange.toFixed(1) },
+        summary: `${ing.name} jumped ${pctChange.toFixed(1)}% (from $${baselineDisplay.toFixed(4)} to $${latestDisplay.toFixed(4)} per ${displayUnit}).`,
+        context: { ingredientName: ing.name, baselineCents: baseline / 1000, latestCents: latest / 1000, pctChange: pctChange.toFixed(1), displayUnit },
         entityRefs: { ingredientId: ingId },
       });
     }
@@ -144,18 +150,25 @@ async function detectReorderNeeded({ workspaceId }: DetectorContext): Promise<De
     where: { workspaceId, status: "OPEN" },
     include: { ingredient: { select: { id: true, name: true, canonicalUnit: true, currentVendorId: true } } },
   });
-  return alerts.map((a) => ({
-    signalKey: `reorder:${a.ingredientId}`,
-    kind: "REORDER_RECOMMENDATION" as const,
-    summary: `${a.ingredient.name} is below reorder threshold (${a.currentCanonical.toString()} / ${a.thresholdCanonical.toString()} ${a.ingredient.canonicalUnit}).`,
-    context: {
-      ingredientName: a.ingredient.name,
-      currentStock: a.currentCanonical.toString(),
-      threshold: a.thresholdCanonical.toString(),
-      unit: a.ingredient.canonicalUnit,
-    },
-    entityRefs: { ingredientId: a.ingredientId, vendorId: a.ingredient.currentVendorId ?? undefined },
-  }));
+  const LB_PER_G = 453.592;
+  return alerts.map((a) => {
+    const isGram = a.ingredient.canonicalUnit === "g";
+    const displayUnit = isGram ? "lb" : a.ingredient.canonicalUnit;
+    const currentDisplay = isGram ? Number(a.currentCanonical) / LB_PER_G : Number(a.currentCanonical);
+    const thresholdDisplay = isGram ? Number(a.thresholdCanonical) / LB_PER_G : Number(a.thresholdCanonical);
+    return {
+      signalKey: `reorder:${a.ingredientId}`,
+      kind: "REORDER_RECOMMENDATION" as const,
+      summary: `${a.ingredient.name} is below reorder threshold (${currentDisplay.toFixed(2)} / ${thresholdDisplay.toFixed(2)} ${displayUnit}).`,
+      context: {
+        ingredientName: a.ingredient.name,
+        currentStock: currentDisplay.toFixed(2),
+        threshold: thresholdDisplay.toFixed(2),
+        unit: displayUnit,
+      },
+      entityRefs: { ingredientId: a.ingredientId, vendorId: a.ingredient.currentVendorId ?? undefined },
+    };
+  });
 }
 
 /** Waste patterns — top wasted ingredient by cost in window */

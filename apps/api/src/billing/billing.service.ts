@@ -15,7 +15,7 @@
 // =====================================================================
 
 import {
-  Injectable, NotFoundException, BadRequestException, Inject,
+  Injectable, NotFoundException, BadRequestException, HttpException, HttpStatus,
 } from "@nestjs/common";
 import Stripe from "stripe";
 
@@ -25,9 +25,41 @@ import { moduleLogger } from "@ibirdos/logger";
 
 const log = moduleLogger("BillingService");
 
-// Map our internal plan keys to Stripe lookup keys (configured in catalog)
-const PLAN_KEYS = ["TRIAL", "STARTER", "GROWTH", "SCALE", "ENTERPRISE"] as const;
-type PlanKey = (typeof PLAN_KEYS)[number];
+type PlanKey = "SOLO" | "KITCHEN" | "ENTERPRISE";
+
+// IBirdOS real pricing catalog (static — no DB needed)
+const IBIRDOS_PLANS = [
+  {
+    id: "SOLO",
+    plan: "SOLO",
+    displayName: "Solo",
+    priceCents: 2900,
+    unitAmountMonthlyCents: 2900,
+    seatsIncluded: 1,
+    comingSoon: false,
+    features: ["Owner role only", "All operational features", "Manual invoice + recipe + inventory", "AI insights daily"],
+  },
+  {
+    id: "KITCHEN",
+    plan: "KITCHEN",
+    displayName: "Kitchen",
+    priceCents: 14900,
+    unitAmountMonthlyCents: 14900,
+    seatsIncluded: 5,
+    comingSoon: false,
+    features: ["1 Owner + 1 Manager + 3 Chef/Staff", "Everything in Solo", "Role-based access control", "Multi-user kitchen tasks", "Priority support"],
+  },
+  {
+    id: "ENTERPRISE",
+    plan: "ENTERPRISE",
+    displayName: "Enterprise",
+    priceCents: null,
+    unitAmountMonthlyCents: null,
+    seatsIncluded: null,
+    comingSoon: true,
+    features: ["Custom seat counts", "SLA + uptime guarantee", "Dedicated CSM", "Custom integrations", "Contact for pricing"],
+  },
+] as const;
 
 @Injectable()
 export class BillingService {
@@ -44,23 +76,20 @@ export class BillingService {
 
   private requireStripe(): Stripe {
     if (!this.stripe) {
-      throw new BadRequestException({
-        code: "billing_not_configured",
-        message: "Stripe is not configured. Set STRIPE_SECRET_KEY.",
-      });
+      throw new HttpException(
+        { code: "billing_not_configured", message: "Stripe is not configured. Add STRIPE_SECRET_KEY and STRIPE_PRICE_ID_SOLO / STRIPE_PRICE_ID_KITCHEN to .env to enable billing." },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
     }
     return this.stripe;
   }
 
   // -----------------------------------------------------------------
-  // Plan catalog (read)
+  // Plan catalog (static — no DB needed)
   // -----------------------------------------------------------------
 
   async listPlans(): Promise<any> {
-    return prisma.billingPlanCatalog.findMany({
-      where: { active: true },
-      orderBy: { unitAmountMonthlyCents: "asc" },
-    });
+    return IBIRDOS_PLANS;
   }
 
   // -----------------------------------------------------------------
@@ -106,29 +135,36 @@ export class BillingService {
   /** Create a checkout session for a plan + interval. */
   async createCheckoutSession(
     ctx: TenantContext,
-    params: { plan: PlanKey; interval: "month" | "year"; billingEmail: string; successUrl: string; cancelUrl: string },
+    params: { plan: "SOLO" | "KITCHEN"; interval?: "month" | "year"; billingEmail: string; successUrl: string; cancelUrl: string },
   ) {
-    const stripe = this.requireStripe();
-    const catalog = await prisma.billingPlanCatalog.findUnique({ where: { plan: params.plan } });
-    if (!catalog || !catalog.active) {
+    const stripe = this.requireStripe(); // throws 503 if not configured
+
+    const planDef = IBIRDOS_PLANS.find((p) => p.plan === params.plan);
+    if (!planDef || planDef.comingSoon) {
       throw new BadRequestException({ code: "validation_failed", message: `Plan ${params.plan} not available` });
     }
-    const priceId = params.interval === "year" ? catalog.stripePriceYearlyId : catalog.stripePriceMonthlyId;
+
+    // Resolve Stripe price ID from env
+    const priceIdEnvKey = params.plan === "SOLO" ? "STRIPE_PRICE_ID_SOLO" : "STRIPE_PRICE_ID_KITCHEN";
+    const priceId = (env as any)[priceIdEnvKey] ?? env.STRIPE_PRICE_ID;
     if (!priceId) {
-      throw new BadRequestException({ code: "validation_failed", message: `Plan ${params.plan} has no ${params.interval} price configured` });
+      throw new HttpException(
+        { code: "billing_not_configured", message: `Add ${priceIdEnvKey} to .env to enable checkout for ${planDef.displayName}` },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
     }
+
     const customer = await this.ensureCustomer(ctx, params.billingEmail);
-    const seatCount = await this.activeMemberCount(ctx.workspaceId);
 
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customer.stripeCustomerId,
-      line_items: [{ price: priceId, quantity: Math.max(seatCount, 1) }],
+      line_items: [{ price: priceId, quantity: 1 }],
       success_url: params.successUrl,
       cancel_url: params.cancelUrl,
       subscription_data: {
-        trial_period_days: catalog.plan === "TRIAL" ? undefined : 14,
-        metadata: { workspaceId: ctx.workspaceId, plan: catalog.plan },
+        trial_period_days: 14,
+        metadata: { workspaceId: ctx.workspaceId, plan: params.plan },
       },
       allow_promotion_codes: true,
       automatic_tax: { enabled: true },
@@ -270,7 +306,7 @@ export class BillingService {
     const item = stripeSub.items.data[0];
     if (!item) return;
 
-    const plan = (stripeSub.metadata?.plan as PlanKey) ?? "STARTER";
+    const plan = ((stripeSub.metadata?.plan ?? "SOLO") as any);
     const status = stripeSub.status.toUpperCase().replace(/-/g, "_") as any;
 
     await prisma.subscription.upsert({
@@ -279,7 +315,7 @@ export class BillingService {
         workspaceId,
         customerId: customer.id,
         stripeSubscriptionId: stripeSub.id,
-        plan, status,
+        plan: plan as any, status,
         stripePriceId: item.price.id,
         unitAmountCents: item.price.unit_amount ?? 0,
         currency: item.price.currency.toUpperCase(),
@@ -292,7 +328,7 @@ export class BillingService {
         canceledAt: stripeSub.canceled_at ? new Date(stripeSub.canceled_at * 1000) : null,
       },
       update: {
-        plan, status,
+        plan: plan as any, status,
         stripePriceId: item.price.id,
         unitAmountCents: item.price.unit_amount ?? 0,
         seatQuantity: item.quantity ?? 1,

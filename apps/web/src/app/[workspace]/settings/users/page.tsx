@@ -17,12 +17,20 @@ interface UserListItem {
   disabled: boolean;
 }
 
-const ROLE_TONE: Record<Role, "success" | "info" | "warning" | "neutral" | "danger"> = {
-  OWNER:    "danger",
+const ROLE_TONE: Record<Role, "success" | "info" | "warning" | "neutral" | "danger" | "accent"> = {
+  OWNER:    "accent",
   MANAGER:  "info",
-  CHEF:     "warning",
+  CHEF:     "success",
   STAFF:    "neutral",
   CUSTOMER: "neutral",
+};
+
+const ROLE_LABEL: Record<Role, string> = {
+  OWNER:    "Owner",
+  MANAGER:  "Manager",
+  CHEF:     "Chef",
+  STAFF:    "Staff",
+  CUSTOMER: "Customer",
 };
 
 function fmtDate(iso: string | null) {
@@ -90,7 +98,7 @@ export default async function UsersSettingsPage() {
                   </td>
                   <td className="px-5 py-3 font-mono text-xs text-text-secondary">{u.username}</td>
                   <td className="px-5 py-3">
-                    <Badge tone={ROLE_TONE[u.role]}>{u.role.toLowerCase()}</Badge>
+                    <Badge tone={ROLE_TONE[u.role]}>{ROLE_LABEL[u.role] ?? u.role.toLowerCase()}</Badge>
                   </td>
                   <td className="px-5 py-3">
                     {u.disabled

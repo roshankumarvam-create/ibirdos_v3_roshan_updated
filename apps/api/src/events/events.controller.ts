@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, HttpCode, HttpStatus } from "@nestjs/common";
 import { z } from "zod";
 import { ok } from "@ibirdos/types";
 import type { TenantContext } from "@ibirdos/db";
@@ -21,7 +21,15 @@ const CreateEventSchema = z.object({
   guestCount: z.number().int().positive(),
   portionMultiplier: z.number().min(1).max(2).optional(),
   quotedPriceCents: z.number().int().nonnegative().optional(),
+  markupPct: z.number().min(0).max(200).optional(),
+  laborHoursEstimate: z.number().positive().optional(),
+  laborRateCentsPerHour: z.number().int().nonnegative().optional(),
   notes: z.string().max(2000).optional(),
+  menuItems: z.array(z.object({
+    recipeId: z.string(),
+    portions: z.number().int().positive(),
+    unitPriceCentsOverride: z.number().int().nonnegative().optional(),
+  })).optional(),
 });
 
 const AddMenuSchema = z.object({
@@ -29,6 +37,16 @@ const AddMenuSchema = z.object({
   portions: z.number().int().positive(),
   perItemMultiplier: z.number().min(1).max(2).optional(),
   notes: z.string().max(500).optional(),
+});
+
+const UpdateMenuItemSchema = z.object({
+  portions: z.number().int().positive().optional(),
+  unitPriceCentsOverride: z.number().int().nonnegative().nullable().optional(),
+});
+
+const UpdateEventQuoteSchema = z.object({
+  markupPct: z.number().min(0).max(200).optional(),
+  quotedTotalOverrideCents: z.number().int().nonnegative().nullable().optional(),
 });
 
 const UpdateStatusSchema = z.object({
@@ -71,6 +89,35 @@ export class EventsController {
     return this.svc.addMenuItem(ctx, id, body).then(ok);
   }
 
+  @Patch(":id/menu/:itemId") @RequirePermission("event.update")
+  updateMenuItem(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+                 @Param("itemId") itemId: string,
+                 @Body(new ZodValidationPipe(UpdateMenuItemSchema)) body: any): Promise<any> {
+    return this.svc.updateMenuItem(ctx, id, itemId, body).then(ok);
+  }
+
+  @Delete(":id/menu/:itemId") @RequirePermission("event.update")
+  removeMenuItem(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+                 @Param("itemId") itemId: string): Promise<any> {
+    return this.svc.removeMenuItem(ctx, id, itemId).then(() => ok(null));
+  }
+
+  @Patch(":id/quote") @RequirePermission("event.update")
+  updateQuote(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+              @Body(new ZodValidationPipe(UpdateEventQuoteSchema)) body: any): Promise<any> {
+    return this.svc.updateEventQuote(ctx, id, body).then(ok);
+  }
+
+  @Post(":id/paid") @RequirePermission("event.update")
+  markAsPaid(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.markAsPaid(ctx, id).then(ok);
+  }
+
+  @Post(":id/shortage/acknowledge") @RequirePermission("event.update")
+  acknowledgeShortage(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.acknowledgeShortage(ctx, id).then(ok);
+  }
+
   @Post(":id/staff") @RequirePermission("event.assign_staff")
   assignStaff(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
               @Body(new ZodValidationPipe(AssignStaffSchema)) body: any): Promise<any> {
@@ -91,6 +138,11 @@ export class EventsController {
   @Post(":id/freeze") @RequirePermission("event.update")
   freeze(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
     return this.svc.freezeEvent(ctx, id).then(ok);
+  }
+
+  @Post(":id/send-quote") @RequirePermission("event.update") @HttpCode(HttpStatus.OK)
+  sendQuote(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.sendQuote(ctx, id).then(ok);
   }
 
   @Get(":id/ingredient-requirements") @RequirePermission("event.read")

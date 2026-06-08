@@ -1,9 +1,10 @@
 import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
-import { Card, CardHeader, CardTitle, CardBody, Badge, Button } from "@ibirdos/ui";
+import { Card, CardHeader, CardTitle, CardBody, Badge } from "@ibirdos/ui";
 import { formatCents, formatDate } from "@/lib/format";
 import { BillingActions } from "@/components/dashboard/billing-actions";
+import { PlanCards } from "./plan-cards";
 
 interface Sub {
   plan: string;
@@ -22,10 +23,11 @@ interface Sub {
 interface Plan {
   plan: string;
   displayName: string;
-  unitAmountMonthlyCents: number;
-  unitAmountYearlyCents: number;
-  seatIncluded: number;
-  features: any;
+  priceCents: number | null;
+  unitAmountMonthlyCents: number | null;
+  seatsIncluded: number | null;
+  comingSoon: boolean;
+  features: readonly string[];
 }
 
 export default async function BillingPage() {
@@ -61,7 +63,11 @@ export default async function BillingPage() {
               </div>
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Status</div>
-                <div className="mt-1"><Badge tone={sub.status === "ACTIVE" ? "success" : sub.status === "TRIALING" ? "info" : "warning"}>{sub.status.toLowerCase()}</Badge></div>
+                <div className="mt-1">
+                  <Badge tone={sub.status === "ACTIVE" ? "success" : sub.status === "TRIALING" ? "info" : "warning"}>
+                    {sub.status.toLowerCase()}
+                  </Badge>
+                </div>
               </div>
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Seats</div>
@@ -83,23 +89,12 @@ export default async function BillingPage() {
       ) : (
         <Card>
           <CardBody>
-            <div className="text-sm text-text-secondary mb-4">No active subscription. Pick a plan below to start.</div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {plans.filter(p => p.plan !== "ENTERPRISE").map((p) => (
-                <div key={p.plan} className="rounded-md border border-bg-border bg-bg-elevated p-5 space-y-3">
-                  <div className="font-semibold">{p.displayName}</div>
-                  <div className="text-2xl font-semibold tabular-nums">{formatCents(p.unitAmountMonthlyCents)}<span className="text-xs text-text-tertiary"> / seat / mo</span></div>
-                  <div className="text-xs text-text-secondary">{p.seatIncluded} seats included</div>
-                  {user.role === "OWNER" && (
-                    <form action={`/api/internal/billing/checkout`} method="POST">
-                      <input type="hidden" name="plan" value={p.plan} />
-                      <input type="hidden" name="interval" value="month" />
-                      <Button type="submit" className="w-full">Choose plan</Button>
-                    </form>
-                  )}
-                </div>
-              ))}
-            </div>
+            <div className="text-sm text-text-secondary mb-6">No active subscription. Pick a plan below to get started.</div>
+            <PlanCards
+              plans={plans}
+              userEmail={(user as any).email ?? ""}
+              isOwner={user.role === "OWNER"}
+            />
           </CardBody>
         </Card>
       )}

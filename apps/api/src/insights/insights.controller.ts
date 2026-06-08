@@ -37,4 +37,10 @@ export class InsightsController {
   actioned(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
     return this.svc.markActioned(ctx, id).then(ok);
   }
+
+  /** Manual trigger — runs all detectors immediately for current workspace. */
+  @Post("_internal/run-now") @RequirePermission("analytics.read")
+  runNow(@CurrentCtx() ctx: TenantContext): Promise<any> {
+    return this.svc.runScan(ctx).then(ok);
+  }
 }

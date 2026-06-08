@@ -437,12 +437,30 @@ model Event {
   /// Margin = (revenue - food - labor) / revenue * 100, cached
   computedMarginPct      Decimal?               @map("computed_margin_pct") @db.Decimal(5, 2)
   notes                  String?
+  /// Simple labor estimate (separate from EventStaffAssignment rows)
+  laborHoursEstimate     Decimal?               @map("labor_hours_estimate") @db.Decimal(8,2)
+  laborRateCentsPerHour  Int?                   @map("labor_rate_cents_per_hour")
+  laborTotalCents        Int                    @default(0) @map("labor_total_cents")
+  /// Quote email tracking
+  quoteSentAt            DateTime?              @map("quote_sent_at")
+  quoteSentTo            String?                @map("quote_sent_to")
   /// When costs were locked in (set on PAID or COMPLETED transition)
   frozenAt               DateTime?              @map("frozen_at")
   /// Snapshot: { recipeId: costInCentsAtFreeze } — frozen events use this, not live prices
   frozenRecipeCostsCents Json?                  @map("frozen_recipe_costs_cents")
   /// Snapshot: { ingredientId: priceInCentsAtFreeze }
   frozenIngredientPricesCents Json?             @map("frozen_ingredient_prices_cents")
+  /// Payment lifecycle: UNPAID → PAID
+  paymentStatus          String                 @default("UNPAID") @map("payment_status")
+  /// Event-level markup applied to menu line totals for the quote
+  markupPct              Decimal                @default(0) @map("markup_pct") @db.Decimal(5, 2)
+  /// Manual override for the total quote (replaces computed total when set)
+  quotedTotalOverrideCents Int?                 @map("quoted_total_override_cents")
+  /// When inventory availability was last checked against this event's requirements
+  inventoryCheckedAt     DateTime?              @map("inventory_checked_at")
+  /// [{ingredientId, name, neededCanonical, haveCanonical, shortCanonical, vendorId, lastUnitPriceCents}]
+  inventoryShortages     Json?                  @map("inventory_shortages")
+  shortageAcknowledged   Boolean                @default(false) @map("shortage_acknowledged")
   createdAt              DateTime               @default(now()) @map("created_at")
   updatedAt              DateTime               @updatedAt @map("updated_at")
   createdById            String?                @map("created_by_id")
@@ -462,10 +480,14 @@ model EventMenuItem {
   workspaceId       String   @map("workspace_id")
   eventId           String   @map("event_id")
   recipeId          String   @map("recipe_id")
-  /// How many portions of this recipe (typically = guestCount Ã— multiplier)
+  /// How many portions of this recipe (typically = guestCount × multiplier)
   portions          Int
-  /// Per-item override on the event multiplier (allows mains 1.15Ã— but sides 1.05Ã—)
+  /// Per-item override on the event multiplier (allows mains 1.15× but sides 1.05×)
   perItemMultiplier Decimal? @map("per_item_multiplier") @db.Decimal(4, 2)
+  /// Snapshot of recipe.salePriceCents at the time this item was added to the menu
+  unitPriceCentsAtAdd    Int?     @map("unit_price_cents_at_add")
+  /// Manual override for this line's unit price (if set, this is what's billed)
+  unitPriceCentsOverride Int?     @map("unit_price_cents_override")
   notes             String?
   displayOrder      Int      @default(0) @map("display_order")
   createdAt         DateTime @default(now()) @map("created_at")
@@ -527,6 +549,10 @@ model KitchenTask {
   startedAt        DateTime?         @map("started_at")
   completedAt      DateTime?         @map("completed_at")
   notes            String?
+  /// PREP = chef prep task; SERVICE = front-of-house / plating task
+  taskType         String            @default("PREP") @map("task_type")
+  /// Scaled ingredient quantities for this task: [{ingredientId, name, neededCanonical, canonicalUnit, displayQty, currentStockCanonical}]
+  scaledIngredients Json?            @map("scaled_ingredients")
   displayOrder     Int               @default(0) @map("display_order")
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")

@@ -34,25 +34,30 @@ export function formatCostPerUnit(
   return `$${dollarsPerPreferred.toFixed(2)}/${normalized}`;
 }
 
-export function formatCents(cents: number | null | undefined, opts: { decimals?: number } = {}) {
+export function formatCents(cents: number | string | null | undefined, opts: { decimals?: number } = {}) {
   if (cents == null) return "—";
-  const value = cents / 100;
+  const num = typeof cents === "number" ? cents : parseFloat(String(cents));
+  if (!Number.isFinite(num)) return "—";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: opts.decimals ?? 2,
     maximumFractionDigits: opts.decimals ?? 2,
-  }).format(value);
+  }).format(num / 100);
 }
 
-export function formatPct(value: number | null | undefined, decimals = 1) {
+export function formatPct(value: number | string | null | undefined, decimals = 1) {
   if (value == null) return "—";
-  return `${value.toFixed(decimals)}%`;
+  const num = typeof value === "number" ? value : parseFloat(String(value));
+  if (!Number.isFinite(num)) return "—";
+  return `${num.toFixed(decimals)}%`;
 }
 
-export function formatNumber(value: number | null | undefined, decimals = 0) {
+export function formatNumber(value: number | string | null | undefined, decimals = 0) {
   if (value == null) return "—";
-  return new Intl.NumberFormat("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(value);
+  const num = typeof value === "number" ? value : parseFloat(String(value));
+  if (!Number.isFinite(num)) return "—";
+  return new Intl.NumberFormat("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(num);
 }
 
 export function formatDate(iso: string | Date | null | undefined) {

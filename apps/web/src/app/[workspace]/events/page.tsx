@@ -16,6 +16,7 @@ interface EventListItem {
   quotedPriceCents: number | null;
   computedFoodCostCents: number | null;
   computedLaborCostCents: number | null;
+  laborTotalCents: number;
   computedMarginPct: number | null;
   _count?: { menuItems: number; staff: number };
 }
@@ -90,7 +91,7 @@ export default async function EventsPage({ searchParams }: { searchParams: Promi
                   <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{e.guestCount}</td>
                   <td className="px-5 py-3 text-right tabular-nums">{formatCents(e.quotedPriceCents)}</td>
                   <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(e.computedFoodCostCents)}</td>
-                  <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(e.computedLaborCostCents)}</td>
+                  <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(e.laborTotalCents ?? e.computedLaborCostCents)}</td>
                   <td className="px-5 py-3 text-right tabular-nums">
                     <span className={e.computedMarginPct == null ? "text-text-tertiary" :
                       e.computedMarginPct < 25 ? "text-danger" :

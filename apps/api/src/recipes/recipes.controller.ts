@@ -67,7 +67,7 @@ const UpdateRecipeSchema = CreateRecipeSchema.partial().omit({ ingredients: true
 const ListQuerySchema = z.object({
   search: z.string().optional(), category: z.string().optional(),
   status: z.string().optional(), cursor: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
 });
 
 @Controller("recipes")

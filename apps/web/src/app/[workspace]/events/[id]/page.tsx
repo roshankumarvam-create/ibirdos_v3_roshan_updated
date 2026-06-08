@@ -5,6 +5,50 @@ import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { formatCents, formatPct, formatDateTime, formatDate } from "@/lib/format";
+import { MenuSection } from "./menu-section";
+import { ShortageBanner } from "./shortage-banner";
+import { MarkPaidButton } from "./mark-paid-button";
+import { SendQuoteButton } from "./send-quote-button";
+
+interface MenuItem {
+  id: string;
+  recipeId: string;
+  portions: number;
+  displayOrder: number;
+  unitPriceCentsAtAdd: number | null;
+  unitPriceCentsOverride: number | null;
+  recipe: {
+    id: string;
+    name: string;
+    portionsYielded: number | null;
+    cachedCostMicrocents: string | null;
+    salePriceCents: number | null;
+    prepTimeMin: number | null;
+    cookTimeMin: number | null;
+  };
+}
+
+interface KitchenTask {
+  id: string;
+  title: string;
+  recipeId: string | null;
+  targetPortions: number | null;
+  taskType: string;
+  status: string;
+}
+
+interface Shortage {
+  ingredientId: string;
+  name: string;
+  neededCanonical: number;
+  haveCanonical: number;
+  shortCanonical: number;
+  canonicalUnit: string;
+  preferredDisplayUnit: string | null;
+  vendorId: string | null;
+  lastUnitPriceCents: number | null;
+  estCostCents: number | null;
+}
 
 interface EventDetail {
   id: string;
@@ -24,17 +68,17 @@ interface EventDetail {
   computedLaborCostCents: number | null;
   computedMarginPct: number | null;
   notes: string | null;
-  // Cost freeze fields
   frozenAt: string | null;
   frozenRecipeCostsCents: Record<string, number> | null;
   frozenIngredientPricesCents: Record<string, number> | null;
-  menuItems: Array<{
-    id: string;
-    recipeId: string;
-    portions: number;
-    displayOrder: number;
-    recipe: { id: string; name: string; portionsYielded: number | null; cachedCostMicrocents: string | null; salePriceCents: number | null };
-  }>;
+  // New fields
+  paymentStatus: string;
+  markupPct: number;
+  quotedTotalOverrideCents: number | null;
+  inventoryCheckedAt: string | null;
+  inventoryShortages: Shortage[] | null;
+  shortageAcknowledged: boolean;
+  menuItems: MenuItem[];
   staff: Array<{
     id: string;
     role: string;
@@ -43,6 +87,7 @@ interface EventDetail {
     user: { id: string; username: string; displayName: string | null } | null;
   }>;
   kitchenPacket: { id: string; generatedAt: string } | null;
+  kitchenTasks: KitchenTask[];
 }
 
 interface IngredientRequirement {
@@ -79,13 +124,18 @@ export default async function EventDetailPage({
   const event = eventRes.data;
   const requirements = reqRes.data ?? [];
 
+  const isPaid = event.paymentStatus === "PAID";
+  const shortages = (event.inventoryShortages ?? []) as Shortage[];
+  const shortagesActive = shortages.length > 0 && !event.shortageAcknowledged;
   const totalLaborCents = event.staff.reduce(
     (sum, s) => sum + Math.round(Number(s.hours) * s.hourlyRateCents),
     0,
   );
   const shortItems = requirements.filter((r) => r.isShort);
 
-  // Simple AI-style summary string
+  const prepTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "PREP");
+  const serviceTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "SERVICE");
+
   const aiSummary = requirements.length > 0
     ? requirements
         .slice(0, 5)
@@ -115,20 +165,40 @@ export default async function EventDetailPage({
           <Badge tone={STATUS_TONE[event.status] ?? "neutral"}>
             {event.status.toLowerCase().replace(/_/g, " ")}
           </Badge>
+          {isPaid && (
+            <Badge tone="success">PAID</Badge>
+          )}
           {event.frozenAt ? (
             <span
               className="inline-flex items-center gap-1 rounded border border-accent-500/30 bg-accent-500/10 px-2 py-0.5 text-[10px] font-medium text-accent-400"
               title={`Costs locked at ${new Date(event.frozenAt).toLocaleString()}`}
             >
-              🔒 Frozen quote · {new Date(event.frozenAt).toLocaleDateString()}
+              Frozen quote · {new Date(event.frozenAt).toLocaleDateString()}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 rounded border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
               Live quote
             </span>
           )}
+          {(event.status === "DRAFT" || event.status === "CONFIRMED") && !isPaid && (
+            <SendQuoteButton
+              eventId={event.id}
+              clientEmail={event.customerContact}
+              eventName={event.name}
+            />
+          )}
+          {!isPaid && <MarkPaidButton eventId={event.id} />}
         </div>
       </div>
+
+      {/* Shortage banner — shown when PAID and shortages exist */}
+      {isPaid && shortages.length > 0 && (
+        <ShortageBanner
+          eventId={event.id}
+          shortages={shortages}
+          alreadyAcknowledged={event.shortageAcknowledged}
+        />
+      )}
 
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -151,48 +221,57 @@ export default async function EventDetailPage({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left: menu + staff */}
+        {/* Left: menu + kitchen tasks + ingredient requirements */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Menu */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Menu ({event.menuItems.length} item{event.menuItems.length === 1 ? "" : "s"})</CardTitle>
-              <CardDescription>{event.guestCount} guests · ×{Number(event.portionMultiplier).toFixed(2)} multiplier</CardDescription>
-            </CardHeader>
-            {event.menuItems.length === 0 ? (
-              <CardBody><EmptyState title="No menu items" description="Add recipes to this event to generate a kitchen packet." /></CardBody>
-            ) : (
+          {/* Menu with interactive quote */}
+          <MenuSection
+            workspace={workspace}
+            eventId={event.id}
+            menuItems={event.menuItems}
+            guestCount={event.guestCount}
+            portionMultiplier={Number(event.portionMultiplier)}
+            markupPct={Number(event.markupPct ?? 0)}
+            quotedTotalOverrideCents={event.quotedTotalOverrideCents ?? null}
+            isPaid={isPaid}
+          />
+
+          {/* Kitchen tasks — shown after PAID */}
+          {isPaid && (event.kitchenTasks ?? []).length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Kitchen tasks generated</CardTitle>
+                <CardDescription>
+                  {prepTasks.length} prep + {serviceTasks.length} service tasks · check inventory checked {event.inventoryCheckedAt ? new Date(event.inventoryCheckedAt).toLocaleString() : "—"}
+                </CardDescription>
+              </CardHeader>
               <table className="w-full text-sm">
                 <thead className="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-bg-border">
                   <tr>
-                    <th className="text-left px-5 py-2 font-medium">Recipe</th>
+                    <th className="text-left px-5 py-2 font-medium">Task</th>
                     <th className="text-right px-5 py-2 font-medium">Portions</th>
-                    <th className="text-right px-5 py-2 font-medium">Food cost</th>
+                    <th className="text-left px-5 py-2 font-medium">Type</th>
+                    <th className="text-left px-5 py-2 font-medium">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-bg-border">
-                  {event.menuItems.map((mi) => (
-                    <tr key={mi.id}>
+                  {(event.kitchenTasks ?? []).map((t) => (
+                    <tr key={t.id}>
+                      <td className="px-5 py-2 text-text-primary">{t.title}</td>
+                      <td className="px-5 py-2 text-right tabular-nums text-text-secondary">{t.targetPortions ?? "—"}</td>
                       <td className="px-5 py-2">
-                        <Link
-                          href={`/${workspace}/recipes/${mi.recipe.id}` as any}
-                          className="text-text-primary hover:text-accent-500"
-                        >
-                          {mi.recipe.name}
-                        </Link>
+                        <span className={`text-[10px] uppercase tracking-wider ${t.taskType === "PREP" ? "text-warning" : "text-info"}`}>
+                          {t.taskType}
+                        </span>
                       </td>
-                      <td className="px-5 py-2 text-right tabular-nums text-text-secondary">{mi.portions}</td>
-                      <td className="px-5 py-2 text-right tabular-nums text-text-secondary">
-                        {mi.recipe.cachedCostMicrocents
-                          ? formatCents(Math.round(Number(mi.recipe.cachedCostMicrocents) * mi.portions / 1000))
-                          : "—"}
+                      <td className="px-5 py-2">
+                        <span className="text-[10px] uppercase tracking-wider text-text-tertiary">{t.status}</span>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )}
-          </Card>
+            </Card>
+          )}
 
           {/* Ingredient requirements */}
           <Card>
@@ -295,8 +374,13 @@ export default async function EventDetailPage({
                     <Button variant="secondary" size="sm" className="w-full">View kitchen board</Button>
                   </Link>
                   <Link href={`/${workspace}/kitchen/event/${event.id}` as any}>
-                    <Button variant="secondary" size="sm" className="w-full">Consolidated prep list</Button>
+                    <Button variant="secondary" size="sm" className="w-full">Chef prep list</Button>
                   </Link>
+                  {isPaid && (
+                    <Link href={`/${workspace}/kitchen/event/${event.id}/service` as any}>
+                      <Button variant="secondary" size="sm" className="w-full">Staff service list</Button>
+                    </Link>
+                  )}
                 </>
               ) : (
                 <p className="text-xs text-text-tertiary">No kitchen packet yet.</p>

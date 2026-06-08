@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { api } from "@/lib/api";
 import { formatCents, formatStock, formatCostPerUnit, relativeTime } from "@/lib/format";
@@ -41,15 +41,25 @@ interface IngredientStock {
 }
 
 type Tab = "stock" | "history";
+type FilterParam = "out" | "low" | "needs-attention" | null;
 
-export default function InventoryPage() {
+function InventoryContent() {
   const { workspace } = useParams<{ workspace: string }>();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const filterParam = searchParams.get("filter") as FilterParam;
+
   const [tab, setTab] = useState<Tab>("stock");
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [txs, setTxs] = useState<Tx[]>([]);
   const [ingredients, setIngredients] = useState<IngredientStock[]>([]);
   const [loading, setLoading] = useState(true);
   const [reversing, setReversing] = useState<string | null>(null);
+
+  // Auto-switch to stock tab when filter is active
+  useEffect(() => {
+    if (filterParam) setTab("stock");
+  }, [filterParam]);
 
   useEffect(() => {
     Promise.all([
@@ -70,7 +80,6 @@ export default function InventoryPage() {
     const res = await api.post(`/inventory/transactions/${txId}/reverse`);
     setReversing(null);
     if (!res.error) {
-      // Refresh transactions
       const fresh = await api.get<{ items: Tx[] }>("/inventory/transactions?limit=50");
       if (fresh.data) setTxs(fresh.data.items);
       const ingFresh = await api.get<{ items: IngredientStock[] }>("/ingredients?limit=100");
@@ -86,6 +95,25 @@ export default function InventoryPage() {
   ).length;
   const outCount = stockSorted.filter((i) => i.currentStockCanonical <= 0).length;
   const alertCount = lowCount + outCount;
+
+  // Apply URL filter to stock list
+  const filteredStock = (() => {
+    if (!filterParam) return stockSorted;
+    return stockSorted.filter((i) => {
+      const isOut = i.currentStockCanonical <= 0;
+      const isLow = !isOut && i.reorderThresholdCanonical != null && i.currentStockCanonical < i.reorderThresholdCanonical;
+      if (filterParam === "out") return isOut;
+      if (filterParam === "low") return isLow;
+      return isOut || isLow; // needs-attention
+    });
+  })();
+
+  const filterLabel = filterParam === "needs-attention" ? "Needs attention"
+    : filterParam === "out" ? "Out of stock"
+    : filterParam === "low" ? "Low stock"
+    : null;
+
+  const clearFilter = () => router.push(`/${workspace}/inventory` as any);
 
   return (
     <div className="space-y-6">
@@ -147,6 +175,23 @@ export default function InventoryPage() {
         </Card>
       )}
 
+      {/* Attention banner — shown when OUT or LOW items exist */}
+      {(outCount > 0 || lowCount > 0) && (
+        <div className="flex items-center justify-between rounded-md border border-danger/40 bg-danger/5 px-4 py-3">
+          <div className="text-sm font-medium text-danger">
+            {alertCount} item{alertCount === 1 ? "" : "s"} need attention
+            {outCount > 0 && ` · ${outCount} out of stock`}
+            {lowCount > 0 && ` · ${lowCount} low`}
+          </div>
+          <button
+            onClick={() => router.push(`/${workspace}/inventory?filter=needs-attention` as any)}
+            className="text-xs text-danger hover:text-danger/80 underline font-medium"
+          >
+            View items
+          </button>
+        </div>
+      )}
+
       {/* Tab selector */}
       <div className="flex gap-1 bg-bg-inset border border-bg-border rounded-lg p-1 w-fit">
         {(["stock", "history"] as const).map((t) => (
@@ -171,67 +216,81 @@ export default function InventoryPage() {
             <EmptyState title="No ingredients yet" description="Add ingredients or confirm an invoice to start tracking stock." />
           ) : (
             <>
+              {/* Active filter chip */}
+              {filterParam && filterLabel && (
+                <div className="flex items-center gap-2 px-5 py-2 border-b border-bg-border">
+                  <span className="text-xs text-text-secondary">Filter:</span>
+                  <span className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full bg-danger/10 text-danger font-medium">
+                    {filterLabel} ({filteredStock.length})
+                    <button onClick={clearFilter} className="hover:opacity-70 leading-none">✕</button>
+                  </span>
+                </div>
+              )}
               <div className="px-5 py-3 border-b border-bg-border text-xs font-mono text-text-tertiary">
-                {stockSorted.length} item{stockSorted.length === 1 ? "" : "s"}
-                {lowCount > 0 && ` · ${lowCount} low`}
-                {outCount > 0 && ` · ${outCount} out`}
+                {filteredStock.length} item{filteredStock.length === 1 ? "" : "s"}
+                {filterParam ? ` (filtered from ${stockSorted.length})` : (
+                  <>
+                    {lowCount > 0 && ` · ${lowCount} low`}
+                    {outCount > 0 && ` · ${outCount} out`}
+                  </>
+                )}
               </div>
-            <table className="w-full text-sm">
-              <thead className="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-bg-border">
-                <tr>
-                  <th className="text-left px-5 py-3 font-medium">Ingredient</th>
-                  <th className="text-right px-5 py-3 font-medium">Stock</th>
-                  <th className="text-right px-5 py-3 font-medium">Unit cost</th>
-                  <th className="text-right px-5 py-3 font-medium">Reorder at</th>
-                  <th className="text-left px-5 py-3 font-medium">Status</th>
-                  <th className="text-right px-5 py-3 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-bg-border">
-                {stockSorted.map((ing) => {
-                  const isLow = ing.currentStockCanonical > 0 &&
-                    ing.reorderThresholdCanonical != null &&
-                    ing.currentStockCanonical < ing.reorderThresholdCanonical;
-                  const isOut = ing.currentStockCanonical <= 0;
-                  return (
-                    <tr key={ing.id} className="hover:bg-bg-hover/30">
-                      <td className="px-5 py-3">
-                        <Link href={`/${workspace}/ingredients/${ing.id}` as any} className="text-text-primary hover:text-accent-500 transition-colors">
-                          {ing.name}
-                        </Link>
-                      </td>
-                      <td className="px-5 py-3 text-right tabular-nums font-medium">
-                        {formatStock(ing.currentStockCanonical, ing.canonicalUnit, ing.preferredDisplayUnit)}
-                      </td>
-                      <td className="px-5 py-3 text-right tabular-nums text-text-secondary">
-                        {ing.currentCostCents != null
-                          ? formatCostPerUnit(ing.currentCostCents, ing.canonicalUnit, ing.preferredDisplayUnit)
-                          : "—"}
-                      </td>
-                      <td className="px-5 py-3 text-right tabular-nums text-text-tertiary text-xs">
-                        {ing.reorderThresholdCanonical != null
-                          ? formatStock(ing.reorderThresholdCanonical, ing.canonicalUnit, ing.preferredDisplayUnit)
-                          : "—"}
-                      </td>
-                      <td className="px-5 py-3">
-                        {isOut ? (
-                          <Badge tone="danger">Out</Badge>
-                        ) : isLow ? (
-                          <Badge tone="warning">Low</Badge>
-                        ) : (
-                          <Badge tone="success">OK</Badge>
-                        )}
-                      </td>
-                      <td className="px-5 py-3 text-right">
-                        <Link href={`/${workspace}/inventory/adjust?ingredientId=${ing.id}` as any} className="text-xs text-accent-500 hover:text-accent-400">
-                          Adjust
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-bg-border">
+                  <tr>
+                    <th className="text-left px-5 py-3 font-medium">Ingredient</th>
+                    <th className="text-right px-5 py-3 font-medium">Stock</th>
+                    <th className="text-right px-5 py-3 font-medium">Unit cost</th>
+                    <th className="text-right px-5 py-3 font-medium">Reorder at</th>
+                    <th className="text-left px-5 py-3 font-medium">Status</th>
+                    <th className="text-right px-5 py-3 font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-bg-border">
+                  {filteredStock.map((ing) => {
+                    const isLow = ing.currentStockCanonical > 0 &&
+                      ing.reorderThresholdCanonical != null &&
+                      ing.currentStockCanonical < ing.reorderThresholdCanonical;
+                    const isOut = ing.currentStockCanonical <= 0;
+                    return (
+                      <tr key={ing.id} className="hover:bg-bg-hover/30">
+                        <td className="px-5 py-3">
+                          <Link href={`/${workspace}/ingredients/${ing.id}` as any} className="text-text-primary hover:text-accent-500 transition-colors">
+                            {ing.name}
+                          </Link>
+                        </td>
+                        <td className="px-5 py-3 text-right tabular-nums font-medium">
+                          {formatStock(ing.currentStockCanonical, ing.canonicalUnit, ing.preferredDisplayUnit)}
+                        </td>
+                        <td className="px-5 py-3 text-right tabular-nums text-text-secondary">
+                          {ing.currentCostCents != null
+                            ? formatCostPerUnit(ing.currentCostCents, ing.canonicalUnit, ing.preferredDisplayUnit)
+                            : "—"}
+                        </td>
+                        <td className="px-5 py-3 text-right tabular-nums text-text-tertiary text-xs">
+                          {ing.reorderThresholdCanonical != null
+                            ? formatStock(ing.reorderThresholdCanonical, ing.canonicalUnit, ing.preferredDisplayUnit)
+                            : "—"}
+                        </td>
+                        <td className="px-5 py-3">
+                          {isOut ? (
+                            <Badge tone="danger">Out</Badge>
+                          ) : isLow ? (
+                            <Badge tone="warning">Low</Badge>
+                          ) : (
+                            <Badge tone="success">OK</Badge>
+                          )}
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <Link href={`/${workspace}/inventory/adjust?ingredientId=${ing.id}` as any} className="text-xs text-accent-500 hover:text-accent-400">
+                            Adjust
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </>
           )}
         </Card>
@@ -311,5 +370,13 @@ export default function InventoryPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+export default function InventoryPage() {
+  return (
+    <Suspense fallback={<div className="text-text-secondary py-8">Loading…</div>}>
+      <InventoryContent />
+    </Suspense>
   );
 }
