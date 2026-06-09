@@ -344,6 +344,13 @@ model RecipeIngredient {
   externalCode     String?    @map("external_code")
   quantity         Decimal    @db.Decimal(14, 4)
   unit             String
+  qtyNative        Decimal?   @map("qty_native") @db.Decimal(14, 4)
+  unitNative       String?    @map("unit_native")
+  ozEquivalent     Decimal?   @map("oz_equivalent") @db.Decimal(14, 4)
+  lowConfidence    Boolean    @default(false) @map("low_confidence")
+  conversionNote   String?    @map("conversion_note")
+  prepNote         String?    @map("prep_note")
+  sizeQualifier    String?    @map("size_qualifier")
   yieldPctOverride Decimal?   @map("yield_pct_override") @db.Decimal(5, 2)
   weightOz         Float?     @map("weight_oz")
   notes            String?
