@@ -9,7 +9,7 @@
 // end-to-end.
 // =====================================================================
 
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Route } from "next";
 import Link from "next/link";
@@ -17,7 +17,7 @@ import Link from "next/link";
 import type { SessionUser } from "@ibirdos/types";
 import { api } from "@/lib/api";
 
-export default function LoginPage() {
+function LoginPageInner() {
   const router = useRouter();
   const params = useSearchParams();
   const next = params.get("next") ?? "/";
@@ -127,5 +127,13 @@ export default function LoginPage() {
         </p>
       </div>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-bg-base"><div className="text-text-secondary">Loading...</div></div>}>
+      <LoginPageInner />
+    </Suspense>
   );
 }

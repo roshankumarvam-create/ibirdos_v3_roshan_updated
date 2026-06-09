@@ -4,22 +4,9 @@ import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button } from "@ibirdos/ui";
+import { IngredientsEditor, type EditableIngredientLine } from "./IngredientsEditor";
 
-interface RecipeIngredientLine {
-  id: string;
-  ingredient: {
-    id: string;
-    name: string;
-    canonicalUnit: string;
-    preferredDisplayUnit: string | null;
-  };
-  quantity: number | string;
-  unit: string;
-  percentUtilized: number | null;
-  externalCode: string | null;
-  lineCostCents: number | null;
-  lineCostMicrocents: number | null;
-}
+interface RecipeIngredientLine extends EditableIngredientLine {}
 
 interface LiveBreakdownLine {
   ingredientId: string;
@@ -64,6 +51,7 @@ interface RecipeDetail {
   prepPhotoUrl: string | null;
   finalPhotoUrl: string | null;
   videoUrl: string | null;
+  isPartial?: boolean;
   ingredients: RecipeIngredientLine[];
   createdAt: string;
   updatedAt: string;
@@ -138,6 +126,17 @@ export default async function RecipeDetailPage({
 
   return (
     <div className="space-y-6 max-w-[1200px] pb-10">
+      {/* Partial recipe banner */}
+      {recipe.isPartial && (
+        <div className="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning flex items-start gap-2">
+          <span className="text-base leading-none mt-0.5">📄</span>
+          <span>
+            <strong>Page 1 of multi-page recipe.</strong> Upload additional pages or add the remaining
+            ingredients and procedure manually. Costing works with what&apos;s been extracted so far.
+          </span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
@@ -197,41 +196,22 @@ export default async function RecipeDetailPage({
 
           {/* Ingredients */}
           <Card>
-            <CardHeader><CardTitle>Ingredients</CardTitle></CardHeader>
-            <CardBody className="p-0">
-              {(recipe.ingredients ?? []).length === 0 ? (
-                <div className="px-5 py-8 text-center text-sm text-text-tertiary">No ingredients listed.</div>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-bg-border bg-bg-inset">
-                    <tr>
-                      <th className="text-left px-4 py-2 font-medium">Ingredient</th>
-                      <th className="text-right px-4 py-2 font-medium w-20">Qty</th>
-                      <th className="text-left px-4 py-2 font-medium w-16">Unit</th>
-                      <th className="text-right px-4 py-2 font-medium w-20">% Used</th>
-                      <th className="text-right px-4 py-2 font-medium w-24">Line cost</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-bg-border">
-                    {(recipe.ingredients ?? []).map(line => (
-                      <tr key={line.id} className="hover:bg-bg-hover/20">
-                        <td className="px-4 py-2 text-text-primary">
-                          {line.ingredient.name}
-                          {line.externalCode && (
-                            <span className="ml-2 font-mono text-[10px] text-text-tertiary">{line.externalCode}</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums text-text-secondary">{line.quantity}</td>
-                        <td className="px-4 py-2 font-mono text-xs text-text-secondary">{line.unit}</td>
-                        <td className="px-4 py-2 text-right tabular-nums text-text-secondary">{line.percentUtilized ?? 100}%</td>
-                        <td className="px-4 py-2 text-right tabular-nums text-text-secondary">
-                          {line.lineCostMicrocents != null ? fmtCents(line.lineCostMicrocents / 1000) : fmtCents(line.lineCostCents)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <CardHeader>
+              <CardTitle>Ingredients</CardTitle>
+              {canEdit && (
+                <p className="text-[10px] text-text-tertiary mt-0.5">
+                  Click any field to edit. Changes save automatically on blur.
+                  Rows with <span className="inline-flex items-center justify-center w-3 h-3 rounded-full bg-warning/20 text-warning text-[8px] font-bold">!</span> have low-confidence conversions — hover for details.
+                </p>
               )}
+            </CardHeader>
+            <CardBody className="p-0">
+              <IngredientsEditor
+                recipeId={id}
+                workspaceId={workspace}
+                lines={recipe.ingredients ?? []}
+                canEdit={canEdit}
+              />
             </CardBody>
           </Card>
 
