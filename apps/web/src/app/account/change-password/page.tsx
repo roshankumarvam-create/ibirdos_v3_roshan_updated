@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 "use client";
 
 // =====================================================================
@@ -15,14 +14,14 @@ export const dynamic = "force-dynamic";
 // into `next`.
 // =====================================================================
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Route } from "next";
 import { Button, Input } from "@ibirdos/ui";
 
 import { api } from "@/lib/api";
 
-export default function ChangePasswordPage() {
+function ChangePasswordForm() {
   const router = useRouter();
   const params = useSearchParams();
   const next = params.get("next") ?? "/";
@@ -187,10 +186,18 @@ export default function ChangePasswordPage() {
             disabled={!canSubmit}
             loading={submitting}
           >
-            {submitting ? "Updating…" : "Update password"}
+            {submitting ? "Updating..." : "Update password"}
           </Button>
         </form>
       </div>
     </main>
+  );
+}
+
+export default function ChangePasswordPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-bg-base"><div className="text-text-secondary">Loading...</div></div>}>
+      <ChangePasswordForm />
+    </Suspense>
   );
 }
