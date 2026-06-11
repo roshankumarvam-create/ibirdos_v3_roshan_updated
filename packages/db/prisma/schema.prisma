@@ -24,6 +24,8 @@ model Workspace {
   billingCustomer      BillingCustomer?
   memberships          Membership[]
   dailySales           DailySales[]
+  laborEntries         LaborEntry[]
+  fixedCosts           FixedCost[]
 
   @@index([slug])
   @@index([deletedAt])
@@ -1169,4 +1171,41 @@ enum TenderType {
   OTHER
 
   @@map("tender_type")
+}
+
+model LaborEntry {
+  id          String    @id @default(cuid())
+  workspaceId String    @map("workspace_id")
+  workDate    DateTime  @db.Date @map("work_date")
+  hours       Decimal   @db.Decimal(8, 2)
+  laborCost   Decimal   @db.Decimal(12, 2) @map("labor_cost")
+  category    String?
+  notes       String?
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, workDate])
+  @@map("labor_entries")
+}
+
+model FixedCost {
+  id            String            @id @default(cuid())
+  workspaceId   String            @map("workspace_id")
+  name          String
+  monthlyAmount Decimal           @db.Decimal(12, 2) @map("monthly_amount")
+  category      FixedCostCategory
+  active        Boolean           @default(true)
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, category])
+  @@map("fixed_costs")
+}
+
+enum FixedCostCategory {
+  RENT
+  UTILITIES
+  INSURANCE
+  EQUIPMENT_LEASE
+  OTHER
+
+  @@map("fixed_cost_category")
 }
