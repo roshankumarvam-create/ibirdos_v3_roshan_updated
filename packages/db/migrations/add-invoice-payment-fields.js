@@ -1,5 +1,5 @@
 // Migration: add paidDate, balanceDue to Invoice; OVERDUE to invoice_payment_status enum
-import { PrismaClient } from "@prisma/client";
+const { PrismaClient } = require("@prisma/client");
 const prisma = new PrismaClient();
 
 async function main() {
@@ -19,4 +19,6 @@ async function main() {
   console.log("Migration add-invoice-payment-fields complete.");
 }
 
-main().catch(console.error).finally(() => prisma.$disconnect());
+main()
+  .catch((e) => { console.error(e.message); process.exit(1); })
+  .finally(() => prisma.$disconnect());
