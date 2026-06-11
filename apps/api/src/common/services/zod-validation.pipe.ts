@@ -18,7 +18,10 @@ import { ZodSchema } from "zod";
 export class ZodValidationPipe<T> implements PipeTransform {
   constructor(private readonly schema: ZodSchema<T>) {}
 
-  transform(value: unknown, _metadata: ArgumentMetadata): T {
+  transform(value: unknown, metadata: ArgumentMetadata): T {
+    // Only validate the request body — skip other params (ctx, query, param)
+    // when this pipe is applied at method level via @UsePipes()
+    if (metadata.type !== "body") return value as T;
     return this.schema.parse(value);
   }
 }
