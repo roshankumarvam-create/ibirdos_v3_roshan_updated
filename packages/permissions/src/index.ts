@@ -105,6 +105,12 @@ export const PERMISSIONS = [
   "inventory.adjust",
   "inventory.transfer",
 
+  // Daily Sales
+  "daily_sales.read",
+  "daily_sales.create",
+  "daily_sales.update",
+  "daily_sales.delete",
+
   // Audit
   "audit.read",
 ] as const;
@@ -150,6 +156,8 @@ export const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
     // Analytics
     "analytics.read",   // operational analytics; finance still owner-only
     "insight.read", "insight.action",
+    // Daily Sales
+    "daily_sales.read", "daily_sales.create", "daily_sales.update", "daily_sales.delete",
     // Billing — managers can READ but not change plan
     "billing.read",
   ]),

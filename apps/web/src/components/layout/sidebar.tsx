@@ -12,8 +12,9 @@ const NAV_ITEMS: Array<{ href: string; label: string; permission?: string }> = [
   { href: "/recipes",    label: "Recipes",      permission: "recipe.read" },
   { href: "/ingredients", label: "Ingredients", permission: "ingredient.read" },
   { href: "/inventory",  label: "Inventory",    permission: "inventory.read" },
-  { href: "/invoices",   label: "Invoices",     permission: "invoice.read" },
-  { href: "/waste-yield", label: "Waste & yield", permission: "waste.read" },
+  { href: "/invoices",     label: "Invoices",     permission: "invoice.read" },
+  { href: "/daily-sales",  label: "Daily Sales",  permission: "daily_sales.read" },
+  { href: "/waste-yield",  label: "Waste & yield", permission: "waste.read" },
   { href: "/vendors",    label: "Vendors",      permission: "vendor.read" },
   { href: "/billing",    label: "Billing",      permission: "billing.read" },
 ];
