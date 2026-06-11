@@ -37,7 +37,20 @@ async function bootstrap() {
   // ---- Security middleware ----
   app.use(
     helmet({
-      contentSecurityPolicy: env.NODE_ENV === "production" ? undefined : false,
+      contentSecurityPolicy: env.NODE_ENV === "production" ? {
+        directives: {
+          defaultSrc: ["'self'"],
+          formAction: ["'self'", env.WEB_URL, env.API_URL],
+          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", "data:", "blob:", "https:"],
+          fontSrc: ["'self'", "data:", "https:"],
+          connectSrc: ["'self'", env.WEB_URL, env.API_URL, "https://*.r2.cloudflarestorage.com", "wss://*.ibirdos.com"],
+          frameSrc: ["'self'"],
+          frameAncestors: ["'none'"],
+          baseUri: ["'self'"],
+        },
+      } : false,
       crossOriginEmbedderPolicy: false,
     }),
   );
