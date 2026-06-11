@@ -12,6 +12,7 @@ import { UploadsService } from "../uploads/uploads.service";
 import { InventoryService } from "../inventory/inventory.service";
 import { toCanonical } from "@ibirdos/types";
 import { REDIS_CLIENT } from "../common/constants/tokens";
+import { detectVendorPriceChange } from "../insights/rules/vendor-price-change.rule";
 
 const log = moduleLogger("InvoicesService");
 
@@ -233,15 +234,23 @@ export class InvoicesService {
         const name = cleanIngredientName(line.descriptionRaw);
         const { dimension, canonicalUnit, preferredDisplayUnit } = inferDimension(line.packUnit ?? line.unit);
 
-        const existing = await prisma.ingredient.findFirst({
-          where: { workspaceId: ctx.workspaceId, name, deletedAt: null },
-          select: { id: true },
-        });
+        // Try fuzzy match via the match() service first (confidence >= 0.85 threshold)
+        let autoCreatedUnmatched = false;
+        try {
+          const matches = await this.ingredients.match(ctx, {
+            text: name,
+            vendorId: invoice.vendorId ?? undefined,
+          });
+          const topMatch = matches[0];
+          if (topMatch && topMatch.matchType !== "none" && topMatch.confidence >= 0.85) {
+            ingredientId = topMatch.ingredientId;
+            matched++;
+          }
+        } catch (matchErr: any) {
+          log.warn({ lineId: line.id, name, err: matchErr.message }, "ingredient match failed — falling through to create");
+        }
 
-        if (existing) {
-          ingredientId = existing.id;
-          matched++;
-        } else {
+        if (!ingredientId) {
           try {
             const ing = await this.ingredients.create(ctx, {
               name,
@@ -252,11 +261,19 @@ export class InvoicesService {
               vendorId: invoice.vendorId ?? undefined,
             });
             ingredientId = ing.id;
+            autoCreatedUnmatched = true;
             created++;
           } catch (err: any) {
             log.warn({ lineId: line.id, name, err: err.message }, "auto-create ingredient failed -- skipping line");
             continue;
           }
+        }
+
+        if (autoCreatedUnmatched) {
+          await prisma.ingredient.update({
+            where: { id: ingredientId },
+            data: { matchStatus: "UNMATCHED" },
+          }).catch((err: any) => log.warn({ ingredientId, err: err.message }, "matchStatus writeback failed"));
         }
 
         // Write back committedIngredientId so the recost-by-invoice path can also find it
@@ -272,7 +289,7 @@ export class InvoicesService {
       // Without this, we'd store cents-per-case instead of cents-per-gram.
       const ingMeta = await prisma.ingredient.findUnique({
         where: { id: ingredientId },
-        select: { dimension: true, densityGPerMl: true },
+        select: { dimension: true, densityGPerMl: true, currentCostMicrocents: true, name: true },
       }).catch(() => null);
 
       const totalUnitQty = line.packSize
@@ -302,6 +319,7 @@ export class InvoicesService {
         "[invoices.service] updating ingredient price",
       );
 
+      const previousMicrocents = ingMeta?.currentCostMicrocents ?? null;
       await this.ingredients.updatePrice(ctx, ingredientId, {
         pricePerCanonicalCents,
         source: "INVOICE",
@@ -310,6 +328,15 @@ export class InvoicesService {
       });
       updatedIngredientIds.add(ingredientId);
       priceUpdates++;
+
+      const newMicrocents = BigInt(Math.round(pricePerCanonicalCents * 1000));
+      detectVendorPriceChange(ctx, {
+        ingredientId,
+        vendorId: invoice.vendorId ?? null,
+        ingredientName: ingMeta?.name ?? ingredientId,
+        previousMicrocents,
+        newMicrocents,
+      }).catch((err: any) => log.warn({ ingredientId, err: err.message }, "vendor-price-change detection failed"));
 
       try {
         await this.inventory.recordTransaction(ctx, {

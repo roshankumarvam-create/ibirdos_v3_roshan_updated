@@ -146,6 +146,7 @@ model Ingredient {
   defaultYieldPct           Decimal                  @default(100) @map("default_yield_pct") @db.Decimal(5, 2)
   vendorItemCode            String?                  @map("vendor_item_code")
   photoUrl                  String?                  @map("photo_url")
+  matchStatus               String?                  @map("match_status")
   notes                     String?
   createdAt                 DateTime                 @default(now()) @map("created_at")
   updatedAt                 DateTime                 @updatedAt @map("updated_at")
@@ -1073,6 +1074,7 @@ enum SubscriptionStatus {
 
 enum InsightKind {
   PRICE_SPIKE
+  VENDOR_PRICE_CHANGE
   MARGIN_EROSION
   WASTE_PATTERN
   REORDER_RECOMMENDATION
