@@ -139,4 +139,120 @@ export class YieldWasteService {
       include: { ingredient: { select: { id: true, name: true } } },
     });
   }
+
+  /** Per-ingredient trim yield rates (avg, min, max over the window). */
+  async getTrimYieldRate(ctx: TenantContext, opts: { sinceDays?: number; ingredientId?: string }) {
+    const { workspaceId } = ctx;
+    const where: any = { workspaceId };
+    if (opts.ingredientId) where.ingredientId = opts.ingredientId;
+    if (opts.sinceDays) where.observedAt = { gte: new Date(Date.now() - opts.sinceDays * 86400_000) };
+
+    const entries = await prisma.yieldEntry.findMany({
+      where,
+      select: { ingredientId: true, yieldPct: true, ingredient: { select: { name: true, defaultYieldPct: true } } },
+    });
+
+    const grouped = new Map<string, { name: string; defaultYieldPct: number; values: number[] }>();
+    for (const e of entries) {
+      const existing = grouped.get(e.ingredientId) ?? {
+        name: e.ingredient.name,
+        defaultYieldPct: Number(e.ingredient.defaultYieldPct),
+        values: [],
+      };
+      existing.values.push(Number(e.yieldPct));
+      grouped.set(e.ingredientId, existing);
+    }
+
+    return Array.from(grouped.entries()).map(([ingredientId, g]) => {
+      const avg = g.values.reduce((s, v) => s + v, 0) / g.values.length;
+      return {
+        ingredientId,
+        ingredientName: g.name,
+        defaultYieldPct: parseFloat(g.defaultYieldPct.toFixed(2)),
+        avgYieldPct: parseFloat(avg.toFixed(2)),
+        minYieldPct: parseFloat(Math.min(...g.values).toFixed(2)),
+        maxYieldPct: parseFloat(Math.max(...g.values).toFixed(2)),
+        observations: g.values.length,
+      };
+    }).sort((a, b) => a.avgYieldPct - b.avgYieldPct);
+  }
+
+  /** Waste by reason with cost totals vs a target threshold. */
+  async getWasteTargetReport(ctx: TenantContext, opts: { sinceDays?: number; targetCostCents?: number }) {
+    const { workspaceId } = ctx;
+    const since = opts.sinceDays
+      ? new Date(Date.now() - opts.sinceDays * 86400_000)
+      : new Date(Date.now() - 30 * 86400_000);
+
+    const entries = await prisma.wasteEntry.findMany({
+      where: { workspaceId, occurredAt: { gte: since } },
+      select: { reason: true, costMicrocents: true, quantityCanonical: true },
+    });
+
+    const byReason = new Map<string, { costMicrocents: bigint; count: number; qtyCanonical: number }>();
+    for (const e of entries) {
+      const existing = byReason.get(e.reason) ?? { costMicrocents: 0n, count: 0, qtyCanonical: 0 };
+      existing.costMicrocents += e.costMicrocents;
+      existing.count++;
+      existing.qtyCanonical += Number(e.quantityCanonical);
+      byReason.set(e.reason, existing);
+    }
+
+    const totalCostCents = Array.from(byReason.values()).reduce((s, v) => s + Number(v.costMicrocents) / 1000, 0);
+    const targetCostCents = opts.targetCostCents ?? null;
+
+    return {
+      totalCostCents: parseFloat(totalCostCents.toFixed(2)),
+      targetCostCents,
+      overTarget: targetCostCents != null ? totalCostCents > targetCostCents : null,
+      byReason: Array.from(byReason.entries()).map(([reason, v]) => ({
+        reason,
+        count: v.count,
+        costCents: parseFloat((Number(v.costMicrocents) / 1000).toFixed(2)),
+        qtyCanonical: parseFloat(v.qtyCanonical.toFixed(3)),
+      })).sort((a, b) => b.costCents - a.costCents),
+    };
+  }
+
+  /** Waste cost attributed to specific events. */
+  async getEventWasteImpact(ctx: TenantContext, opts: { eventId?: string; sinceDays?: number }) {
+    const { workspaceId } = ctx;
+    const where: any = { workspaceId, eventId: { not: null } };
+    if (opts.eventId) where.eventId = opts.eventId;
+    if (opts.sinceDays) where.occurredAt = { gte: new Date(Date.now() - opts.sinceDays * 86400_000) };
+
+    const entries = await prisma.wasteEntry.findMany({
+      where,
+      select: { eventId: true, costMicrocents: true },
+    });
+
+    const byEvent = new Map<string, { costMicrocents: bigint; count: number }>();
+    for (const e of entries) {
+      if (!e.eventId) continue;
+      const existing = byEvent.get(e.eventId) ?? { costMicrocents: 0n, count: 0 };
+      existing.costMicrocents += e.costMicrocents;
+      existing.count++;
+      byEvent.set(e.eventId, existing);
+    }
+
+    if (byEvent.size === 0) return [];
+
+    const eventIds = Array.from(byEvent.keys());
+    const events = await prisma.event.findMany({
+      where: { workspaceId, id: { in: eventIds } },
+      select: { id: true, name: true, startsAt: true },
+    });
+    const eventMap = new Map(events.map((e) => [e.id, e]));
+
+    return Array.from(byEvent.entries()).map(([eventId, v]) => {
+      const ev = eventMap.get(eventId);
+      return {
+        eventId,
+        eventName: ev?.name ?? "Unknown event",
+        startsAt: ev?.startsAt ?? null,
+        costCents: parseFloat((Number(v.costMicrocents) / 1000).toFixed(2)),
+        wasteCount: v.count,
+      };
+    }).sort((a, b) => b.costCents - a.costCents);
+  }
 }

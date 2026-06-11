@@ -50,4 +50,28 @@ export class YieldWasteController {
       sinceDays: q.sinceDays ? Number(q.sinceDays) : undefined,
     }).then((items) => ok({ items }));
   }
+
+  @Get("yield/trim-rates") @RequirePermission("yield.read")
+  getTrimYieldRate(@CurrentCtx() ctx: TenantContext, @Query() q: any): Promise<any> {
+    return this.svc.getTrimYieldRate(ctx, {
+      sinceDays: q.sinceDays ? Number(q.sinceDays) : undefined,
+      ingredientId: q.ingredientId,
+    });
+  }
+
+  @Get("waste/target-report") @RequirePermission("waste.read")
+  getWasteTargetReport(@CurrentCtx() ctx: TenantContext, @Query() q: any): Promise<any> {
+    return this.svc.getWasteTargetReport(ctx, {
+      sinceDays: q.sinceDays ? Number(q.sinceDays) : undefined,
+      targetCostCents: q.targetCostCents ? Number(q.targetCostCents) : undefined,
+    });
+  }
+
+  @Get("waste/event-impact") @RequirePermission("waste.read")
+  getEventWasteImpact(@CurrentCtx() ctx: TenantContext, @Query() q: any): Promise<any> {
+    return this.svc.getEventWasteImpact(ctx, {
+      eventId: q.eventId,
+      sinceDays: q.sinceDays ? Number(q.sinceDays) : undefined,
+    });
+  }
 }

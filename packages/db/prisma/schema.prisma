@@ -223,6 +223,8 @@ model Invoice {
   invoiceNumber   String?                @map("invoice_number")
   invoiceDate     DateTime?              @map("invoice_date")
   dueDate         DateTime?              @map("due_date")
+  paidDate        DateTime?              @map("paid_date")
+  balanceDue      Decimal                @default(0) @map("balance_due")
   subtotalCents   Int?                   @map("subtotal_cents")
   taxCents        Int?                   @map("tax_cents")
   totalCents      Int?                   @map("total_cents")
@@ -946,6 +948,7 @@ enum InvoicePaymentStatus {
   UNPAID
   PARTIAL
   PAID
+  OVERDUE
 
   @@map("invoice_payment_status")
 }
