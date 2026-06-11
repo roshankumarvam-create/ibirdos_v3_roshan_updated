@@ -24,7 +24,7 @@ export function middleware(req: NextRequest) {
     "font-src 'self' data:",
     "frame-ancestors 'none'",
     "base-uri 'self'",
-    "form-action 'self'",
+    "form-action 'self' https://workspace.ibirdos.com https://api.ibirdos.com",
   ].join("; ");
 
   res.headers.set("Content-Security-Policy", csp);
