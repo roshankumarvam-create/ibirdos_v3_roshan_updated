@@ -86,7 +86,7 @@ function LoginPageInner() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-sm focus:outline-none focus:border-amber-500/60 focus:bg-neutral-900/50 transition"
-              placeholder="chef_001"
+              placeholder="username"
             />
           </div>
 

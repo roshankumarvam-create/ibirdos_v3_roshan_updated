@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import { can } from "@ibirdos/permissions";
 import type { Role } from "@ibirdos/permissions";
@@ -31,7 +33,6 @@ export function Sidebar({
   workspaceSlug: string; workspaceName: string; role: Role; username: string;
 }) {
   const settingsItems = SETTINGS_ITEMS.filter(item => item.roles.includes(role));
-
   return (
     <aside className="w-60 shrink-0 border-r border-bg-border bg-bg-surface flex flex-col h-screen sticky top-0">
       <div className="px-5 py-5 border-b border-bg-border">
@@ -51,7 +52,6 @@ export function Sidebar({
             </Link>
           );
         })}
-
         {settingsItems.length > 0 && (
           <div className="pt-3">
             <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-text-tertiary">Settings</div>
@@ -72,11 +72,22 @@ export function Sidebar({
           <div className="text-text-tertiary">{username}</div>
           <div className="text-[10px] uppercase tracking-wider text-text-tertiary mt-0.5">{role}</div>
         </div>
-        <form action="/api/internal/logout" method="POST">
-          <button className="text-xs text-text-tertiary hover:text-danger transition-colors w-full text-left">
-            Sign out
-          </button>
-        </form>
+        <button
+          onClick={async () => {
+            try {
+              await fetch("/api/internal/logout", {
+                method: "POST",
+                credentials: "include",
+              });
+            } catch {
+              /* ignore network errors */
+            }
+            window.location.href = "/login";
+          }}
+          className="text-xs text-text-tertiary hover:text-danger transition-colors w-full text-left"
+        >
+          Sign out
+        </button>
       </div>
     </aside>
   );
