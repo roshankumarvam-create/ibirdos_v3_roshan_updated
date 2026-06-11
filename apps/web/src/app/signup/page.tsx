@@ -136,3 +136,76 @@ export default function SignupPage() {
 
           <Field label="Password" hint="At least 12 characters" required>
             <input
+              type="password"
+              autoComplete="new-password"
+              value={form.ownerPassword}
+              onChange={(e) => update("ownerPassword", e.target.value)}
+              required
+              minLength={12}
+              className={input}
+            />
+          </Field>
+
+          <Field label="Email (optional)">
+            <input
+              type="email"
+              value={form.ownerEmail}
+              onChange={(e) => update("ownerEmail", e.target.value)}
+              placeholder="you@example.com"
+              className={input}
+            />
+          </Field>
+
+          {error && (
+            <div className="rounded-md border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
+              {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full rounded-md bg-amber-500 hover:bg-amber-400 text-neutral-950 font-medium px-3 py-2 text-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? "Creating workspace…" : "Create workspace"}
+          </button>
+        </form>
+
+        <p className="mt-6 text-center text-xs text-neutral-500">
+          Already have a workspace?{" "}
+          <Link href="/login" className="text-amber-500 hover:text-amber-400">
+            Sign in
+          </Link>
+        </p>
+      </div>
+    </main>
+  );
+}
+
+const input =
+  "w-full rounded-md bg-neutral-900 border border-neutral-800 px-3 py-2 text-sm focus:outline-none focus:border-amber-500/60 transition";
+
+function Field({
+  label,
+  hint,
+  required,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1.5">
+        <label className="block text-xs uppercase tracking-wider text-neutral-400">
+          {label}
+          {required && <span className="text-amber-500 ml-1">*</span>}
+        </label>
+        {hint && <span className="text-xs text-neutral-600">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
