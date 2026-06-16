@@ -133,6 +133,19 @@ export default async function EventDetailPage({
   );
   const shortItems = requirements.filter((r) => r.isShort);
 
+  // Live food cost from menu items (used when computedFoodCostCents is not yet set)
+  const liveFoodCostCents = event.menuItems.reduce((sum, mi) => {
+    const costMicrocents = mi.recipe.cachedCostMicrocents ? Number(mi.recipe.cachedCostMicrocents) : 0;
+    const portionsYielded = mi.recipe.portionsYielded ?? 1;
+    return sum + Math.round((costMicrocents / 1000) / portionsYielded * mi.portions);
+  }, 0);
+  const foodCostCents = event.computedFoodCostCents ?? liveFoodCostCents;
+
+  // Profit = revenue - food cost - labor
+  const revenueCents = event.quotedPriceCents ?? 0;
+  const profitCents = revenueCents - foodCostCents - totalLaborCents;
+  const marginPct = revenueCents > 0 ? (profitCents / revenueCents) * 100 : null;
+
   const prepTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "PREP");
   const serviceTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "SERVICE");
 
@@ -201,21 +214,33 @@ export default async function EventDetailPage({
       )}
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <KpiCard label="Guests" value={event.guestCount.toString()} />
-        <KpiCard label="Revenue" value={formatCents(event.quotedPriceCents)} />
+        <KpiCard label="Revenue" value={formatCents(revenueCents) } />
         <KpiCard
           label={event.frozenAt ? "Food cost (frozen)" : "Food cost"}
-          value={formatCents(event.computedFoodCostCents)}
-          {...(event.quotedPriceCents && event.computedFoodCostCents
-            ? { sub: `${formatPct((event.computedFoodCostCents / event.quotedPriceCents) * 100)} of revenue` }
+          value={formatCents(foodCostCents)}
+          {...(revenueCents && foodCostCents
+            ? { sub: `${formatPct((foodCostCents / revenueCents) * 100)} of revenue` }
             : {})}
         />
         <KpiCard
-          label="Margin"
-          value={formatPct(event.computedMarginPct)}
-          tone={event.computedMarginPct != null
-            ? event.computedMarginPct < 25 ? "danger" : event.computedMarginPct < 45 ? "warning" : "default"
+          label="Labor cost"
+          value={formatCents(totalLaborCents)}
+          {...(revenueCents && totalLaborCents > 0
+            ? { sub: `${formatPct((totalLaborCents / revenueCents) * 100)} of revenue` }
+            : {})}
+        />
+        <KpiCard
+          label="Profit"
+          value={formatCents(profitCents)}
+          tone={profitCents < 0 ? "danger" : profitCents < revenueCents * 0.2 ? "warning" : "default"}
+        />
+        <KpiCard
+          label="Margin %"
+          value={marginPct != null ? formatPct(marginPct) : "—"}
+          tone={marginPct != null
+            ? marginPct < 25 ? "danger" : marginPct < 45 ? "warning" : "default"
             : "default"}
         />
       </div>

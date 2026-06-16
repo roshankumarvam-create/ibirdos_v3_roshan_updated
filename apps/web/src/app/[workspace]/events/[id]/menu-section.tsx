@@ -291,20 +291,24 @@ export function MenuSection({
 
 function InlineNumberInput({ initial, onSave, onCancel }: { initial: number; onSave: (v: number) => void; onCancel: () => void }) {
   const [val, setVal] = useState(String(initial));
+  const commit = () => { const n = parseInt(val, 10); if (n > 0) onSave(n); else onCancel(); };
   return (
-    <input
-      type="number"
-      min={1}
-      className="w-16 rounded border border-bg-border bg-bg-surface px-1 py-0.5 text-right text-sm tabular-nums text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-500"
-      value={val}
-      onChange={(e) => setVal(e.target.value)}
-      onBlur={() => { const n = parseInt(val, 10); if (n > 0) onSave(n); else onCancel(); }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") { const n = parseInt(val, 10); if (n > 0) onSave(n); else onCancel(); }
-        if (e.key === "Escape") onCancel();
-      }}
-      autoFocus
-    />
+    <div className="flex items-center gap-1 justify-end">
+      <input
+        type="number"
+        min={1}
+        className="w-16 rounded border border-bg-border bg-bg-surface px-1 py-0.5 text-right text-sm tabular-nums text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-500"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") onCancel();
+        }}
+        autoFocus
+      />
+      <button onClick={commit} className="text-[10px] text-accent-400 hover:underline whitespace-nowrap">Save</button>
+      <button onClick={onCancel} className="text-[10px] text-text-tertiary hover:underline">✕</button>
+    </div>
   );
 }
 

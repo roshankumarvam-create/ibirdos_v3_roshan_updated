@@ -79,11 +79,12 @@ function MarginBadge({ pct }: { pct: number | null }) {
 // ── Typeahead combobox ────────────────────────────────────────────────────────
 
 function RecipeCombobox({
-  allRecipes, loaded, onSelect,
+  allRecipes, loaded, onSelect, workspace,
 }: {
   allRecipes: AvailableRecipe[];
   loaded: boolean;
   onSelect: (r: AvailableRecipe) => void;
+  workspace: string;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -151,7 +152,7 @@ function RecipeCombobox({
           {filtered.length === 0 ? (
             <div className="px-3 py-3 text-xs text-text-tertiary">
               No matching recipes —{" "}
-              <a href="./../../recipes/new" className="text-accent-400 hover:underline">
+              <a href={`/${workspace}/recipes/new`} className="text-accent-400 hover:underline">
                 create one first
               </a>
             </div>
@@ -190,10 +191,12 @@ function AddRecipeModal({
   onClose,
   onAdd,
   guestCount,
+  workspace,
 }: {
   onClose: () => void;
   onAdd: (item: LocalMenuItem) => void;
   guestCount: number;
+  workspace: string;
 }) {
   const [allRecipes, setAllRecipes] = useState<AvailableRecipe[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -255,6 +258,7 @@ function AddRecipeModal({
               allRecipes={allRecipes}
               loaded={loaded}
               onSelect={(r) => { setSelectedRecipe(r); setPortions(String(guestCount)); }}
+              workspace={workspace}
             />
           </div>
 
@@ -785,6 +789,7 @@ export default function NewEventPage() {
       {showAddModal && (
         <AddRecipeModal
           guestCount={parseInt(guestCount, 10) || 1}
+          workspace={workspace}
           onClose={() => setShowAddModal(false)}
           onAdd={(item) => {
             setMenuItems((prev) => [...prev, item]);
