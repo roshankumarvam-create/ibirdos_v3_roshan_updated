@@ -127,9 +127,14 @@ function InventoryContent() {
               : "all stock levels OK"}
           </p>
         </div>
-        <Link href={`/${workspace}/inventory/adjust` as any}>
-          <Button>+ Manual adjustment</Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link href={`/${workspace}/inventory/import` as any}>
+            <Button variant="secondary">Import CSV/Excel</Button>
+          </Link>
+          <Link href={`/${workspace}/inventory/adjust` as any}>
+            <Button>+ Manual adjustment</Button>
+          </Link>
+        </div>
       </header>
 
       {/* Low-stock alerts */}

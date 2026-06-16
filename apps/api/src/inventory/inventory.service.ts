@@ -1,4 +1,5 @@
 ﻿import { Injectable, BadRequestException, NotFoundException, Inject } from "@nestjs/common";
+import * as xlsx from "xlsx";
 // Decimal is reached via the Prisma namespace (avoids the
 // "@prisma/client/runtime/library" subpath, which some bundler
 // configurations fail to resolve under exports-map restrictions).
@@ -158,6 +159,157 @@ export class InventoryService {
       sourceKind: 'Manual',
       notes: `Reversed txn ${transactionId.slice(0, 8)}`,
     });
+  }
+
+  // -----------------------------------------------------------------
+  // CSV / Excel import
+  // -----------------------------------------------------------------
+
+  /**
+   * Import inventory count from a CSV/Excel file.
+   *
+   * Expected columns (case-insensitive):
+   *   Ingredient Name | Quantity | Unit | Unit Cost (optional) | Notes
+   *
+   * Each row records a RECEIVE transaction. If Unit Cost is provided,
+   * the ingredient's currentCostMicrocents is updated and an
+   * ingredient.cost_changed event is published so BullMQ triggers
+   * recipe recosts automatically.
+   */
+  async importCsv(
+    ctx: TenantContext,
+    input: { filename: string; contentBase64: string },
+  ) {
+    const buf = Buffer.from(input.contentBase64, "base64");
+    const wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+    const sheetName = wb.SheetNames[0];
+    const ws = sheetName ? wb.Sheets[sheetName] : undefined;
+    if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
+
+    const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+    if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+
+    const col = (row: Record<string, unknown>, ...names: string[]): string => {
+      for (const n of names) {
+        const key = Object.keys(row).find((k) => k.trim().toLowerCase() === n.toLowerCase());
+        if (key !== undefined) return String(row[key] ?? "").trim();
+      }
+      return "";
+    };
+
+    // Load existing ingredients for matching
+    const existing = await prisma.ingredient.findMany({
+      where: { workspaceId: ctx.workspaceId, deletedAt: null },
+      select: { id: true, name: true, dimension: true, canonicalUnit: true, densityGPerMl: true, currentCostMicrocents: true },
+    });
+    const ingByName = new Map<string, typeof existing[number]>(existing.map((i) => [i.name.toLowerCase(), i]));
+
+    let rowsImported = 0;
+    let newIngredientCount = 0;
+    const recostedIngIds = new Set<string>();
+
+    for (const row of rows) {
+      const ingName = col(row, "ingredient name", "ingredient", "item", "name");
+      if (!ingName) continue;
+      const qty = parseFloat(col(row, "quantity", "qty", "amount", "count")) || 0;
+      if (qty <= 0) continue;
+      const unit = col(row, "unit", "uom") || "each";
+      const notes = col(row, "notes", "note") || undefined;
+      const unitCostStr = col(row, "unit cost", "cost per unit", "cost", "price");
+      const unitCostDollars = unitCostStr ? parseFloat(unitCostStr.replace(/[^0-9.]/g, "")) : NaN;
+
+      let ing = ingByName.get(ingName.toLowerCase());
+      if (!ing) {
+        const created = await prisma.ingredient.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            createdById: ctx.userId,
+            name: ingName,
+            dimension: "MASS",
+            canonicalUnit: "g",
+            preferredDisplayUnit: unit,
+          },
+          select: { id: true, name: true, dimension: true, canonicalUnit: true, densityGPerMl: true, currentCostMicrocents: true },
+        });
+        ing = created;
+        ingByName.set(ingName.toLowerCase(), ing);
+        newIngredientCount++;
+      }
+
+      // Convert to canonical quantity (fall back to raw qty if unit unknown)
+      let canonicalQty: number;
+      try {
+        canonicalQty = toCanonical(qty, unit, {
+          dimension: ing.dimension as any,
+          densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
+        });
+      } catch {
+        canonicalQty = qty;
+      }
+
+      // Record RECEIVE transaction via raw prisma (avoids negative-stock guard for initial counts)
+      try {
+        const fresh = await prisma.ingredient.findFirst({ where: { id: ing.id, workspaceId: ctx.workspaceId } });
+        if (!fresh) continue;
+        const newBalance = new Decimal(fresh.currentStockCanonical).plus(new Decimal(canonicalQty));
+        const costMicrocentsVal = (!isNaN(unitCostDollars) && unitCostDollars > 0)
+          ? BigInt(Math.round(unitCostDollars * 100 * 1000))
+          : null;
+        await prisma.$transaction([
+          prisma.inventoryTransaction.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              ingredientId: ing.id,
+              kind: "RECEIVE",
+              quantityCanonical: new Decimal(canonicalQty),
+              balanceAfterCanonical: newBalance,
+              costMicrocents: costMicrocentsVal,
+              sourceKind: "CSVImport",
+              sourceRef: input.filename,
+              notes: notes ?? null,
+              createdById: ctx.userId,
+            },
+          }),
+          prisma.ingredient.update({
+            where: { id: ing.id },
+            data: { currentStockCanonical: newBalance },
+          }),
+        ]);
+        rowsImported++;
+
+        // If unit cost provided, update price and trigger recipe recost via pub/sub
+        if (!isNaN(unitCostDollars) && unitCostDollars > 0) {
+          const newMicrocents = BigInt(Math.round(unitCostDollars * 100 * 1000));
+          const oldMicrocents = ing.currentCostMicrocents;
+          await prisma.ingredient.update({
+            where: { id: ing.id },
+            data: { currentCostMicrocents: newMicrocents },
+          });
+          if (!recostedIngIds.has(ing.id)) {
+            recostedIngIds.add(ing.id);
+            await this.redis.publish("ingredient.cost_changed", JSON.stringify({
+              workspaceId: ctx.workspaceId,
+              ingredientId: ing.id,
+              ingredientName: ing.name,
+              fromMicrocents: oldMicrocents?.toString() ?? null,
+              toMicrocents: newMicrocents.toString(),
+              sourceRef: `csv-import:${input.filename}`,
+            })).catch(() => {});
+          }
+        }
+      } catch {
+        // Skip failing rows; don't abort the entire import
+      }
+    }
+
+    await writeAudit(ctx, {
+      action: "inventory.csv_imported",
+      entityType: "Ingredient",
+      entityId: "",
+      metadata: { rowsImported, newIngredientCount, recostsTriggered: recostedIngIds.size, filename: input.filename },
+    });
+
+    return { rowsImported, newIngredientCount, recostsTriggered: recostedIngIds.size };
   }
 
   /** Manual adjustment helper — wraps recordTransaction with friendlier inputs. */

@@ -8,6 +8,11 @@ import { RequirePermission } from "../common/decorators/require-permission.decor
 import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 import { InventoryService } from "./inventory.service";
 
+const ImportCsvSchema = z.object({
+  filename: z.string().min(1),
+  contentBase64: z.string().min(1),
+});
+
 const AdjustSchema = z.object({
   quantity: z.number(),  // signed; negative = remove
   unit: z.string().min(1).max(16),
@@ -35,6 +40,12 @@ export class InventoryController {
   adjust(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
          @Body(new ZodValidationPipe(AdjustSchema)) body: z.infer<typeof AdjustSchema>): Promise<any> {
     return this.svc.adjust(ctx, id, body).then(ok);
+  }
+
+  @Post("import-csv") @RequirePermission("inventory.adjust")
+  importCsv(@CurrentCtx() ctx: TenantContext,
+            @Body(new ZodValidationPipe(ImportCsvSchema)) body: z.infer<typeof ImportCsvSchema>): Promise<any> {
+    return this.svc.importCsv(ctx, body).then(ok);
   }
 
   @Post("transactions/:id/reverse") @RequirePermission("inventory.adjust")
