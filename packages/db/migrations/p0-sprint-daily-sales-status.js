@@ -181,9 +181,32 @@ async function main() {
   console.log("  ✓ Verified: daily_sales.status column exists");
 
   // ─────────────────────────────────────────────────────────────────────────
-  // STEP 4 — Sanity-check existing rows
+  // STEP 4 — ADD VALUE 'VENDOR_PRICE_CHANGE' to insight_kind
   // ─────────────────────────────────────────────────────────────────────────
-  header("Step 4: Sanity check — existing daily_sales rows");
+  header("Step 4: ALTER TYPE insight_kind ADD VALUE 'VENDOR_PRICE_CHANGE'");
+
+  if (!(await typeExists("insight_kind"))) {
+    throw new Error("SAFETY STOP: insight_kind enum does not exist — expected it in production schema. Aborting.");
+  }
+
+  if (await enumValueExists("insight_kind", "VENDOR_PRICE_CHANGE")) {
+    console.log("  — insight_kind.'VENDOR_PRICE_CHANGE' already exists, skipping");
+    skipped++;
+  } else {
+    await prisma.$executeRawUnsafe(`ALTER TYPE insight_kind ADD VALUE 'VENDOR_PRICE_CHANGE'`);
+    console.log("  ✓ ALTER TYPE insight_kind ADD VALUE 'VENDOR_PRICE_CHANGE'");
+    applied++;
+  }
+
+  if (!(await enumValueExists("insight_kind", "VENDOR_PRICE_CHANGE"))) {
+    throw new Error("VERIFY FAILED: insight_kind missing 'VENDOR_PRICE_CHANGE' after ADD VALUE");
+  }
+  console.log("  ✓ Verified: insight_kind contains 'VENDOR_PRICE_CHANGE'");
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // STEP 5 — Sanity-check existing rows
+  // ─────────────────────────────────────────────────────────────────────────
+  header("Step 5: Sanity check — existing daily_sales rows");
 
   const rows = await prisma.$queryRawUnsafe(
     `SELECT id, sale_date::text, status FROM daily_sales ORDER BY entered_at LIMIT 10`,
@@ -202,7 +225,7 @@ async function main() {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // STEP 5 — Final report
+  // STEP 6 — Final report
   // ─────────────────────────────────────────────────────────────────────────
   header("Migration complete");
   console.log(`  Applied : ${applied}`);
