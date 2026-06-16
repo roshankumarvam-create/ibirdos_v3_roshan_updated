@@ -181,7 +181,16 @@ export class InventoryService {
     input: { filename: string; contentBase64: string },
   ) {
     const buf = Buffer.from(input.contentBase64, "base64");
-    const wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+    let wb: xlsx.WorkBook;
+    try {
+      wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+    } catch (xlsxErr: any) {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: `Could not parse file: ${xlsxErr?.message ?? "unknown error"}`,
+        hint: "Make sure the file is a valid .xlsx, .xls, or .csv and is not password-protected.",
+      });
+    }
     const sheetName = wb.SheetNames[0];
     const ws = sheetName ? wb.Sheets[sheetName] : undefined;
     if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
@@ -247,13 +256,28 @@ export class InventoryService {
         canonicalQty = qty;
       }
 
+      // Convert CSV unit cost ($/CSV-unit) → microcents per canonical unit
+      // e.g. $4.89/gal ÷ 3785.41 ml/gal = 129 microcents/ml
+      let canonicalUnitsPerCsvUnit = 1;
+      if (!isNaN(unitCostDollars) && unitCostDollars > 0) {
+        try {
+          canonicalUnitsPerCsvUnit = toCanonical(1, unit, {
+            dimension: ing.dimension as any,
+            densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
+          });
+        } catch {
+          canonicalUnitsPerCsvUnit = 1; // COUNT or unknown unit
+        }
+      }
+
       // Record RECEIVE transaction via raw prisma (avoids negative-stock guard for initial counts)
       try {
         const fresh = await prisma.ingredient.findFirst({ where: { id: ing.id, workspaceId: ctx.workspaceId } });
         if (!fresh) continue;
         const newBalance = new Decimal(fresh.currentStockCanonical).plus(new Decimal(canonicalQty));
+        // Total cost of this receipt = qty (CSV units) × unit cost
         const costMicrocentsVal = (!isNaN(unitCostDollars) && unitCostDollars > 0)
-          ? BigInt(Math.round(unitCostDollars * 100 * 1000))
+          ? BigInt(Math.round(qty * unitCostDollars * 100 * 1000))
           : null;
         await prisma.$transaction([
           prisma.inventoryTransaction.create({
@@ -277,9 +301,9 @@ export class InventoryService {
         ]);
         rowsImported++;
 
-        // If unit cost provided, update price and trigger recipe recost via pub/sub
+        // If unit cost provided, update price (microcents per canonical unit) and trigger recipe recost
         if (!isNaN(unitCostDollars) && unitCostDollars > 0) {
-          const newMicrocents = BigInt(Math.round(unitCostDollars * 100 * 1000));
+          const newMicrocents = BigInt(Math.round((unitCostDollars * 100 * 1000) / canonicalUnitsPerCsvUnit));
           const oldMicrocents = ing.currentCostMicrocents;
           await prisma.ingredient.update({
             where: { id: ing.id },
