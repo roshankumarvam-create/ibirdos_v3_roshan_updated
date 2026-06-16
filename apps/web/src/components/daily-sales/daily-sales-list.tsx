@@ -4,17 +4,27 @@ import { api } from "@/lib/api";
 import { Skeleton } from "@/components/common/skeleton";
 import { Badge } from "@ibirdos/ui";
 
+type DailySalesStatus = "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
+
 interface SalesRow {
   id: string;
   saleDate: string;
   grossSales: string | number;
   netSales: string | number;
+  status: DailySalesStatus;
   tenders: Array<{ amount: string | number }>;
 }
 
 function fmt(v: string | number) {
   return `$${parseFloat(String(v)).toFixed(2)}`;
 }
+
+const STATUS_BADGE: Record<DailySalesStatus, { label: string; tone: "neutral" | "success" | "danger" | "warning" }> = {
+  NO_BUSINESS: { label: "No Business", tone: "neutral" },
+  CLOSED_WON: { label: "Closed / Won", tone: "success" },
+  LOST: { label: "Lost", tone: "danger" },
+  FOLLOW_UP: { label: "Follow Up", tone: "warning" },
+};
 
 export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
   const { data, isLoading } = useQuery({
@@ -53,6 +63,7 @@ export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
         <thead>
           <tr className="border-b border-bg-border text-[10px] uppercase tracking-wider text-text-tertiary bg-bg-elevated">
             <th className="text-left px-4 py-3">Date</th>
+            <th className="text-left px-4 py-3">Status</th>
             <th className="text-right px-4 py-3">Gross</th>
             <th className="text-right px-4 py-3">Net</th>
             <th className="text-right px-4 py-3">Tenders</th>
@@ -65,12 +76,16 @@ export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
             const net = parseFloat(String(row.netSales));
             const balanced = Math.abs(tenderTotal - net) < 0.01;
             const date = new Date(row.saleDate);
+            const statusInfo = STATUS_BADGE[row.status] ?? STATUS_BADGE.NO_BUSINESS;
             return (
-              <tr key={row.id} className="hover:bg-bg-hover/30 transition-colors">
+              <tr key={row.id} className="hover:bg-bg-hover/30 transition-colors cursor-pointer" onClick={() => { window.location.href = `/${workspaceSlug}/daily-sales/${row.id}`; }}>
                 <td className="px-4 py-3">
-                  <a href={`/${workspaceSlug}/daily-sales/${row.id}`} className="font-medium text-text-primary hover:text-accent-400">
+                  <a href={`/${workspaceSlug}/daily-sales/${row.id}`} className="font-medium text-text-primary hover:text-accent-400" onClick={(e) => e.stopPropagation()}>
                     {date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                   </a>
+                </td>
+                <td className="px-4 py-3">
+                  <Badge tone={statusInfo.tone}>{statusInfo.label}</Badge>
                 </td>
                 <td className="px-4 py-3 text-right text-text-secondary">{fmt(row.grossSales)}</td>
                 <td className="px-4 py-3 text-right font-medium text-text-primary">{fmt(row.netSales)}</td>

@@ -19,6 +19,7 @@ export interface CreateDailySalesInput {
   deliveryAppSales?: number;
   notes?: string;
   sourceFileUrl?: string;
+  status?: "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
   tenders?: Array<{ tenderType: string; amount: number; count?: number }>;
 }
 
@@ -34,6 +35,7 @@ export interface UpdateDailySalesInput {
   deliveryAppSales?: number;
   notes?: string;
   sourceFileUrl?: string;
+  status?: "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
   tenders?: Array<{ tenderType: string; amount: number; count?: number }>;
 }
 
@@ -73,6 +75,7 @@ export class DailySalesService {
         deliveryAppSales: input.deliveryAppSales ?? 0,
         notes: input.notes ?? null,
         sourceFileUrl: input.sourceFileUrl ?? null,
+        status: (input.status as any) ?? "NO_BUSINESS",
         tenders: input.tenders?.length
           ? {
               create: input.tenders.map((t) => ({
@@ -145,6 +148,7 @@ export class DailySalesService {
         ...(input.deliveryAppSales !== undefined ? { deliveryAppSales: input.deliveryAppSales } : {}),
         ...(input.notes !== undefined ? { notes: input.notes } : {}),
         ...(input.sourceFileUrl !== undefined ? { sourceFileUrl: input.sourceFileUrl } : {}),
+        ...(input.status !== undefined ? { status: input.status as any } : {}),
         ...(input.tenders !== undefined
           ? {
               tenders: {

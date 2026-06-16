@@ -12,7 +12,8 @@ import { DailySalesService } from "./daily-sales.service";
 
 const TenderSchema = z.object({
   tenderType: z.enum([
-    "CASH","CREDIT_CARD","DEBIT_CARD","GIFT_CARD","ONLINE_PAYMENT",
+    "CASH","VISA","MASTERCARD","AMEX","DISCOVER","CHECK","ACH_INVOICE",
+    "CREDIT_CARD","DEBIT_CARD","GIFT_CARD","ONLINE_PAYMENT",
     "DELIVERY_APP","CATERING_INVOICE","HOUSE_ACCOUNT","OTHER",
   ]),
   amount: z.number().nonnegative(),
@@ -32,6 +33,7 @@ const CreateSchema = z.object({
   deliveryAppSales: z.number().nonnegative().default(0),
   notes: z.string().max(1000).optional(),
   sourceFileUrl: z.string().url().optional(),
+  status: z.enum(["NO_BUSINESS","CLOSED_WON","LOST","FOLLOW_UP"]).optional(),
   tenders: z.array(TenderSchema).optional(),
 });
 

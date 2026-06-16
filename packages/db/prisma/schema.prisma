@@ -815,24 +815,25 @@ model Notification {
 }
 
 model DailySales {
-  id               String       @id @default(cuid())
-  workspaceId      String       @map("workspace_id")
-  saleDate         DateTime     @db.Date @map("sale_date")
-  grossSales       Decimal      @db.Decimal(12, 2) @map("gross_sales")
-  netSales         Decimal      @db.Decimal(12, 2) @map("net_sales")
-  tax              Decimal      @db.Decimal(12, 2)
-  discounts        Decimal      @db.Decimal(12, 2) @default(0)
-  voids            Decimal      @db.Decimal(12, 2) @default(0)
-  refunds          Decimal      @db.Decimal(12, 2) @default(0)
-  cateringSales    Decimal      @db.Decimal(12, 2) @default(0) @map("catering_sales")
-  onlineSales      Decimal      @db.Decimal(12, 2) @default(0) @map("online_sales")
-  deliveryAppSales Decimal      @db.Decimal(12, 2) @default(0) @map("delivery_app_sales")
-  enteredById      String       @map("entered_by_id")
-  enteredAt        DateTime     @default(now()) @map("entered_at")
-  sourceFileUrl    String?      @map("source_file_url")
+  id               String            @id @default(cuid())
+  workspaceId      String            @map("workspace_id")
+  saleDate         DateTime          @db.Date @map("sale_date")
+  grossSales       Decimal           @db.Decimal(12, 2) @map("gross_sales")
+  netSales         Decimal           @db.Decimal(12, 2) @map("net_sales")
+  tax              Decimal           @db.Decimal(12, 2)
+  discounts        Decimal           @db.Decimal(12, 2) @default(0)
+  voids            Decimal           @db.Decimal(12, 2) @default(0)
+  refunds          Decimal           @db.Decimal(12, 2) @default(0)
+  cateringSales    Decimal           @db.Decimal(12, 2) @default(0) @map("catering_sales")
+  onlineSales      Decimal           @db.Decimal(12, 2) @default(0) @map("online_sales")
+  deliveryAppSales Decimal           @db.Decimal(12, 2) @default(0) @map("delivery_app_sales")
+  enteredById      String            @map("entered_by_id")
+  enteredAt        DateTime          @default(now()) @map("entered_at")
+  sourceFileUrl    String?           @map("source_file_url")
   notes            String?
-  workspace        Workspace    @relation(fields: [workspaceId], references: [id])
-  enteredBy        User         @relation(fields: [enteredById], references: [id])
+  status           DailySalesStatus  @default(NO_BUSINESS) @map("status")
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id])
+  enteredBy        User              @relation(fields: [enteredById], references: [id])
   tenders          TenderEntry[]
 
   @@unique([workspaceId, saleDate])
@@ -1164,6 +1165,12 @@ enum NotificationKind {
 
 enum TenderType {
   CASH
+  VISA
+  MASTERCARD
+  AMEX
+  DISCOVER
+  CHECK
+  ACH_INVOICE
   CREDIT_CARD
   DEBIT_CARD
   GIFT_CARD
@@ -1174,6 +1181,15 @@ enum TenderType {
   OTHER
 
   @@map("tender_type")
+}
+
+enum DailySalesStatus {
+  NO_BUSINESS
+  CLOSED_WON
+  LOST
+  FOLLOW_UP
+
+  @@map("daily_sales_status")
 }
 
 model LaborEntry {

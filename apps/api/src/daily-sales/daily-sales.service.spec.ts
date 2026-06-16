@@ -46,6 +46,7 @@ const makeRecord = (overrides = {}) => ({
   enteredAt: new Date(),
   notes: null,
   sourceFileUrl: null,
+  status: "NO_BUSINESS",
   tenders: [{ id: "te1", tenderType: "CASH", amount: 900, count: 10 }],
   ...overrides,
 });
@@ -80,6 +81,37 @@ describe("DailySalesService", () => {
     expect(result.id).toBe("ds1");
   });
 
+  it("create: sets status to NO_BUSINESS by default", async () => {
+    mockFindFirst.mockResolvedValue(null);
+    mockCreate.mockResolvedValue(makeRecord());
+
+    await svc.create(ctx, {
+      saleDate: "2024-01-15",
+      grossSales: 1000,
+      netSales: 900,
+      tax: 100,
+    });
+
+    const created = mockCreate.mock.calls[0]![0].data;
+    expect(created.status).toBe("NO_BUSINESS");
+  });
+
+  it("create: persists provided status", async () => {
+    mockFindFirst.mockResolvedValue(null);
+    mockCreate.mockResolvedValue(makeRecord({ status: "CLOSED_WON" }));
+
+    await svc.create(ctx, {
+      saleDate: "2024-01-15",
+      grossSales: 1000,
+      netSales: 900,
+      tax: 100,
+      status: "CLOSED_WON",
+    });
+
+    const created = mockCreate.mock.calls[0]![0].data;
+    expect(created.status).toBe("CLOSED_WON");
+  });
+
   it("create: throws ConflictException for duplicate date", async () => {
     mockFindFirst.mockResolvedValue({ id: "existing" });
 
@@ -87,6 +119,55 @@ describe("DailySalesService", () => {
       svc.create(ctx, { saleDate: "2024-01-15", grossSales: 1000, netSales: 900, tax: 100 }),
     ).rejects.toThrow(ConflictException);
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it("create: supports new tender types (VISA, AMEX, ACH_INVOICE)", async () => {
+    mockFindFirst.mockResolvedValue(null);
+    mockCreate.mockResolvedValue(makeRecord({
+      tenders: [
+        { id: "t1", tenderType: "VISA", amount: 300, count: 3 },
+        { id: "t2", tenderType: "AMEX", amount: 400, count: 2 },
+        { id: "t3", tenderType: "ACH_INVOICE", amount: 200, count: 1 },
+      ],
+    }));
+
+    await svc.create(ctx, {
+      saleDate: "2024-01-15",
+      grossSales: 1000,
+      netSales: 900,
+      tax: 100,
+      tenders: [
+        { tenderType: "VISA", amount: 300, count: 3 },
+        { tenderType: "AMEX", amount: 400, count: 2 },
+        { tenderType: "ACH_INVOICE", amount: 200, count: 1 },
+      ],
+    });
+
+    const created = mockCreate.mock.calls[0]![0].data;
+    expect(created.tenders.create[0].tenderType).toBe("VISA");
+    expect(created.tenders.create[1].tenderType).toBe("AMEX");
+    expect(created.tenders.create[2].tenderType).toBe("ACH_INVOICE");
+  });
+
+  it("update: persists new status", async () => {
+    mockFindFirst.mockResolvedValue({ id: "ds1" });
+    mockUpdate.mockResolvedValue(makeRecord({ status: "FOLLOW_UP", tenders: [] }));
+
+    await svc.update(ctx, "ds1", { status: "FOLLOW_UP" });
+
+    const updateData = mockUpdate.mock.calls[0]![0].data;
+    expect(updateData.status).toBe("FOLLOW_UP");
+  });
+
+  it("update: multi-tenant isolation — cannot update another workspace's record", async () => {
+    mockFindFirst.mockResolvedValue(null); // not found for other workspace
+
+    await expect(
+      svc.update({ workspaceId: "ws-other", userId: "u2", role: "OWNER" }, "ds1", { grossSales: 999 }),
+    ).rejects.toThrow(NotFoundException);
+
+    expect(mockFindFirst.mock.calls[0]![0].where.workspaceId).toBe("ws-other");
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
   it("getVariance: math is correct", async () => {

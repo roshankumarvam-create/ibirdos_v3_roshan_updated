@@ -7,11 +7,21 @@ import { api } from "@/lib/api";
 import type { Route } from "next";
 
 const TENDER_TYPES = [
-  "CASH","CREDIT_CARD","DEBIT_CARD","GIFT_CARD","ONLINE_PAYMENT",
+  "CASH","VISA","MASTERCARD","AMEX","DISCOVER","CHECK","ACH_INVOICE",
+  "CREDIT_CARD","DEBIT_CARD","GIFT_CARD","ONLINE_PAYMENT",
   "DELIVERY_APP","CATERING_INVOICE","HOUSE_ACCOUNT","OTHER",
 ] as const;
 
 type TenderType = (typeof TENDER_TYPES)[number];
+
+type DailySalesStatus = "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
+
+const STATUS_OPTIONS: { value: DailySalesStatus; label: string; active: string; inactive: string }[] = [
+  { value: "NO_BUSINESS", label: "No Business", active: "bg-gray-500 text-white border-gray-500", inactive: "border-gray-400 text-gray-400 hover:bg-gray-500/10" },
+  { value: "CLOSED_WON", label: "Closed / Won", active: "bg-green-600 text-white border-green-600", inactive: "border-green-500 text-green-500 hover:bg-green-500/10" },
+  { value: "LOST", label: "Lost", active: "bg-red-600 text-white border-red-600", inactive: "border-red-500 text-red-500 hover:bg-red-500/10" },
+  { value: "FOLLOW_UP", label: "Follow Up", active: "bg-amber-500 text-white border-amber-500", inactive: "border-amber-400 text-amber-400 hover:bg-amber-400/10" },
+];
 
 interface TenderRow {
   tenderType: TenderType;
@@ -31,6 +41,7 @@ export default function NewDailySalesPage() {
   const ws = params.workspace;
 
   const [saleDate, setSaleDate] = useState(yesterday());
+  const [status, setStatus] = useState<DailySalesStatus>("NO_BUSINESS");
   const [grossSales, setGrossSales] = useState("");
   const [netSales, setNetSales] = useState("");
   const [tax, setTax] = useState("");
@@ -69,6 +80,7 @@ export default function NewDailySalesPage() {
     setError(null);
     const res = await api.post<{ id: string }>("/daily-sales", {
       saleDate,
+      status,
       grossSales: parseFloat(grossSales) || 0,
       netSales: parseFloat(netSales) || 0,
       tax: parseFloat(tax) || 0,
@@ -114,6 +126,24 @@ export default function NewDailySalesPage() {
           {error}
         </div>
       )}
+
+      <Card>
+        <CardHeader><CardTitle>Status</CardTitle></CardHeader>
+        <CardBody>
+          <div className="flex flex-wrap gap-2">
+            {STATUS_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setStatus(opt.value)}
+                className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${status === opt.value ? opt.active : opt.inactive}`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </CardBody>
+      </Card>
 
       <Card>
         <CardHeader><CardTitle>Sales summary</CardTitle></CardHeader>
