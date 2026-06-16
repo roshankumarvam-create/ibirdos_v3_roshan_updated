@@ -17,6 +17,7 @@
 import {
   Injectable, NotFoundException, BadRequestException, Inject,
 } from "@nestjs/common";
+import * as xlsx from "xlsx";
 import { Prisma } from "@ibirdos/db";
 type Decimal = Prisma.Decimal;
 const Decimal = Prisma.Decimal;
@@ -597,6 +598,133 @@ export class RecipesService {
       computeError: null,
       lines,
     };
+  }
+
+  // -----------------------------------------------------------------
+  // CSV / Excel import
+  // -----------------------------------------------------------------
+
+  /**
+   * Import one or more recipes from a CSV/Excel file.
+   *
+   * Expected columns (case-insensitive, extra columns ignored):
+   *   Recipe Name | Category | Portions Yielded | Ingredient Name | Quantity | Unit | Notes
+   *
+   * Rows are grouped by "Recipe Name". Ingredients are matched
+   * case-insensitively against the workspace ingredient catalog.
+   * Unmatched ingredients are created with dimension=MASS (g canonical)
+   * so they appear in the catalog for the user to price later.
+   */
+  async importCsv(
+    ctx: TenantContext,
+    input: { filename: string; contentBase64: string },
+  ) {
+    type IngLine = { ingName: string; qty: number; unit: string; notes: string };
+    type RecipeMeta = { category: string | null; portions: number; lines: IngLine[] };
+
+    const buf = Buffer.from(input.contentBase64, "base64");
+    const wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+    const sheetName = wb.SheetNames[0];
+    const ws = sheetName ? wb.Sheets[sheetName] : undefined;
+    if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
+
+    const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+    if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+
+    const col = (row: Record<string, unknown>, ...names: string[]): string => {
+      for (const n of names) {
+        const key = Object.keys(row).find((k) => k.trim().toLowerCase() === n.toLowerCase());
+        if (key !== undefined) return String(row[key] ?? "").trim();
+      }
+      return "";
+    };
+
+    // Group rows by recipe name
+    const recipeMap = new Map<string, RecipeMeta>();
+    for (const row of rows) {
+      const recipeName = col(row, "recipe name", "recipe", "name");
+      if (!recipeName) continue;
+      let meta = recipeMap.get(recipeName);
+      if (!meta) {
+        meta = {
+          category: col(row, "category", "type") || null,
+          portions: parseInt(col(row, "portions yielded", "portions", "yield"), 10) || 1,
+          lines: [],
+        };
+        recipeMap.set(recipeName, meta);
+      }
+      const ingName = col(row, "ingredient name", "ingredient", "item");
+      const qty = parseFloat(col(row, "quantity", "qty", "amount")) || 0;
+      const unit = col(row, "unit", "uom") || "each";
+      const notes = col(row, "notes", "note") || "";
+      if (ingName && qty > 0) meta.lines.push({ ingName, qty, unit, notes });
+    }
+
+    if (!recipeMap.size) throw new BadRequestException({ code: "validation_failed", message: "No valid recipe rows found (check that Recipe Name and Ingredient Name columns exist)" });
+
+    // Load existing workspace ingredients for matching
+    const existingIngredients = await prisma.ingredient.findMany({
+      where: { workspaceId: ctx.workspaceId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    const ingByName = new Map<string, string>(existingIngredients.map((i) => [i.name.toLowerCase(), i.id]));
+
+    const importedRecipeIds: string[] = [];
+    let newIngredientCount = 0;
+
+    for (const [recipeName, meta] of recipeMap) {
+      const resolvedLines: Array<{ ingredientId: string; quantity: number; unit: string; notes?: string; displayOrder: number }> = [];
+      for (let i = 0; i < meta.lines.length; i++) {
+        const line = meta.lines[i];
+        if (!line) continue;
+        const { ingName, qty, unit, notes } = line;
+        let ingredientId = ingByName.get(ingName.toLowerCase());
+        if (!ingredientId) {
+          const created = await prisma.ingredient.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              createdById: ctx.userId,
+              name: ingName,
+              dimension: "MASS",
+              canonicalUnit: "g",
+              preferredDisplayUnit: unit,
+            },
+          });
+          ingredientId = created.id;
+          ingByName.set(ingName.toLowerCase(), ingredientId);
+          newIngredientCount++;
+        }
+        resolvedLines.push({ ingredientId, quantity: qty, unit, notes: notes || undefined, displayOrder: i });
+      }
+
+      const recipe = await prisma.recipe.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          createdById: ctx.userId,
+          name: recipeName,
+          category: meta.category,
+          portionsYielded: meta.portions,
+          status: "DRAFT",
+          ingredients: resolvedLines.length
+            ? { create: resolvedLines.map((l) => ({ workspaceId: ctx.workspaceId, ...l })) }
+            : undefined,
+        },
+      });
+
+      if (resolvedLines.length) {
+        await this.recost(ctx, recipe.id, "recipe_edit").catch(() => null);
+      }
+      importedRecipeIds.push(recipe.id);
+    }
+
+    await writeAudit(ctx, {
+      action: "recipe.csv_imported",
+      entityType: "Recipe",
+      entityId: importedRecipeIds[0] ?? "",
+      metadata: { recipeCount: importedRecipeIds.length, newIngredientCount, filename: input.filename },
+    });
+
+    return { recipeIds: importedRecipeIds, recipeCount: importedRecipeIds.length, newIngredientCount };
   }
 
   /**

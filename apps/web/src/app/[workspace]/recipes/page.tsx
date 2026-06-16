@@ -73,9 +73,14 @@ export default async function RecipesPage({ searchParams }: { searchParams: Prom
           </p>
         </div>
         {canCreate && (
-          <Link href={`/${user.workspaceSlug}/recipes/new` as any}>
-            <Button>+ New recipe</Button>
-          </Link>
+          <div className="flex gap-2">
+            <Link href={`/${user.workspaceSlug}/recipes/import` as any}>
+              <Button variant="secondary">Import CSV/Excel</Button>
+            </Link>
+            <Link href={`/${user.workspaceSlug}/recipes/new` as any}>
+              <Button>+ New recipe</Button>
+            </Link>
+          </div>
         )}
       </header>
 

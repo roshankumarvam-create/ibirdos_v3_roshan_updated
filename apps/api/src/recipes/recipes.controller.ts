@@ -64,6 +64,11 @@ const UpdateRecipeSchema = CreateRecipeSchema.partial().omit({ ingredients: true
   procedure:     z.union([z.string().max(20000), z.null()]).optional(),
   instructionsMd: z.union([z.string().max(20000), z.null()]).optional(),
 });
+const ImportCsvSchema = z.object({
+  filename: z.string().min(1),
+  contentBase64: z.string().min(1),
+});
+
 const ListQuerySchema = z.object({
   search: z.string().optional(), category: z.string().optional(),
   status: z.string().optional(), cursor: z.string().optional(),
@@ -98,6 +103,12 @@ export class RecipesController {
   @Delete(":id") @RequirePermission("recipe.update")
   delete(@CurrentCtx() ctx: TenantContext, @Param("id") id: string) {
     return this.svc.delete(ctx, id).then(() => ok(null));
+  }
+
+  @Post("import-csv") @RequirePermission("recipe.create")
+  importCsv(@CurrentCtx() ctx: TenantContext,
+            @Body(new ZodValidationPipe(ImportCsvSchema)) body: z.infer<typeof ImportCsvSchema>) {
+    return this.svc.importCsv(ctx, body).then(ok);
   }
 
   @Post(":id/ingredients") @RequirePermission("recipe.update")
