@@ -623,7 +623,16 @@ export class RecipesService {
     type RecipeMeta = { category: string | null; portions: number; lines: IngLine[] };
 
     const buf = Buffer.from(input.contentBase64, "base64");
-    const wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+    let wb: xlsx.WorkBook;
+    try {
+      wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+    } catch (xlsxErr: any) {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: `Could not parse file: ${xlsxErr?.message ?? "unknown error"}`,
+        hint: "Make sure the file is a valid .xlsx, .xls, or .csv and is not password-protected.",
+      });
+    }
     const sheetName = wb.SheetNames[0];
     const ws = sheetName ? wb.Sheets[sheetName] : undefined;
     if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
