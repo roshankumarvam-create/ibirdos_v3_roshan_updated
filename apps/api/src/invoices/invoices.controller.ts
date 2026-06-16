@@ -52,6 +52,12 @@ const UpdateInvoiceHeaderSchema = z.object({
   totalCents:    z.number().int().nonnegative().nullable().optional(),
 });
 
+const ImportCsvSchema = z.object({
+  filename: z.string().min(1),
+  contentBase64: z.string().min(1),
+  vendorId: z.string().optional(),
+});
+
 const ListQuerySchema = z.object({
   status: z.string().optional(),
   vendorId: z.string().optional(),
@@ -129,6 +135,15 @@ export class InvoicesController {
   @RequirePermission("invoice.confirm")
   async confirm(@CurrentCtx() ctx: TenantContext, @Param("id") id: string) {
     return ok(await this.svc.confirm(ctx, id));
+  }
+
+  @Post("import-csv")
+  @RequirePermission("invoice.upload")
+  async importCsv(
+    @CurrentCtx() ctx: TenantContext,
+    @Body(new ZodValidationPipe(ImportCsvSchema)) body: z.infer<typeof ImportCsvSchema>,
+  ) {
+    return ok(await this.svc.importCsv(ctx, body));
   }
 
   @Post(":id/retry")

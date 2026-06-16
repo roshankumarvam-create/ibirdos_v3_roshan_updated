@@ -3,6 +3,7 @@
 } from "@nestjs/common";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
+import * as xlsx from "xlsx";
 
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
@@ -516,6 +517,153 @@ export class InvoicesService {
   }
 
   // -----------------------------------------------------------------
+  // CSV / Excel import â€" parse file and create invoice + lines
+  // -----------------------------------------------------------------
+
+  async importCsv(
+    ctx: TenantContext,
+    input: { filename: string; contentBase64: string; vendorId?: string },
+  ) {
+    let buf: Buffer;
+    try {
+      buf = Buffer.from(input.contentBase64, "base64");
+    } catch {
+      throw new BadRequestException({ code: "validation_failed", message: "Invalid base64 content" });
+    }
+
+    let wb: xlsx.WorkBook;
+    try {
+      wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+    } catch {
+      throw new BadRequestException({ code: "validation_failed", message: "Cannot parse file as Excel/CSV" });
+    }
+
+    const sheetName = wb.SheetNames[0];
+    if (!sheetName) throw new BadRequestException({ code: "validation_failed", message: "Empty workbook" });
+
+    const rows: Record<string, any>[] = xlsx.utils.sheet_to_json(wb.Sheets[sheetName]!, { defval: "" });
+    if (rows.length === 0) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet has no data rows" });
+
+    // Flexible column detection — returns the first matching key (case-insensitive)
+    const col = (row: Record<string, any>, ...candidates: string[]): string => {
+      const keys = Object.keys(row).map((k) => k.toLowerCase().trim());
+      for (const c of candidates) {
+        const idx = keys.indexOf(c.toLowerCase());
+        if (idx !== -1) return String(Object.values(row)[idx] ?? "").trim();
+      }
+      return "";
+    };
+
+    // Parse header-level fields from first row
+    const firstRow = rows[0]!;
+    const invoiceNumber = col(firstRow, "invoice #", "inv#", "invoice number", "invoice_number") || null;
+    const rawDate = col(firstRow, "date", "invoice date", "order date", "invoice_date");
+    const invoiceDate = rawDate ? parseDate(rawDate) : null;
+
+    // Resolve vendor by name if not provided
+    let resolvedVendorId = input.vendorId ?? null;
+    if (!resolvedVendorId) {
+      const vendorName = col(firstRow, "vendor", "supplier", "distributor");
+      if (vendorName) {
+        const v = await prisma.vendor.findFirst({
+          where: { workspaceId: ctx.workspaceId, name: { contains: vendorName, mode: "insensitive" } },
+          select: { id: true },
+        });
+        if (v) resolvedVendorId = v.id;
+      }
+    }
+
+    // Build line items
+    const lineItems: Array<{
+      descriptionRaw: string;
+      quantity: number;
+      unit: string;
+      unitPriceCents: number;
+      extendedPriceCents: number;
+    }> = [];
+
+    for (const row of rows) {
+      const desc = col(row, "item", "description", "product", "ingredient", "name");
+      if (!desc) continue;
+
+      const qty = parseFloat(col(row, "quantity", "qty", "count") || "1") || 1;
+      const unit = col(row, "unit", "uom", "unit of measure") || "each";
+      const unitPrice = parseDollars(col(row, "unit price", "unit cost", "price", "unit_price"));
+      const extPrice = parseDollars(col(row, "line total", "total", "extended price", "amount", "ext price", "extended_price"))
+        || Math.round(unitPrice * qty);
+
+      lineItems.push({
+        descriptionRaw: desc,
+        quantity: qty,
+        unit,
+        unitPriceCents: unitPrice,
+        extendedPriceCents: extPrice,
+      });
+    }
+
+    if (lineItems.length === 0) {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: "No line items found. Check column headers: Item/Description, Quantity, Unit, Unit Price.",
+      });
+    }
+
+    // Create invoice + lines in a transaction
+    const invoice = await prisma.$transaction(async (tx) => {
+      const inv = await tx.invoice.create({
+        data: {
+          workspaceId: ctx.workspaceId,
+          createdById: ctx.userId,
+          vendorId: resolvedVendorId,
+          uploadKey: `workspaces/${ctx.workspaceId}/invoice/csv-import-${Date.now()}`,
+          uploadMimeType: input.filename.endsWith(".csv") ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          uploadSizeBytes: buf.length,
+          status: "PENDING_REVIEW",
+          invoiceNumber,
+          invoiceDate,
+        },
+      });
+
+      await tx.invoiceLine.createMany({
+        data: lineItems.map((l, idx) => ({
+          workspaceId: ctx.workspaceId,
+          invoiceId: inv.id,
+          position: idx + 1,
+          descriptionRaw: l.descriptionRaw,
+          quantity: l.quantity,
+          unit: l.unit,
+          unitPriceCents: l.unitPriceCents,
+          extendedPriceCents: l.extendedPriceCents,
+          category: "FOOD_INGREDIENT" as const,
+          needsReview: true,
+        })),
+      });
+
+      return inv;
+    });
+
+    await writeAudit(ctx, {
+      action: "invoice.csv_imported",
+      entityType: "Invoice",
+      entityId: invoice.id,
+      metadata: { filename: input.filename, lineCount: lineItems.length },
+    });
+
+    log.info({ invoiceId: invoice.id, lineCount: lineItems.length }, "CSV invoice imported");
+    return {
+      invoiceId: invoice.id,
+      lineCount: lineItems.length,
+      preview: lineItems.slice(0, 5).map((l) => ({
+        description: l.descriptionRaw,
+        quantity: l.quantity,
+        unit: l.unit,
+        unitPriceCents: l.unitPriceCents,
+        extendedPriceCents: l.extendedPriceCents,
+      })),
+    };
+  }
+
+  // -----------------------------------------------------------------
   // Retry extraction (failed jobs)
   // -----------------------------------------------------------------
 
@@ -561,6 +709,20 @@ function inferDimension(unit: string): { dimension: "MASS" | "VOLUME" | "COUNT";
   if (["QT", "PT", "L", "LITER", "LITERS", "ML", "FLOZ"].includes(u))
     return { dimension: "VOLUME", canonicalUnit: "ml",   preferredDisplayUnit: "floz" };
   return { dimension: "COUNT",  canonicalUnit: "each", preferredDisplayUnit: "each" };
+}
+
+function parseDate(v: any): Date | null {
+  if (!v) return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  const d = new Date(String(v));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function parseDollars(v: string): number {
+  // Strip currency symbols, commas, parentheses (negative amounts)
+  const cleaned = String(v).replace(/[$,()]/g, "").trim();
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : Math.round(Math.abs(n) * 100);
 }
 
 function cleanIngredientName(raw: string): string {
