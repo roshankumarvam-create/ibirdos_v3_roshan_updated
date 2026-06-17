@@ -102,6 +102,48 @@ describe("InventoryService.importCsv", () => {
     mockLowStockUpdateMany.mockResolvedValue({});
   });
 
+  it("Bug 2: new ingredient created with VOLUME unit gets VOLUME dimension, not MASS", async () => {
+    mockIngredientFindMany.mockResolvedValue([]); // no existing ingredients
+
+    // Override: pass-through dimension/canonicalUnit from create args so cost calc is correct
+    mockIngredientCreate.mockImplementation((args: any) => ({
+      id: "ing-new",
+      name: args.data.name,
+      dimension: args.data.dimension,
+      canonicalUnit: args.data.canonicalUnit,
+      densityGPerMl: null,
+      currentCostMicrocents: null,
+    }));
+    mockIngredientFindFirst.mockResolvedValue({
+      id: "ing-new",
+      currentStockCanonical: "0",
+      reorderThresholdCanonical: null,
+    });
+
+    // 20 litres of Milk at $55/litre
+    const contentBase64 = makeXlsxBase64([
+      ["Ingredient Name", "Quantity", "Unit", "Unit Cost"],
+      ["Milk", 20, "litre", 55],
+    ]);
+
+    await svc.importCsv(ctx, { filename: "test.xlsx", contentBase64 });
+
+    const createCall = mockIngredientCreate.mock.calls[0]!;
+    expect(createCall[0].data.dimension).toBe("VOLUME");
+    expect(createCall[0].data.canonicalUnit).toBe("ml");
+
+    // $55/litre ÷ 1000 ml/litre × 100 × 1000 = 5500 microcents/ml
+    const costUpdateCall = mockIngredientUpdate.mock.calls.find(
+      (c: any) => c[0]?.data?.currentCostMicrocents !== undefined,
+    );
+    expect(costUpdateCall, "ingredient.update with currentCostMicrocents should be called").toBeDefined();
+    const storedMicrocents = Number(costUpdateCall![0].data.currentCostMicrocents);
+    expect(storedMicrocents).toBeGreaterThan(5000);
+    expect(storedMicrocents).toBeLessThan(6000);
+    // Pre-fix wrong value: 55 * 100,000 = 5,500,000 — nowhere near correct
+    expect(storedMicrocents).not.toBeGreaterThan(100_000);
+  });
+
   it("Bug 3: stores currentCostMicrocents as microcents per canonical unit for VOLUME/gallon", async () => {
     const ing = volumeIng();
     mockIngredientFindMany.mockResolvedValue([ing]);

@@ -16,6 +16,15 @@ import { REDIS_CLIENT } from "../common/constants/tokens";
 
 const log = moduleLogger("InventoryService");
 
+function inferDimension(unit: string): { dimension: "MASS" | "VOLUME" | "COUNT"; canonicalUnit: string } {
+  const u = (unit ?? "").toUpperCase().replace(/[^A-Z]/g, "");
+  if (["LB", "LBS", "OZ", "KG", "G", "GRAM", "GRAMS", "MG"].includes(u))
+    return { dimension: "MASS", canonicalUnit: "g" };
+  if (["GAL", "QT", "PT", "L", "LITER", "LITERS", "LITRE", "LITRES", "ML", "FLOZ"].includes(u))
+    return { dimension: "VOLUME", canonicalUnit: "ml" };
+  return { dimension: "COUNT", canonicalUnit: "each" };
+}
+
 interface RecordTxParams {
   ingredientId: string;
   kind: "RECEIVE" | "CONSUME" | "ADJUST" | "TRANSFER_OUT" | "TRANSFER_IN" | "WASTE";
@@ -229,13 +238,14 @@ export class InventoryService {
 
       let ing = ingByName.get(ingName.toLowerCase());
       if (!ing) {
+        const dim = inferDimension(unit);
         const created = await prisma.ingredient.create({
           data: {
             workspaceId: ctx.workspaceId,
             createdById: ctx.userId,
             name: ingName,
-            dimension: "MASS",
-            canonicalUnit: "g",
+            dimension: dim.dimension,
+            canonicalUnit: dim.canonicalUnit,
             preferredDisplayUnit: unit,
           },
           select: { id: true, name: true, dimension: true, canonicalUnit: true, densityGPerMl: true, currentCostMicrocents: true },
