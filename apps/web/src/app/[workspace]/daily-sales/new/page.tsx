@@ -29,18 +29,26 @@ interface TenderRow {
   count: string;
 }
 
-function yesterday(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
+
+const SHIFT_OPTIONS = [
+  { value: "", label: "— No shift —" },
+  { value: "BREAKFAST", label: "Breakfast" },
+  { value: "LUNCH", label: "Lunch" },
+  { value: "DINNER", label: "Dinner" },
+  { value: "LATE_NIGHT", label: "Late Night" },
+  { value: "OTHER", label: "Other" },
+] as const;
 
 export default function NewDailySalesPage() {
   const router = useRouter();
   const params = useParams<{ workspace: string }>();
   const ws = params.workspace;
 
-  const [saleDate, setSaleDate] = useState(yesterday());
+  const [saleDate, setSaleDate] = useState(today());
+  const [shift, setShift] = useState("");
   const [status, setStatus] = useState<DailySalesStatus>("NO_BUSINESS");
   const [grossSales, setGrossSales] = useState("");
   const [netSales, setNetSales] = useState("");
@@ -81,6 +89,7 @@ export default function NewDailySalesPage() {
     const res = await api.post<{ id: string }>("/daily-sales", {
       saleDate,
       status,
+      shift: (shift || undefined) as any,
       grossSales: parseFloat(grossSales) || 0,
       netSales: parseFloat(netSales) || 0,
       tax: parseFloat(tax) || 0,
@@ -148,9 +157,24 @@ export default function NewDailySalesPage() {
       <Card>
         <CardHeader><CardTitle>Sales summary</CardTitle></CardHeader>
         <CardBody className="space-y-4">
-          <div>
-            <Label htmlFor="saleDate">Date *</Label>
-            <Input id="saleDate" type="date" value={saleDate} onChange={(e) => setSaleDate(e.target.value)} required />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="saleDate">Date *</Label>
+              <Input id="saleDate" type="date" value={saleDate} onChange={(e) => setSaleDate(e.target.value)} required />
+            </div>
+            <div>
+              <Label htmlFor="shift">Shift (optional)</Label>
+              <select
+                id="shift"
+                value={shift}
+                onChange={(e) => setShift(e.target.value)}
+                className="mt-1 w-full rounded-md bg-bg-inset border border-bg-border px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-500/60"
+              >
+                {SHIFT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>

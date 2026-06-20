@@ -832,11 +832,11 @@ model DailySales {
   sourceFileUrl    String?           @map("source_file_url")
   notes            String?
   status           DailySalesStatus  @default(NO_BUSINESS) @map("status")
+  shift            String?           @map("shift")
   workspace        Workspace         @relation(fields: [workspaceId], references: [id])
   enteredBy        User              @relation(fields: [enteredById], references: [id])
   tenders          TenderEntry[]
 
-  @@unique([workspaceId, saleDate])
   @@index([workspaceId, saleDate])
   @@map("daily_sales")
 }

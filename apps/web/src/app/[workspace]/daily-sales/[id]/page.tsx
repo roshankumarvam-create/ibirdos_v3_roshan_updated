@@ -14,6 +14,16 @@ const TENDER_TYPES = [
 
 type TenderType = (typeof TENDER_TYPES)[number];
 type DailySalesStatus = "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
+type ShiftType = "BREAKFAST" | "LUNCH" | "DINNER" | "LATE_NIGHT" | "OTHER" | "";
+
+const SHIFT_OPTIONS: { value: ShiftType; label: string }[] = [
+  { value: "", label: "— No shift —" },
+  { value: "BREAKFAST", label: "Breakfast" },
+  { value: "LUNCH", label: "Lunch" },
+  { value: "DINNER", label: "Dinner" },
+  { value: "LATE_NIGHT", label: "Late Night" },
+  { value: "OTHER", label: "Other" },
+];
 
 const STATUS_OPTIONS: { value: DailySalesStatus; label: string; active: string; inactive: string }[] = [
   { value: "NO_BUSINESS", label: "No Business", active: "bg-gray-500 text-white border-gray-500", inactive: "border-gray-400 text-gray-400 hover:bg-gray-500/10" },
@@ -42,6 +52,7 @@ interface SaleRecord {
   deliveryAppSales: string | number;
   notes: string | null;
   status: DailySalesStatus;
+  shift: string | null;
   tenders: Array<{ tenderType: TenderType; amount: string | number; count: number }>;
 }
 
@@ -59,6 +70,7 @@ export default function EditDailySalesPage() {
 
   const [saleDate, setSaleDate] = useState("");
   const [status, setStatus] = useState<DailySalesStatus>("NO_BUSINESS");
+  const [shift, setShift] = useState<ShiftType>("");
   const [grossSales, setGrossSales] = useState("");
   const [netSales, setNetSales] = useState("");
   const [tax, setTax] = useState("");
@@ -78,6 +90,7 @@ export default function EditDailySalesPage() {
       const d = res.data;
       setSaleDate(new Date(d.saleDate).toISOString().slice(0, 10));
       setStatus(d.status ?? "NO_BUSINESS");
+      setShift((d.shift as ShiftType) ?? "");
       setGrossSales(String(parseFloat(String(d.grossSales)).toFixed(2)));
       setNetSales(String(parseFloat(String(d.netSales)).toFixed(2)));
       setTax(String(parseFloat(String(d.tax)).toFixed(2)));
@@ -133,6 +146,7 @@ export default function EditDailySalesPage() {
       deliveryAppSales: parseFloat(deliveryAppSales) || 0,
       notes: notes || undefined,
       status,
+      shift: (shift || undefined) as any,
       tenders: tenders
         .filter((t) => t.amount !== "")
         .map((t) => ({
@@ -216,9 +230,24 @@ export default function EditDailySalesPage() {
       <Card>
         <CardHeader><CardTitle>Sales summary</CardTitle></CardHeader>
         <CardBody className="space-y-4">
-          <div>
-            <Label htmlFor="saleDate">Date</Label>
-            <Input id="saleDate" type="date" value={saleDate} onChange={(e) => setSaleDate(e.target.value)} />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="saleDate">Date</Label>
+              <Input id="saleDate" type="date" value={saleDate} onChange={(e) => setSaleDate(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="shift">Shift (optional)</Label>
+              <select
+                id="shift"
+                value={shift}
+                onChange={(e) => setShift(e.target.value as ShiftType)}
+                className="mt-1 w-full rounded-md bg-bg-inset border border-bg-border px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-500/60"
+              >
+                {SHIFT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>

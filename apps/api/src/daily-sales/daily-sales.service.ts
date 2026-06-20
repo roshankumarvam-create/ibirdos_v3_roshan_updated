@@ -1,5 +1,5 @@
 import {
-  Injectable, NotFoundException, BadRequestException, ConflictException,
+  Injectable, NotFoundException, BadRequestException,
 } from "@nestjs/common";
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
@@ -20,6 +20,7 @@ export interface CreateDailySalesInput {
   notes?: string;
   sourceFileUrl?: string;
   status?: "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
+  shift?: "BREAKFAST" | "LUNCH" | "DINNER" | "LATE_NIGHT" | "OTHER";
   tenders?: Array<{ tenderType: string; amount: number; count?: number }>;
 }
 
@@ -36,6 +37,7 @@ export interface UpdateDailySalesInput {
   notes?: string;
   sourceFileUrl?: string;
   status?: "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
+  shift?: "BREAKFAST" | "LUNCH" | "DINNER" | "LATE_NIGHT" | "OTHER";
   tenders?: Array<{ tenderType: string; amount: number; count?: number }>;
 }
 
@@ -45,18 +47,6 @@ export class DailySalesService {
     const saleDate = new Date(input.saleDate);
     if (isNaN(saleDate.getTime())) {
       throw new BadRequestException({ code: "validation_failed", message: "Invalid saleDate" });
-    }
-
-    // Check for duplicate date
-    const existing = await prisma.dailySales.findFirst({
-      where: { workspaceId: ctx.workspaceId, saleDate },
-      select: { id: true },
-    });
-    if (existing) {
-      throw new ConflictException({
-        code: "conflict",
-        message: `Daily sales for ${input.saleDate} already exists`,
-      });
     }
 
     const record = await prisma.dailySales.create({
@@ -76,6 +66,7 @@ export class DailySalesService {
         notes: input.notes ?? null,
         sourceFileUrl: input.sourceFileUrl ?? null,
         status: (input.status as any) ?? "NO_BUSINESS",
+        shift: input.shift ?? null,
         tenders: input.tenders?.length
           ? {
               create: input.tenders.map((t) => ({
@@ -149,6 +140,7 @@ export class DailySalesService {
         ...(input.notes !== undefined ? { notes: input.notes } : {}),
         ...(input.sourceFileUrl !== undefined ? { sourceFileUrl: input.sourceFileUrl } : {}),
         ...(input.status !== undefined ? { status: input.status as any } : {}),
+        ...(input.shift !== undefined ? { shift: input.shift } : {}),
         ...(input.tenders !== undefined
           ? {
               tenders: {
