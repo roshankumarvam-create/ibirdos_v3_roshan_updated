@@ -6,6 +6,7 @@ import { use } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatCostPerUnit, formatStock, formatDate, formatCents } from "@/lib/format";
+import { normalizeUnit, UNITS } from "@ibirdos/types";
 import {
   Card, CardHeader, CardTitle, CardDescription, CardBody,
   Button, Badge,
@@ -262,17 +263,37 @@ function EditForm({
   const [notes, setNotes] = useState(ing.notes ?? "");
   const [saving, setSaving] = useState(false);
 
+  // Price in dollars per preferred display unit (e.g. "16.00" means $16/lb)
+  const displayUnit = ing.preferredDisplayUnit ?? ing.canonicalUnit;
+  const normalizedDisplayUnit = normalizeUnit(displayUnit);
+  const unitDef = normalizedDisplayUnit ? UNITS[normalizedDisplayUnit] : null;
+  const initialPriceDisplay = (() => {
+    if (ing.currentCostMicrocents == null || !unitDef) return "";
+    const centsPerCanonical = ing.currentCostMicrocents / 1000;
+    return ((centsPerCanonical / 100) * unitDef.toCanonical).toFixed(4).replace(/\.?0+$/, "");
+  })();
+  const [pricePerDisplay, setPricePerDisplay] = useState(initialPriceDisplay);
+
   const inputCls =
     "w-full rounded bg-bg-inset border border-bg-border text-sm px-3 py-2 focus:outline-none focus:border-accent-500/60 text-text-primary placeholder:text-text-tertiary";
   const labelCls = "block text-xs font-medium text-text-secondary mb-1";
 
   async function handleSave() {
     setSaving(true);
+    // Convert dollars/displayUnit → cents/canonical for the API
+    let initialCostPerCanonicalCents: number | undefined;
+    if (pricePerDisplay.trim()) {
+      const dollarPerDisplay = parseFloat(pricePerDisplay);
+      if (!isNaN(dollarPerDisplay) && unitDef) {
+        initialCostPerCanonicalCents = (dollarPerDisplay * 100) / unitDef.toCanonical;
+      }
+    }
     const res = await api.patch<IngredientDetail>(`/ingredients/${ing.id}`, {
       name: name.trim() || undefined,
       preferredDisplayUnit: preferredDisplayUnit.trim() || undefined,
       reorderThresholdCanonical: reorderThreshold ? parseFloat(reorderThreshold) : undefined,
       notes: notes.trim() || undefined,
+      ...(initialCostPerCanonicalCents !== undefined ? { initialCostPerCanonicalCents } : {}),
     });
     setSaving(false);
     if (res.error) {
@@ -318,6 +339,23 @@ function EditForm({
           <div>
             <label className={labelCls}>Notes</label>
             <input className={inputCls} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+          <div>
+            <label className={labelCls}>
+              Current price ($ per {normalizedDisplayUnit ?? displayUnit})
+            </label>
+            <input
+              className={inputCls}
+              type="number"
+              min="0"
+              step="any"
+              value={pricePerDisplay}
+              onChange={(e) => setPricePerDisplay(e.target.value)}
+              placeholder="e.g. 16.00"
+            />
+            {!unitDef && (
+              <p className="text-[11px] text-warning mt-1">Unknown display unit — set Display unit first.</p>
+            )}
           </div>
         </div>
         <div className="flex gap-3 mt-4">

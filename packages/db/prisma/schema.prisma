@@ -129,7 +129,7 @@ model Vendor {
   ingredients     Ingredient[]
   invoices        Invoice[]
 
-  @@unique([workspaceId, name])
+  @@index([workspaceId, name])
   @@index([workspaceId])
   @@map("vendors")
 }
@@ -165,7 +165,7 @@ model Ingredient {
   wasteEntries              WasteEntry[]
   yieldEntries              YieldEntry[]
 
-  @@unique([workspaceId, name])
+  @@index([workspaceId, name])
   @@index([workspaceId])
   @@index([workspaceId, category])
   @@index([workspaceId, deletedAt])
@@ -338,7 +338,7 @@ model Recipe {
   costHistory                    RecipeCostHistory[]
   ingredients                    RecipeIngredient[]
 
-  @@unique([workspaceId, name])
+  @@index([workspaceId, name])
   @@index([workspaceId, status])
   @@index([workspaceId, deletedAt])
   @@map("recipes")
