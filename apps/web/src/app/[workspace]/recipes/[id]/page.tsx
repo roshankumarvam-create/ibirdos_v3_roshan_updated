@@ -5,6 +5,7 @@ import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button } from "@ibirdos/ui";
 import { IngredientsEditor, type EditableIngredientLine } from "./IngredientsEditor";
+import { DeleteRecipeButton } from "./delete-recipe-button";
 
 interface RecipeIngredientLine extends EditableIngredientLine {}
 
@@ -48,6 +49,7 @@ interface RecipeDetail {
   // Legacy — kept for backwards compat with non-upgraded clients
   cachedCostMicrocents: number | null;
   cachedCostPerPortionMicrocents: number | null;
+  photoUrl: string | null;
   prepPhotoUrl: string | null;
   finalPhotoUrl: string | null;
   videoUrl: string | null;
@@ -154,9 +156,7 @@ export default async function RecipeDetailPage({
           </div>
         </div>
         {canEdit && (
-          <Link href={`/${workspace}/recipes/${id}/edit` as any}>
-            <Button variant="secondary">Edit recipe</Button>
-          </Link>
+          <DeleteRecipeButton recipeId={id} workspaceSlug={workspace} recipeName={recipe.name} />
         )}
       </div>
 
@@ -228,10 +228,17 @@ export default async function RecipeDetailPage({
           )}
 
           {/* Photos */}
-          {(recipe.prepPhotoUrl || recipe.finalPhotoUrl) && (
+          {(recipe.photoUrl || recipe.prepPhotoUrl || recipe.finalPhotoUrl) && (
             <Card>
               <CardHeader><CardTitle>Photos</CardTitle></CardHeader>
               <CardBody className="flex gap-4 flex-wrap">
+                {recipe.photoUrl && !recipe.prepPhotoUrl && !recipe.finalPhotoUrl && (
+                  <div>
+                    <p className="text-xs text-text-tertiary mb-1">Recipe photo</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={recipe.photoUrl} alt="Recipe" className="h-32 w-auto rounded object-cover border border-bg-border" />
+                  </div>
+                )}
                 {recipe.prepPhotoUrl && (
                   <div>
                     <p className="text-xs text-text-tertiary mb-1">Prep</p>

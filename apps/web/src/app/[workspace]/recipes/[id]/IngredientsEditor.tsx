@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { api } from "@/lib/api";
+import { useRouter } from "next/navigation";
 
 const UNIT_GROUPS = [
   { label: "Volume", units: ["cup", "tbsp", "tsp", "fl_oz", "pint", "quart", "gallon", "ml", "l"] },
@@ -50,6 +51,21 @@ function fmtCents(cents: number | null) {
 export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, canEdit }: Props) {
   const [lines, setLines] = useState(initialLines);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const router = useRouter();
+
+  const removeIngredient = useCallback(
+    async (linkId: string) => {
+      if (!confirm("Remove this ingredient from the recipe?")) return;
+      setSaving(s => ({ ...s, [linkId]: true }));
+      const res = await api.delete(`/recipes/${recipeId}/ingredients/${linkId}`);
+      setSaving(s => ({ ...s, [linkId]: false }));
+      if (!res.error) {
+        setLines(prev => prev.filter(l => l.id !== linkId));
+        router.refresh();
+      }
+    },
+    [recipeId, router],
+  );
 
   const patchIngredient = useCallback(
     async (linkId: string, patch: Record<string, unknown>) => {
@@ -92,6 +108,7 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
           <th className="text-left px-4 py-2 font-medium w-24">Size</th>
           <th className="text-right px-4 py-2 font-medium w-20">% Used</th>
           <th className="text-right px-4 py-2 font-medium w-24">Line cost</th>
+          {canEdit && <th className="w-8 px-1 py-2" />}
         </tr>
       </thead>
       <tbody className="divide-y divide-bg-border">
@@ -159,7 +176,7 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
             <td className="px-4 py-1.5">
               {canEdit ? (
                 <select
-                  className="bg-transparent border-b border-transparent hover:border-bg-border focus:border-primary focus:outline-none text-sm font-mono cursor-pointer"
+                  className="bg-bg-inset border border-bg-border rounded px-1 py-0.5 text-text-primary focus:outline-none focus:border-accent-500/60 text-sm font-mono cursor-pointer"
                   defaultValue={line.unitNative ?? line.unit}
                   onBlur={e => handleBlur(line.id, "unitNative", e.target.value)}
                   onChange={e => handleBlur(line.id, "unitNative", e.target.value)}
@@ -183,7 +200,7 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
             <td className="px-4 py-1.5">
               {canEdit ? (
                 <select
-                  className="bg-transparent border-b border-transparent hover:border-bg-border focus:border-primary focus:outline-none text-sm cursor-pointer"
+                  className="bg-bg-inset border border-bg-border rounded px-1 py-0.5 text-text-primary focus:outline-none focus:border-accent-500/60 text-sm cursor-pointer"
                   defaultValue={line.sizeQualifier ?? ""}
                   onBlur={e => handleBlur(line.id, "sizeQualifier", e.target.value || null)}
                   onChange={e => handleBlur(line.id, "sizeQualifier", e.target.value || null)}
@@ -227,6 +244,20 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
                 ? fmtCents(line.lineCostMicrocents / 1000)
                 : fmtCents(line.lineCostCents)}
             </td>
+            {/* Remove button */}
+            {canEdit && (
+              <td className="px-1 py-1.5 text-center">
+                <button
+                  type="button"
+                  onClick={() => removeIngredient(line.id)}
+                  disabled={saving[line.id]}
+                  className="text-text-tertiary hover:text-danger disabled:opacity-30 text-xs px-1 py-0.5"
+                  title="Remove ingredient"
+                >
+                  ✕
+                </button>
+              </td>
+            )}
           </tr>
         ))}
       </tbody>
