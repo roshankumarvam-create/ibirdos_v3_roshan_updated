@@ -52,6 +52,40 @@ export class InvoicesService {
   }
 
   // -----------------------------------------------------------------
+  // Create manual invoice (no PDF) — status starts as PENDING_REVIEW
+  // -----------------------------------------------------------------
+
+  async createManual(
+    ctx: TenantContext,
+    input: { vendorId?: string; invoiceNumber?: string; invoiceDate?: string },
+  ) {
+    const invoice = await prisma.invoice.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        createdById: ctx.userId,
+        vendorId: input.vendorId ?? null,
+        invoiceNumber: input.invoiceNumber ?? null,
+        invoiceDate: input.invoiceDate ? new Date(input.invoiceDate) : null,
+        // Sentinel values — no PDF was uploaded
+        uploadKey: `workspaces/${ctx.workspaceId}/invoice/__manual__`,
+        uploadMimeType: "application/x-manual",
+        uploadSizeBytes: 0,
+        status: "PENDING_REVIEW",
+      },
+      include: { vendor: { select: { id: true, name: true } }, lines: true },
+    });
+
+    await writeAudit(ctx, {
+      action: "invoice.manual_created",
+      entityType: "Invoice",
+      entityId: invoice.id,
+    });
+
+    log.info({ invoiceId: invoice.id }, "manual invoice created");
+    return invoice;
+  }
+
+  // -----------------------------------------------------------------
   // Create invoice from uploaded file â†’ enqueue extraction
   // -----------------------------------------------------------------
 

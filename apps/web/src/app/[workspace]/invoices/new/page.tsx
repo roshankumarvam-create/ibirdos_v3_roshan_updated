@@ -16,7 +16,7 @@ const ACCEPTED_MIME_SET = new Set(["image/jpeg", "image/png", "image/webp", "app
 const ACCEPTED_SPREADSHEET_TYPES = ".xlsx,.xls,.csv";
 const ACCEPTED_SPREADSHEET_SET = new Set(["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "text/csv", "application/csv"]);
 
-type UploadMode = "file" | "camera" | "csv";
+type UploadMode = "file" | "camera" | "csv" | "manual";
 
 function getFileIcon(file: File) {
   if (file.type.startsWith("image/")) return "🖼";
@@ -44,6 +44,9 @@ export default function NewInvoicePage() {
   const [mode, setMode] = useState<UploadMode>("file");
   const [vendors, setVendors] = useState<VendorOption[]>([]);
   const [vendorId, setVendorId] = useState("");
+  const [manualInvoiceNumber, setManualInvoiceNumber] = useState("");
+  const [manualInvoiceDate, setManualInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [manualSaving, setManualSaving] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -137,6 +140,24 @@ export default function NewInvoicePage() {
     }
   };
 
+  const handleManualCreate = async () => {
+    setManualSaving(true);
+    setErrorBanner(null);
+    try {
+      const res = await api.post<{ id: string }>("/invoices/manual", {
+        vendorId: vendorId || undefined,
+        invoiceNumber: manualInvoiceNumber.trim() || undefined,
+        invoiceDate: manualInvoiceDate || undefined,
+      });
+      if (res.error) { setErrorBanner(res.error.message); return; }
+      router.push(`/${workspaceSlug}/invoices/${res.data.id}` as Route);
+    } catch (err: any) {
+      setErrorBanner(err?.message ?? "Failed to create invoice.");
+    } finally {
+      setManualSaving(false);
+    }
+  };
+
   const ocrEnabled = process.env.NEXT_PUBLIC_ENABLE_OCR === "true";
 
   const stepLabel =
@@ -159,7 +180,11 @@ export default function NewInvoicePage() {
           <Button variant="secondary" onClick={() => router.push(`/${workspaceSlug}/invoices` as Route)}>
             Cancel
           </Button>
-          {mode !== "csv" ? (
+          {mode === "manual" ? (
+            <Button onClick={handleManualCreate} loading={manualSaving}>
+              Create invoice
+            </Button>
+          ) : mode !== "csv" ? (
             <Button onClick={handleUpload} disabled={!file || uploading} loading={uploading}>
               {uploading ? stepLabel : ocrEnabled ? "Upload & extract" : "Upload invoice"}
             </Button>
@@ -180,13 +205,13 @@ export default function NewInvoicePage() {
 
       {/* Upload mode tabs */}
       <div className="flex gap-1 rounded-md bg-bg-elevated p-1 border border-bg-border">
-        {(["file", "camera", "csv"] as UploadMode[]).map((m) => (
+        {(["file", "camera", "csv", "manual"] as UploadMode[]).map((m) => (
           <button
             key={m}
             onClick={() => { setMode(m); setFile(null); setCsvFile(null); setPreviewUrl(null); setErrorBanner(null); }}
             className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${mode === m ? "bg-bg-base text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"}`}
           >
-            {m === "file" ? "📄 PDF / Image" : m === "camera" ? "📷 Camera" : "📊 CSV / Excel"}
+            {m === "file" ? "📄 PDF / Image" : m === "camera" ? "📷 Camera" : m === "csv" ? "📊 CSV / Excel" : "✏️ Manual"}
           </button>
         ))}
       </div>
@@ -319,6 +344,36 @@ export default function NewInvoicePage() {
         </Card>
       )}
 
+      {/* Manual mode */}
+      {mode === "manual" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Manual invoice</CardTitle>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <p className="text-sm text-text-secondary">Create a blank invoice and add line items manually — no file required.</p>
+            <div>
+              <Label htmlFor="manualInvoiceNumber">Invoice number (optional)</Label>
+              <Input
+                id="manualInvoiceNumber"
+                value={manualInvoiceNumber}
+                onChange={(e) => setManualInvoiceNumber(e.target.value)}
+                placeholder="e.g. INV-2024-001"
+              />
+            </div>
+            <div>
+              <Label htmlFor="manualInvoiceDate">Invoice date</Label>
+              <Input
+                id="manualInvoiceDate"
+                type="date"
+                value={manualInvoiceDate}
+                onChange={(e) => setManualInvoiceDate(e.target.value)}
+              />
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
       {/* Vendor selector (shared across modes) */}
       <Card>
         <CardHeader><CardTitle>Vendor (optional)</CardTitle></CardHeader>
@@ -336,7 +391,7 @@ export default function NewInvoicePage() {
         </CardBody>
       </Card>
 
-      {/* Bottom action button for file/pdf mode */}
+      {/* Bottom action button */}
       {mode === "file" && (
         <Button className="w-full" onClick={handleUpload} disabled={!file || uploading} loading={uploading}>
           {uploading ? stepLabel : ocrEnabled ? "Upload & extract" : "Upload invoice + add lines manually"}
@@ -345,6 +400,11 @@ export default function NewInvoicePage() {
       {mode === "csv" && (
         <Button className="w-full" onClick={handleCsvImport} disabled={!csvFile || uploading} loading={uploading}>
           {uploading ? stepLabel : "Import spreadsheet"}
+        </Button>
+      )}
+      {mode === "manual" && (
+        <Button className="w-full" onClick={handleManualCreate} loading={manualSaving}>
+          Create invoice
         </Button>
       )}
     </div>

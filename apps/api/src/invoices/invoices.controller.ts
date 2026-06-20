@@ -15,6 +15,12 @@ const CreateInvoiceSchema = z.object({
   vendorId: z.string().optional(),
 });
 
+const CreateManualInvoiceSchema = z.object({
+  vendorId: z.string().optional(),
+  invoiceNumber: z.string().max(80).optional(),
+  invoiceDate: z.string().optional(),
+});
+
 const UpdateLineSchema = z.object({
   descriptionRaw: z.string().optional(),
   quantity: z.number().positive().optional(),
@@ -82,6 +88,15 @@ export class InvoicesController {
     @Body(new ZodValidationPipe(CreateInvoiceSchema)) body: z.infer<typeof CreateInvoiceSchema>,
   ) {
     return ok(await this.svc.create(ctx, body));
+  }
+
+  @Post("manual")
+  @RequirePermission("invoice.upload")
+  async createManual(
+    @CurrentCtx() ctx: TenantContext,
+    @Body(new ZodValidationPipe(CreateManualInvoiceSchema)) body: z.infer<typeof CreateManualInvoiceSchema>,
+  ) {
+    return ok(await this.svc.createManual(ctx, body));
   }
 
   @Get(":id")

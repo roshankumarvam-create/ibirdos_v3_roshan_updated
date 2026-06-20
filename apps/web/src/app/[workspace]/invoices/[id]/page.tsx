@@ -165,6 +165,15 @@ export default function InvoiceReviewPage({
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
+          <div className="flex items-center gap-2 mb-1">
+            <button
+              type="button"
+              onClick={() => router.push(`/${workspace}/invoices` as any)}
+              className="text-xs text-text-tertiary hover:text-accent-500 transition-colors"
+            >
+              ← Invoices
+            </button>
+          </div>
           <h1 className="text-xl font-semibold tracking-tight">
             {invoice.vendor?.name ?? invoice.vendorNameRaw ?? "Untitled invoice"}
           </h1>
