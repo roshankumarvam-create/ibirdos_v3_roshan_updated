@@ -11,7 +11,7 @@ import { moduleLogger } from "@ibirdos/logger";
 import { IngredientsService } from "../ingredients/ingredients.service";
 import { UploadsService } from "../uploads/uploads.service";
 import { InventoryService } from "../inventory/inventory.service";
-import { toCanonical } from "@ibirdos/types";
+import { toCanonical, normalizeUnit, UNITS, CANONICAL_UNIT } from "@ibirdos/types";
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { detectVendorPriceChange } from "../insights/rules/vendor-price-change.rule";
 
@@ -699,16 +699,17 @@ export class InvoicesService {
 // ---------------------------------------------------------------------------
 
 function inferDimension(unit: string): { dimension: "MASS" | "VOLUME" | "COUNT"; canonicalUnit: string; preferredDisplayUnit: string } {
-  const u = (unit ?? "").toUpperCase().replace(/[^A-Z]/g, "");
-  // All weight units → always display in lb (grams stay as internal canonical storage)
-  if (["LB", "LBS", "OZ", "KG", "G", "GRAM", "GRAMS", "MG"].includes(u))
-    return { dimension: "MASS",   canonicalUnit: "g",    preferredDisplayUnit: "lb"   };
-  // Gallon-scale volumes → gal display; smaller volumes → floz display
-  if (u === "GAL")
-    return { dimension: "VOLUME", canonicalUnit: "ml",   preferredDisplayUnit: "gal"  };
-  if (["QT", "PT", "L", "LITER", "LITERS", "ML", "FLOZ"].includes(u))
-    return { dimension: "VOLUME", canonicalUnit: "ml",   preferredDisplayUnit: "floz" };
-  return { dimension: "COUNT",  canonicalUnit: "each", preferredDisplayUnit: "each" };
+  const normalized = normalizeUnit(unit);
+  if (normalized && UNITS[normalized]) {
+    const def = UNITS[normalized]!;
+    const dim = def.dimension as "MASS" | "VOLUME" | "COUNT";
+    return {
+      dimension: dim,
+      canonicalUnit: CANONICAL_UNIT[dim],
+      preferredDisplayUnit: normalized,
+    };
+  }
+  return { dimension: "COUNT", canonicalUnit: "each", preferredDisplayUnit: unit ? unit.toLowerCase() : "each" };
 }
 
 function parseDate(v: any): Date | null {
