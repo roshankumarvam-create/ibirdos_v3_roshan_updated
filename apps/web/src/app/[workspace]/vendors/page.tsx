@@ -47,7 +47,11 @@ export default async function VendorsPage() {
             <tbody className="divide-y divide-bg-border">
               {items.map((v) => (
                 <tr key={v.id} className="hover:bg-bg-hover/30">
-                  <td className="px-5 py-3 text-text-primary">{v.name}</td>
+                  <td className="px-5 py-3">
+                    <Link href={`/${user.workspaceSlug}/vendors/${v.id}` as any} className="text-text-primary hover:text-accent-500 transition-colors font-medium">
+                      {v.name}
+                    </Link>
+                  </td>
                   <td className="px-5 py-3 font-mono text-xs text-text-secondary">{v.code ?? "—"}</td>
                   <td className="px-5 py-3 text-text-secondary text-xs">{v.contactEmail ?? "—"}</td>
                   <td className="px-5 py-3">

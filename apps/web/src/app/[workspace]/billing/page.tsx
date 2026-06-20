@@ -30,12 +30,17 @@ interface Plan {
   features: readonly string[];
 }
 
-export default async function BillingPage() {
+export default async function BillingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ success?: string }>;
+}) {
   const user = await requireSession();
   if (user.role !== "OWNER" && user.role !== "MANAGER") {
     return <div className="text-text-tertiary">Billing requires owner or manager access.</div>;
   }
   const c = await cookies();
+  const sp = await searchParams;
   const [subRes, plansRes] = await Promise.all([
     api.get<Sub>("/billing/subscription", { cookies: c }),
     api.get<{ items: Plan[] }>("/billing/plans", { cookies: c }),
@@ -49,6 +54,12 @@ export default async function BillingPage() {
         <h1 className="text-xl font-semibold tracking-tight">Billing</h1>
         <p className="mt-1 text-xs font-mono text-text-secondary">Subscription · payment history · plan management</p>
       </header>
+
+      {sp.success === "1" && (
+        <div className="rounded-md border border-success/40 bg-success/10 px-4 py-3 text-sm text-success font-medium">
+          Payment successful — your subscription is now active.
+        </div>
+      )}
 
       {sub ? (
         <Card>

@@ -26,13 +26,19 @@ export function PlanCards({ plans, userEmail, isOwner }: Props) {
   const [loading, setLoading] = useState<string | null>(null);
 
   async function handleChoosePlan(plan: string) {
+    if (!userEmail || !userEmail.includes("@")) {
+      toast.error("A verified email address is required for checkout. Update your email in account settings first.");
+      return;
+    }
     setLoading(plan);
+    const successUrl = window.location.origin + window.location.pathname + "?success=1";
+    const cancelUrl = window.location.origin + window.location.pathname;
     const res = await api.post<{ checkoutUrl: string }>("/billing/checkout", {
       plan,
       interval: "month",
       billingEmail: userEmail,
-      successUrl: window.location.href + "?success=1",
-      cancelUrl: window.location.href,
+      successUrl,
+      cancelUrl,
     });
     setLoading(null);
 
