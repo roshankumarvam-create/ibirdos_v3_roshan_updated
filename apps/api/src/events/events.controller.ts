@@ -83,6 +83,11 @@ export class EventsController {
     return this.svc.get(ctx, id).then(ok);
   }
 
+  @Delete(":id") @RequirePermission("event.delete") @HttpCode(HttpStatus.OK)
+  delete(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.delete(ctx, id).then(ok);
+  }
+
   @Post(":id/menu") @RequirePermission("event.update")
   addMenu(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
           @Body(new ZodValidationPipe(AddMenuSchema)) body: any): Promise<any> {

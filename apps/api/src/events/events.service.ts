@@ -975,4 +975,21 @@ ${event.notes ? `<p style="font-size:13px;color:#666;margin-top:24px"><strong>No
     log.info({ eventId, recipient }, "quote email sent");
     return { sentTo: recipient };
   }
+
+  async delete(ctx: TenantContext, eventId: string): Promise<{ deleted: true }> {
+    const event = await prisma.event.findFirst({
+      where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+
+    await prisma.event.update({
+      where: { id: eventId },
+      data: { deletedAt: new Date() },
+    });
+
+    await writeAudit(ctx, { action: "event.deleted", entityType: "Event", entityId: eventId });
+    log.info({ eventId }, "event soft-deleted");
+    return { deleted: true };
+  }
 }

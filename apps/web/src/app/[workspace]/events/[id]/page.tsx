@@ -9,6 +9,7 @@ import { MenuSection } from "./menu-section";
 import { ShortageBanner } from "./shortage-banner";
 import { MarkPaidButton } from "./mark-paid-button";
 import { SendQuoteButton } from "./send-quote-button";
+import { DeleteEventButton } from "./delete-event-button";
 
 interface MenuItem {
   id: string;
@@ -201,6 +202,9 @@ export default async function EventDetailPage({
             />
           )}
           {!isPaid && <MarkPaidButton eventId={event.id} />}
+          {(user.role === "OWNER" || user.role === "MANAGER") && (
+            <DeleteEventButton eventId={event.id} workspaceSlug={workspace} eventName={event.name} />
+          )}
         </div>
       </div>
 
