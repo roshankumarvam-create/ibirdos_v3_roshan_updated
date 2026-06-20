@@ -37,6 +37,10 @@ function AdjustForm() {
   const searchParams = useSearchParams();
   const preselectedId = searchParams.get("ingredientId");
 
+  const backUrl = preselectedId
+    ? (`/${workspace}/ingredients/${preselectedId}` as any)
+    : (`/${workspace}/inventory` as any);
+
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [ingredientId, setIngredientId] = useState(preselectedId ?? "");
   const [type, setType] = useState<AdjustmentType>("RECEIVE");
@@ -126,7 +130,7 @@ function AdjustForm() {
       } else {
         setSuccess(`Adjusted ${ingName}: +${qty} ${unit}`);
       }
-      setTimeout(() => router.push(`/${workspace}/inventory` as any), 1500);
+      setTimeout(() => router.push(backUrl), 1500);
     }
   }
 
@@ -148,6 +152,15 @@ function AdjustForm() {
     <>
       {/* Dynamic header — shows ingredient name when pre-selected */}
       <header className="mb-6">
+        <div className="flex items-center gap-2 mb-1">
+          <button
+            type="button"
+            onClick={() => router.push(backUrl)}
+            className="text-xs text-text-tertiary hover:text-accent-500 transition-colors"
+          >
+            ← {preselectedId && selectedIngredient ? `Back to ${selectedIngredient.name}` : "Back to inventory"}
+          </button>
+        </div>
         <h1 className="text-xl font-semibold tracking-tight">
           {selectedIngredient ? `Adjust stock: ${selectedIngredient.name}` : "Manual inventory adjustment"}
         </h1>
@@ -294,7 +307,7 @@ function AdjustForm() {
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => router.push(`/${workspace}/inventory` as any)}
+                onClick={() => router.push(backUrl)}
               >
                 Cancel
               </Button>

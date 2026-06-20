@@ -89,6 +89,9 @@ export default function IngredientDetailPage({
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
+          <Link href={`/${workspace}/inventory/adjust?ingredientId=${id}` as any}>
+            <Button variant="secondary" size="sm">Adjust stock</Button>
+          </Link>
           <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
           <Button
             variant="secondary"
