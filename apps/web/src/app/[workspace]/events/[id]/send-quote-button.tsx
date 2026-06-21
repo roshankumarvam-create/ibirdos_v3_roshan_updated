@@ -33,10 +33,11 @@ export function SendQuoteButton({ eventId, clientEmail, eventName }: Props) {
   };
 
   const copyToClipboard = async () => {
+    const url = window.location.href;
     await navigator.clipboard.writeText(
-      `Quote for ${eventName}\nClient: ${clientEmail ?? "(no email set)"}\n\nReply to this message to confirm the quote.`,
+      `Quote for: ${eventName}\nClient: ${clientEmail ?? "(no email set)"}\nEvent link: ${url}\n\nTo confirm this quote, reply to this message or contact us.`,
     );
-    alert("Quote reference copied to clipboard.");
+    alert("Quote details copied. Paste into an email to send to your client.");
   };
 
   if (state === "sent") {
@@ -50,12 +51,12 @@ export function SendQuoteButton({ eventId, clientEmail, eventName }: Props) {
   if (state === "not_configured") {
     return (
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-warning">Email not configured.</span>
+        <span className="text-xs text-warning">Email not set up.</span>
         <button
           onClick={copyToClipboard}
           className="text-xs text-accent-400 hover:underline"
         >
-          Copy quote reference
+          Copy quote &amp; link
         </button>
       </div>
     );

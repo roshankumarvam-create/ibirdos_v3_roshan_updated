@@ -27,7 +27,7 @@ export function PlanCards({ plans, userEmail, isOwner }: Props) {
 
   async function handleChoosePlan(plan: string) {
     if (!userEmail || !userEmail.includes("@")) {
-      toast.error("A verified email address is required for checkout. Update your email in account settings first.");
+      toast.error("Add your email address in account settings before subscribing.");
       return;
     }
     setLoading(plan);

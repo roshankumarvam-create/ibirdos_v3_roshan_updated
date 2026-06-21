@@ -143,8 +143,11 @@ export default async function EventDetailPage({
   }, 0);
   const foodCostCents = event.computedFoodCostCents ?? liveFoodCostCents;
 
-  // Profit = revenue - food cost - labor
-  const revenueCents = event.quotedPriceCents ?? 0;
+  // Effective revenue: prefer the menu-builder override, then static quoted price.
+  // quotedTotalOverrideCents is set by the quote builder; quotedPriceCents is set
+  // at event creation. Both serve as the "agreed price" so we merge them here.
+  const effectiveQuoteCents = event.quotedTotalOverrideCents ?? event.quotedPriceCents;
+  const revenueCents = effectiveQuoteCents ?? 0;
   const profitCents = revenueCents - foodCostCents - totalLaborCents;
   const marginPct = revenueCents > 0 ? (profitCents / revenueCents) * 100 : null;
 
@@ -221,8 +224,8 @@ export default async function EventDetailPage({
         <KpiCard label="Guests" value={event.guestCount.toString()} />
         <KpiCard
           label="Revenue"
-          value={event.quotedPriceCents != null ? formatCents(revenueCents) : "—"}
-          {...(event.quotedPriceCents == null ? { sub: "No quote yet" } : {})}
+          value={effectiveQuoteCents != null ? formatCents(revenueCents) : "—"}
+          {...(effectiveQuoteCents == null ? { sub: "No quote yet" } : {})}
         />
         <KpiCard
           label={event.frozenAt ? "Food cost (frozen)" : "Food cost"}
@@ -240,11 +243,11 @@ export default async function EventDetailPage({
         />
         <KpiCard
           label="Profit"
-          value={event.quotedPriceCents != null ? formatCents(profitCents) : "—"}
-          tone={event.quotedPriceCents != null
+          value={effectiveQuoteCents != null ? formatCents(profitCents) : "—"}
+          tone={effectiveQuoteCents != null
             ? (profitCents < 0 ? "danger" : profitCents < revenueCents * 0.2 ? "warning" : "default")
             : "default"}
-          {...(event.quotedPriceCents == null ? { sub: "Set quote first" } : {})}
+          {...(effectiveQuoteCents == null ? { sub: "Set quote first" } : {})}
         />
         <KpiCard
           label="Margin %"
