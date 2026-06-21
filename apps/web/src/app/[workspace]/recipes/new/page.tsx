@@ -274,6 +274,14 @@ export default function NewRecipePage() {
 
       // Pre-fill ingredient lines (replace blank line if only one blank row)
       if (d.ingredientLines?.length > 0) {
+        console.log("[TRACE-4] RAW ingredientLines[0]:", {
+          name: d.ingredientLines[0]?.name,
+          matchedName: d.ingredientLines[0]?.matchedName,
+          qty: d.ingredientLines[0]?.qty,
+          quantity: d.ingredientLines[0]?.quantity,
+          nativeUnit: d.ingredientLines[0]?.nativeUnit,
+          unit: d.ingredientLines[0]?.unit,
+        });
         const newLines: IngredientLine[] = d.ingredientLines.map((il: any) => ({
           ...newLine(),
           ingredientId: il.ingredientId ?? "",
@@ -286,6 +294,12 @@ export default function NewRecipePage() {
           // Yellow border if no match
           needsReview: !il.ingredientId,
         }));
+        console.log("[TRACE-4] FORM STATE init[0]:", {
+          searchQuery: newLines[0]?.searchQuery,
+          quantity: newLines[0]?.quantity,
+          unit: newLines[0]?.unit,
+          dimension: newLines[0]?.dimension,
+        });
         setLines(prev => {
           const hasOnlyBlank = prev.length === 1 && !prev[0]!.ingredientId && !prev[0]!.quantity;
           return hasOnlyBlank ? newLines : [...prev, ...newLines];
@@ -620,6 +634,13 @@ export default function NewRecipePage() {
 
                           {/* Unit */}
                           <td className="px-3 py-2">
+                            {/* [TRACE-5] */ typeof console !== "undefined" && line.unit && (() => {
+                              const opts = UNITS_BY_DIMENSION[line.dimension] ?? UNITS_BY_DIMENSION["MASS"]!;
+                              if (!opts.includes(line.unit)) {
+                                console.log("[TRACE-5] RENDER unit mismatch:", { name: line.searchQuery, unit: line.unit, dimension: line.dimension, opts });
+                              }
+                              return null;
+                            })()}
                             <select
                               value={line.unit}
                               onChange={e => updateLine(line.key, { unit: e.target.value })}
