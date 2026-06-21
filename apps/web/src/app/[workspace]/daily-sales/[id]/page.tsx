@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardBody, CardHeader, CardTitle, Button, Input, Label } from "@ibirdos/ui";
 import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
+import { VarianceStatus } from "@/components/VarianceStatus";
 import type { Route } from "next";
 
 const TENDER_TYPES = [
@@ -56,17 +58,31 @@ interface SaleRecord {
   tenders: Array<{ tenderType: TenderType; amount: string | number; count: number }>;
 }
 
-export default function EditDailySalesPage() {
+function ViewField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-text-tertiary uppercase tracking-wider">{label}</p>
+      <p className="mt-0.5 text-sm text-text-primary font-medium">{value}</p>
+    </div>
+  );
+}
+
+function fmt(v: string | number) {
+  return `$${parseFloat(String(v)).toFixed(2)}`;
+}
+
+export default function DailySalesDetailPage() {
   const params = useParams<{ workspace: string; id: string }>();
   const router = useRouter();
   const ws = params.workspace;
   const id = params.id;
 
+  const [mode, setMode] = useState<"view" | "edit">("view");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [record, setRecord] = useState<SaleRecord | null>(null);
 
   const [saleDate, setSaleDate] = useState("");
   const [status, setStatus] = useState<DailySalesStatus>("NO_BUSINESS");
@@ -83,34 +99,39 @@ export default function EditDailySalesPage() {
   const [notes, setNotes] = useState("");
   const [tenders, setTenders] = useState<TenderRow[]>([{ tenderType: "CASH", amount: "", count: "" }]);
 
+  function populateFormFields(d: SaleRecord) {
+    setSaleDate(new Date(d.saleDate).toISOString().slice(0, 10));
+    setStatus(d.status ?? "NO_BUSINESS");
+    setShift((d.shift as ShiftType) ?? "");
+    setGrossSales(String(parseFloat(String(d.grossSales)).toFixed(2)));
+    setNetSales(String(parseFloat(String(d.netSales)).toFixed(2)));
+    setTax(String(parseFloat(String(d.tax)).toFixed(2)));
+    setDiscounts(String(parseFloat(String(d.discounts)).toFixed(2)));
+    setVoids(String(parseFloat(String(d.voids)).toFixed(2)));
+    setRefunds(String(parseFloat(String(d.refunds)).toFixed(2)));
+    setCateringSales(String(parseFloat(String(d.cateringSales)).toFixed(2)));
+    setOnlineSales(String(parseFloat(String(d.onlineSales)).toFixed(2)));
+    setDeliveryAppSales(String(parseFloat(String(d.deliveryAppSales)).toFixed(2)));
+    setNotes(d.notes ?? "");
+    setTenders(
+      d.tenders.length > 0
+        ? d.tenders.map((t) => ({
+            tenderType: t.tenderType,
+            amount: String(parseFloat(String(t.amount)).toFixed(2)),
+            count: String(t.count),
+          }))
+        : [{ tenderType: "CASH", amount: "", count: "" }],
+    );
+  }
+
   useEffect(() => {
     api.get<SaleRecord>(`/daily-sales/${id}`).then((res) => {
       setLoading(false);
       if (res.error || !res.data) { setError(res.error?.message ?? "Not found"); return; }
-      const d = res.data;
-      setSaleDate(new Date(d.saleDate).toISOString().slice(0, 10));
-      setStatus(d.status ?? "NO_BUSINESS");
-      setShift((d.shift as ShiftType) ?? "");
-      setGrossSales(String(parseFloat(String(d.grossSales)).toFixed(2)));
-      setNetSales(String(parseFloat(String(d.netSales)).toFixed(2)));
-      setTax(String(parseFloat(String(d.tax)).toFixed(2)));
-      setDiscounts(String(parseFloat(String(d.discounts)).toFixed(2)));
-      setVoids(String(parseFloat(String(d.voids)).toFixed(2)));
-      setRefunds(String(parseFloat(String(d.refunds)).toFixed(2)));
-      setCateringSales(String(parseFloat(String(d.cateringSales)).toFixed(2)));
-      setOnlineSales(String(parseFloat(String(d.onlineSales)).toFixed(2)));
-      setDeliveryAppSales(String(parseFloat(String(d.deliveryAppSales)).toFixed(2)));
-      setNotes(d.notes ?? "");
-      setTenders(
-        d.tenders.length > 0
-          ? d.tenders.map((t) => ({
-              tenderType: t.tenderType,
-              amount: String(parseFloat(String(t.amount)).toFixed(2)),
-              count: String(t.count),
-            }))
-          : [{ tenderType: "CASH", amount: "", count: "" }],
-      );
+      setRecord(res.data);
+      populateFormFields(res.data);
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const tenderTotal = tenders.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
@@ -133,7 +154,6 @@ export default function EditDailySalesPage() {
     e.preventDefault();
     setSaving(true);
     setError(null);
-    setSuccess(false);
     const res = await api.patch(`/daily-sales/${id}`, {
       grossSales: parseFloat(grossSales) || 0,
       netSales: parseFloat(netSales) || 0,
@@ -157,8 +177,8 @@ export default function EditDailySalesPage() {
     });
     setSaving(false);
     if (res.error) { setError(res.error.message ?? "Save failed"); return; }
-    setSuccess(true);
-    setTimeout(() => setSuccess(false), 3000);
+    toast.success("Daily sales updated successfully.");
+    router.push(`/${ws}/daily-sales` as Route);
   }
 
   async function handleDelete() {
@@ -168,13 +188,121 @@ export default function EditDailySalesPage() {
     router.push(`/${ws}/daily-sales` as Route);
   }
 
+  function handleCancelEdit() {
+    if (record) populateFormFields(record);
+    setError(null);
+    setMode("view");
+  }
+
   if (loading) return <div className="py-12 text-center text-sm text-text-tertiary">Loading…</div>;
 
-  if (error && !saving && !success) {
+  if (!record) {
     return (
       <div className="py-12 text-center">
-        <p className="text-sm text-danger">{error}</p>
-        <Button variant="ghost" size="sm" className="mt-4" onClick={() => router.push(`/${ws}/daily-sales` as Route)}>← Back to list</Button>
+        <p className="text-sm text-danger">{error ?? "Not found"}</p>
+        <Button variant="ghost" size="sm" className="mt-4" onClick={() => router.push(`/${ws}/daily-sales` as Route)}>
+          ← Back to list
+        </Button>
+      </div>
+    );
+  }
+
+  if (mode === "view") {
+    const viewTenderTotal = record.tenders.reduce((s, t) => s + parseFloat(String(t.amount)), 0);
+    const viewNet = parseFloat(String(record.netSales));
+    const viewVariance = viewTenderTotal - viewNet;
+    const viewDate = new Date(record.saleDate).toISOString().slice(0, 10);
+    const statusOpt = STATUS_OPTIONS.find((o) => o.value === record.status) ?? STATUS_OPTIONS[0]!;
+    const shiftLabel = SHIFT_OPTIONS.find((o) => o.value === (record.shift ?? ""))?.label ?? "—";
+
+    return (
+      <div className="space-y-6 pb-20 max-w-2xl">
+        <header className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="sm" type="button" onClick={() => router.push(`/${ws}/daily-sales` as Route)}>
+              ← Back
+            </Button>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight">Daily sales</h1>
+              <p className="text-xs text-text-tertiary">{viewDate}</p>
+            </div>
+          </div>
+          <div className="flex gap-2 items-center">
+            <Button variant="ghost" size="sm" type="button" onClick={handleDelete} loading={deleting} className="text-danger hover:text-danger">
+              Delete
+            </Button>
+            <Button type="button" onClick={() => setMode("edit")}>Edit</Button>
+          </div>
+        </header>
+
+        <Card>
+          <CardHeader><CardTitle>Status</CardTitle></CardHeader>
+          <CardBody>
+            <span className={`inline-flex items-center rounded-md border px-4 py-2 text-sm font-medium ${statusOpt.active}`}>
+              {statusOpt.label}
+            </span>
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Sales summary</CardTitle></CardHeader>
+          <CardBody>
+            <div className="grid grid-cols-2 gap-4">
+              <ViewField label="Date" value={viewDate} />
+              <ViewField label="Shift" value={shiftLabel} />
+              <ViewField label="Gross sales" value={fmt(record.grossSales)} />
+              <ViewField label="Net sales" value={fmt(record.netSales)} />
+              <ViewField label="Tax" value={fmt(record.tax)} />
+              <ViewField label="Discounts" value={fmt(record.discounts)} />
+              <ViewField label="Voids" value={fmt(record.voids)} />
+              <ViewField label="Refunds" value={fmt(record.refunds)} />
+              <ViewField label="Catering sales" value={fmt(record.cateringSales)} />
+              <ViewField label="Online sales" value={fmt(record.onlineSales)} />
+              <ViewField label="Delivery app sales" value={fmt(record.deliveryAppSales)} />
+            </div>
+            {record.notes && (
+              <div className="mt-4">
+                <p className="text-xs text-text-tertiary uppercase tracking-wider">Notes</p>
+                <p className="mt-0.5 text-sm text-text-secondary">{record.notes}</p>
+              </div>
+            )}
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Tender breakdown</CardTitle></CardHeader>
+          <CardBody className="space-y-3">
+            {record.tenders.length === 0 ? (
+              <p className="text-sm text-text-tertiary">No tenders recorded.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-bg-border">
+                    <th className="text-left pb-2">Type</th>
+                    <th className="text-right pb-2">Amount</th>
+                    <th className="text-right pb-2">Count</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-bg-border/50">
+                  {record.tenders.map((t, i) => (
+                    <tr key={i}>
+                      <td className="py-2 text-text-secondary">{t.tenderType.replace(/_/g, " ")}</td>
+                      <td className="py-2 text-right text-text-primary">{fmt(t.amount)}</td>
+                      <td className="py-2 text-right text-text-tertiary">{t.count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div className="mt-4 rounded-md px-4 py-3 text-sm flex items-center justify-between bg-bg-elevated border border-bg-border">
+              <span className="text-text-secondary">
+                Tender total: <strong className="text-text-primary">${viewTenderTotal.toFixed(2)}</strong>{" "}
+                vs net sales: <strong className="text-text-primary">${viewNet.toFixed(2)}</strong>
+              </span>
+              <VarianceStatus amount={viewVariance} showAmount />
+            </div>
+          </CardBody>
+        </Card>
       </div>
     );
   }
@@ -183,8 +311,8 @@ export default function EditDailySalesPage() {
     <form onSubmit={handleSubmit} className="space-y-6 pb-20 max-w-2xl">
       <header className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" type="button" onClick={() => router.push(`/${ws}/daily-sales` as Route)}>
-            ← Back
+          <Button variant="ghost" size="sm" type="button" onClick={handleCancelEdit}>
+            ← Cancel
           </Button>
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Edit daily sales</h1>
@@ -192,11 +320,10 @@ export default function EditDailySalesPage() {
           </div>
         </div>
         <div className="flex gap-2 items-center">
-          {success && <span className="text-sm text-success font-medium">Saved ✓</span>}
           <Button variant="ghost" size="sm" type="button" onClick={handleDelete} loading={deleting} className="text-danger hover:text-danger">
             Delete
           </Button>
-          <Button variant="secondary" type="button" onClick={() => router.push(`/${ws}/daily-sales` as Route)}>
+          <Button variant="secondary" type="button" onClick={handleCancelEdit}>
             Cancel
           </Button>
           <Button type="submit" loading={saving}>Save</Button>
@@ -335,11 +462,12 @@ export default function EditDailySalesPage() {
             </div>
           ))}
 
-          <div className={`mt-4 rounded-md px-4 py-3 text-sm flex items-center justify-between ${Math.abs(variance) < 0.01 ? "bg-success/10 border border-success/30 text-success" : "bg-warning/10 border border-warning/30 text-warning"}`}>
-            <span>Tender total: <strong>${tenderTotal.toFixed(2)}</strong> vs net sales: <strong>${net.toFixed(2)}</strong></span>
-            <span className="font-medium">
-              {Math.abs(variance) < 0.01 ? "Balanced ✓" : `Variance: ${variance >= 0 ? "+" : ""}${variance.toFixed(2)}`}
+          <div className="mt-4 rounded-md px-4 py-3 text-sm flex items-center justify-between bg-bg-elevated border border-bg-border">
+            <span className="text-text-secondary">
+              Tender total: <strong className="text-text-primary">${tenderTotal.toFixed(2)}</strong>{" "}
+              vs net sales: <strong className="text-text-primary">${net.toFixed(2)}</strong>
             </span>
+            <VarianceStatus amount={variance} showAmount />
           </div>
         </CardBody>
       </Card>

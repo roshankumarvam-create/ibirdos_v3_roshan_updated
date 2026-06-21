@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label } from "@ibirdos/ui";
 import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
+import { VarianceStatus } from "@/components/VarianceStatus";
 import type { Route } from "next";
 
 const TENDER_TYPES = [
@@ -121,7 +123,8 @@ export default function NewDailySalesPage() {
       setError(res.error.message ?? "Save failed");
       return;
     }
-    router.push(`/${ws}/daily-sales/${res.data.id}` as Route);
+    toast.success("Daily sales saved successfully.");
+    router.push(`/${ws}/daily-sales` as Route);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -276,11 +279,12 @@ export default function NewDailySalesPage() {
               </div>
             ))}
 
-            <div className={`mt-4 rounded-md px-4 py-3 text-sm flex items-center justify-between ${Math.abs(variance) < 0.01 ? "bg-success/10 border border-success/30 text-success" : "bg-warning/10 border border-warning/30 text-warning"}`}>
-              <span>Tender total: <strong>${tenderTotal.toFixed(2)}</strong> vs net sales: <strong>${net.toFixed(2)}</strong></span>
-              <span className="font-medium">
-                {Math.abs(variance) < 0.01 ? "Balanced ✓" : `Variance: ${variance >= 0 ? "+" : ""}${variance.toFixed(2)}`}
+            <div className="mt-4 rounded-md px-4 py-3 text-sm flex items-center justify-between bg-bg-elevated border border-bg-border">
+              <span className="text-text-secondary">
+                Tender total: <strong className="text-text-primary">${tenderTotal.toFixed(2)}</strong>{" "}
+                vs net sales: <strong className="text-text-primary">${net.toFixed(2)}</strong>
               </span>
+              <VarianceStatus amount={variance} showAmount />
             </div>
           </CardBody>
         </Card>

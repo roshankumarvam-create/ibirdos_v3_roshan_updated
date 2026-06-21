@@ -3,8 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, useMemo } from "react";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/common/skeleton";
-import { Badge } from "@ibirdos/ui";
 import { StatusBadge } from "@/components/common/status-badge";
+import { VarianceStatus } from "@/components/VarianceStatus";
 
 type DailySalesStatus = "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
 
@@ -107,7 +107,8 @@ export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
             <th className="text-right px-4 py-3">Gross</th>
             <th className="text-right px-4 py-3">Net</th>
             <th className="text-right px-4 py-3">Tenders</th>
-            <th className="text-center px-4 py-3">Balance</th>
+            <th className="text-left px-4 py-3">Bal. Status</th>
+            <th className="text-right px-4 py-3">Variance</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-bg-border">
@@ -133,18 +134,20 @@ export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
                   <td className="px-4 py-2.5 text-right font-medium text-text-secondary">{fmt(group.totalGross)}</td>
                   <td className="px-4 py-2.5 text-right font-semibold text-text-primary">{fmt(group.totalNet)}</td>
                   <td className="px-4 py-2.5 text-right text-text-secondary">{fmt(group.totalTenders)}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    <Badge tone={groupBalanced ? "success" : "warning"}>
-                      {groupBalanced ? "OK" : `off ${(group.totalTenders - group.totalNet >= 0 ? "+" : "")}${(group.totalTenders - group.totalNet).toFixed(2)}`}
-                    </Badge>
+                  <td className="px-4 py-2.5">
+                    <VarianceStatus amount={group.totalTenders - group.totalNet} />
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-text-tertiary text-xs">
+                    {groupBalanced ? "—" : `${(group.totalTenders - group.totalNet) >= 0 ? "+" : ""}$${Math.abs(group.totalTenders - group.totalNet).toFixed(2)}`}
                   </td>
                 </tr>
 
                 {/* Sub-rows for each entry (hidden when collapsed) */}
                 {!isCollapsed && group.rows.map((row) => {
-                  const tenderTotal = row.tenders.reduce((s, t) => s + parseFloat(String(t.amount)), 0);
-                  const net = parseFloat(String(row.netSales));
-                  const balanced = Math.abs(tenderTotal - net) < 0.01;
+                  const rowTenderTotal = row.tenders.reduce((s, t) => s + parseFloat(String(t.amount)), 0);
+                  const rowNet = parseFloat(String(row.netSales));
+                  const rowVariance = rowTenderTotal - rowNet;
+                  const rowBalanced = Math.abs(rowVariance) < 0.01;
                   const statusInfo = STATUS_BADGE[row.status] ?? STATUS_BADGE.NO_BUSINESS;
                   return (
                     <tr
@@ -166,11 +169,12 @@ export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
                       </td>
                       <td className="px-4 py-2.5 text-right text-text-tertiary">{fmt(row.grossSales)}</td>
                       <td className="px-4 py-2.5 text-right text-text-secondary">{fmt(row.netSales)}</td>
-                      <td className="px-4 py-2.5 text-right text-text-tertiary">{fmt(tenderTotal)}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        <Badge tone={balanced ? "success" : "warning"}>
-                          {balanced ? "OK" : `off ${(tenderTotal - net >= 0 ? "+" : "")}${(tenderTotal - net).toFixed(2)}`}
-                        </Badge>
+                      <td className="px-4 py-2.5 text-right text-text-tertiary">{fmt(rowTenderTotal)}</td>
+                      <td className="px-4 py-2.5">
+                        <VarianceStatus amount={rowVariance} />
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-text-tertiary text-xs">
+                        {rowBalanced ? "—" : `${rowVariance >= 0 ? "+" : ""}$${Math.abs(rowVariance).toFixed(2)}`}
                       </td>
                     </tr>
                   );
