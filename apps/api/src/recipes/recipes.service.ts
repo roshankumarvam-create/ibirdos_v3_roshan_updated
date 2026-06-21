@@ -32,6 +32,7 @@ import {
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { computeLiveRecipeCost } from "./recipe-cost.helper";
+import { parseXLSX } from "./recipe-spreadsheet-parser";
 
 const log = moduleLogger("RecipesService");
 
@@ -605,6 +606,49 @@ export class RecipesService {
   // -----------------------------------------------------------------
 
   /**
+   * Parse spreadsheet without saving — returns recipes + per-ingredient match status.
+   * Called by POST /recipes/preview-import before the user confirms import.
+   */
+  async previewImport(
+    ctx: TenantContext,
+    input: { filename: string; contentBase64: string },
+  ) {
+    const buf = Buffer.from(input.contentBase64, "base64");
+    const parsed = parseXLSX(buf);
+
+    if (parsed.recipes.length === 0) {
+      return { recipes: [], unparsed: parsed.unparsed, needsReview: true, overallConfidence: 0 };
+    }
+
+    const existingIngredients = await prisma.ingredient.findMany({
+      where: { workspaceId: ctx.workspaceId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    const ingByName = new Map(existingIngredients.map(i => [i.name.toLowerCase(), i.id]));
+
+    const recipes = parsed.recipes.map(recipe => ({
+      name: recipe.name,
+      category: recipe.category ?? null,
+      yield_portions: recipe.yield_portions ?? null,
+      confidence: recipe.confidence,
+      warnings: recipe.warnings,
+      ingredients: recipe.ingredients.map(ing => ({
+        ingredient_name: ing.ingredient_name,
+        quantity: ing.quantity ?? null,
+        unit: ing.unit ?? null,
+        notes: ing.notes ?? null,
+        matchStatus: ingByName.has(ing.ingredient_name.toLowerCase())
+          ? ("matched" as const)
+          : ("willCreate" as const),
+        matchedIngredientId: ingByName.get(ing.ingredient_name.toLowerCase()) ?? null,
+      })),
+    }));
+
+    const overallConfidence = parsed.recipes.reduce((min, r) => Math.min(min, r.confidence), 1.0);
+    return { recipes, unparsed: parsed.unparsed, needsReview: parsed.needsReview, overallConfidence };
+  }
+
+  /**
    * Import one or more recipes from a CSV/Excel file.
    *
    * Expected columns (case-insensitive, extra columns ignored):
@@ -623,50 +667,70 @@ export class RecipesService {
     type RecipeMeta = { category: string | null; portions: number; lines: IngLine[] };
 
     const buf = Buffer.from(input.contentBase64, "base64");
-    let wb: xlsx.WorkBook;
-    try {
-      wb = xlsx.read(buf, { type: "buffer", cellDates: true });
-    } catch (xlsxErr: any) {
-      throw new BadRequestException({
-        code: "validation_failed",
-        message: `Could not parse file: ${xlsxErr?.message ?? "unknown error"}`,
-        hint: "Make sure the file is a valid .xlsx, .xls, or .csv and is not password-protected.",
-      });
-    }
-    const sheetName = wb.SheetNames[0];
-    const ws = sheetName ? wb.Sheets[sheetName] : undefined;
-    if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
 
-    const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
-    if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
-
-    const col = (row: Record<string, unknown>, ...names: string[]): string => {
-      for (const n of names) {
-        const key = Object.keys(row).find((k) => k.trim().toLowerCase() === n.toLowerCase());
-        if (key !== undefined) return String(row[key] ?? "").trim();
-      }
-      return "";
-    };
-
-    // Group rows by recipe name
+    // Try deterministic parser first (handles both Format A flat and Format B block layouts).
+    const parsed = parseXLSX(buf);
     const recipeMap = new Map<string, RecipeMeta>();
-    for (const row of rows) {
-      const recipeName = col(row, "recipe name", "recipe", "name");
-      if (!recipeName) continue;
-      let meta = recipeMap.get(recipeName);
-      if (!meta) {
-        meta = {
-          category: col(row, "category", "type") || null,
-          portions: parseInt(col(row, "portions yielded", "portions", "yield"), 10) || 1,
-          lines: [],
-        };
-        recipeMap.set(recipeName, meta);
+
+    if (parsed.recipes.length > 0) {
+      log.info({ filename: input.filename, recipes: parsed.recipes.length }, "importCsv: deterministic parse succeeded");
+      for (const r of parsed.recipes) {
+        recipeMap.set(r.name, {
+          category: r.category ?? null,
+          portions: r.yield_portions ?? 1,
+          lines: r.ingredients.map(ing => ({
+            ingName: ing.ingredient_name,
+            qty: ing.quantity ?? 0,
+            unit: ing.unit ?? "each",
+            notes: ing.notes ?? "",
+          })).filter(l => l.ingName && l.qty > 0),
+        });
       }
-      const ingName = col(row, "ingredient name", "ingredient", "item");
-      const qty = parseFloat(col(row, "quantity", "qty", "amount")) || 0;
-      const unit = col(row, "unit", "uom") || "each";
-      const notes = col(row, "notes", "note") || "";
-      if (ingName && qty > 0) meta.lines.push({ ingName, qty, unit, notes });
+    } else {
+      // Fallback: legacy column-name based parser (Format A only, no alias support)
+      log.warn({ filename: input.filename, unparsed: parsed.unparsed }, "importCsv: deterministic parse found no recipes, falling back to legacy parser");
+      let wb: xlsx.WorkBook;
+      try {
+        wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+      } catch (xlsxErr: any) {
+        throw new BadRequestException({
+          code: "validation_failed",
+          message: `Could not parse file: ${xlsxErr?.message ?? "unknown error"}`,
+          hint: "Make sure the file is a valid .xlsx, .xls, or .csv and is not password-protected.",
+        });
+      }
+      const sheetName = wb.SheetNames[0];
+      const ws = sheetName ? wb.Sheets[sheetName] : undefined;
+      if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
+
+      const legacyRows = xlsx.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+      if (!legacyRows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+
+      const col = (row: Record<string, unknown>, ...names: string[]): string => {
+        for (const n of names) {
+          const key = Object.keys(row).find((k) => k.trim().toLowerCase() === n.toLowerCase());
+          if (key !== undefined) return String(row[key] ?? "").trim();
+        }
+        return "";
+      };
+      for (const row of legacyRows) {
+        const recipeName = col(row, "recipe name", "recipe", "name");
+        if (!recipeName) continue;
+        let meta = recipeMap.get(recipeName);
+        if (!meta) {
+          meta = {
+            category: col(row, "category", "type") || null,
+            portions: parseInt(col(row, "portions yielded", "portions", "yield"), 10) || 1,
+            lines: [],
+          };
+          recipeMap.set(recipeName, meta);
+        }
+        const ingName = col(row, "ingredient name", "ingredient", "item");
+        const qty = parseFloat(col(row, "quantity", "qty", "amount")) || 0;
+        const unit = col(row, "unit", "uom") || "each";
+        const notes = col(row, "notes", "note") || "";
+        if (ingName && qty > 0) meta.lines.push({ ingName, qty, unit, notes });
+      }
     }
 
     if (!recipeMap.size) throw new BadRequestException({ code: "validation_failed", message: "No valid recipe rows found (check that Recipe Name and Ingredient Name columns exist)" });

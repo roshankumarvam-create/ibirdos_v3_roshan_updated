@@ -6,11 +6,18 @@ import { FileInterceptor } from "@nestjs/platform-express";
 import { ok } from "@ibirdos/types";
 import { prisma, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
-import { extractRecipeFromImage, parseRowsToRecipe } from "@ibirdos/ai";
+import {
+  extractRecipeFromImage,
+  parseRowsToRecipe,
+  type RecipeVisionResult,
+  type RecipeExtractResult,
+  type ExtractedRecipe,
+} from "@ibirdos/ai";
 import { env } from "@ibirdos/config";
 import { CurrentCtx } from "../common/decorators/current-ctx.decorator";
 import { RequirePermission } from "../common/decorators/require-permission.decorator";
 import * as XLSX from "xlsx";
+import { parseXLSX, parseCSV, type SpreadsheetParseResult } from "./recipe-spreadsheet-parser";
 
 const log = moduleLogger("RecipesExtractController");
 
@@ -37,7 +44,8 @@ export class RecipesExtractController {
 
     log.info({ workspaceId: ctx.workspaceId, filename: file.originalname, mime, size: buf.length }, "recipe extract request");
 
-    let result;
+    let visionResult: RecipeVisionResult | undefined;
+    let csvResult: RecipeExtractResult | undefined;
 
     try {
       if (IMAGE_MIMES.has(mime) || ["jpg","jpeg","png","webp","gif"].includes(ext)) {
@@ -50,7 +58,7 @@ export class RecipesExtractController {
         }
         const b64 = buf.toString("base64");
         const dataUrl = `data:${mime || "image/jpeg"};base64,${b64}`;
-        result = await extractRecipeFromImage({ imageUrl: dataUrl, filename: file.originalname });
+        visionResult = await extractRecipeFromImage({ imageUrl: dataUrl, filename: file.originalname });
 
       } else if (mime === "application/pdf" || ext === "pdf") {
         throw new ServiceUnavailableException({
@@ -60,57 +68,62 @@ export class RecipesExtractController {
         });
 
       } else if (EXCEL_MIMES.has(mime) || ["xlsx","xls"].includes(ext)) {
-        let workbook: XLSX.WorkBook;
-        try {
-          workbook = XLSX.read(buf, { type: "buffer" });
-        } catch (xlsxErr: any) {
-          log.error({ err: xlsxErr, filename: file.originalname }, "XLSX parse error");
-          throw new BadRequestException({
-            code: "validation_failed",
-            message: `Could not parse Excel file: ${xlsxErr?.message ?? "unknown error"}`,
-            hint: "Make sure the file is a valid .xlsx or .xls file and not password-protected.",
-          });
+        // Try deterministic parser first; fall back to legacy parseRowsToRecipe only if it produces nothing.
+        const parsed = parseXLSX(buf);
+        const adapted = parsedToExtractResult(parsed, "excel");
+        if (adapted) {
+          log.info({ filename: file.originalname, recipes: parsed.recipes.length }, "deterministic XLSX parse succeeded");
+          csvResult = adapted;
+        } else {
+          // Fallback: legacy parser
+          log.warn({ filename: file.originalname, unparsed: parsed.unparsed }, "deterministic XLSX parse found no recipes — falling back to legacy parser");
+          let workbook: XLSX.WorkBook;
+          try {
+            workbook = XLSX.read(buf, { type: "buffer" });
+          } catch (xlsxErr: any) {
+            log.error({ err: xlsxErr, filename: file.originalname }, "XLSX parse error");
+            throw new BadRequestException({
+              code: "validation_failed",
+              message: `Could not parse Excel file: ${xlsxErr?.message ?? "unknown error"}`,
+              hint: "Make sure the file is a valid .xlsx or .xls file and not password-protected.",
+            });
+          }
+          const sheetName = workbook.SheetNames[0];
+          if (!sheetName) {
+            throw new BadRequestException({
+              code: "validation_failed",
+              message: "Workbook is empty — no sheets found.",
+              hint: "Make sure the file has at least one sheet with data.",
+            });
+          }
+          const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]!, { header: 1, defval: "" }) as (string | number | boolean | null | undefined)[][];
+          csvResult = { ...parseRowsToRecipe(rows), source: "excel" as const };
         }
-
-        const sheetName = workbook.SheetNames[0];
-        if (!sheetName) {
-          throw new BadRequestException({
-            code: "validation_failed",
-            message: "Workbook is empty — no sheets found.",
-            hint: "Make sure the file has at least one sheet with data.",
-          });
-        }
-
-        let rows: (string | number | boolean | null | undefined)[][];
-        try {
-          rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]!, { header: 1, defval: "" }) as (string | number | boolean | null | undefined)[][];
-        } catch (sheetErr: any) {
-          log.error({ err: sheetErr, sheetName }, "sheet_to_json error");
-          throw new BadRequestException({
-            code: "validation_failed",
-            message: `Could not read sheet "${sheetName}": ${sheetErr?.message ?? "unknown error"}`,
-            hint: "Try exporting to CSV and uploading that instead.",
-          });
-        }
-
-        result = { ...parseRowsToRecipe(rows), source: "excel" as const };
 
       } else if (mime === "text/csv" || ext === "csv") {
-        let text: string;
-        try {
-          text = buf.toString("utf8");
-        } catch (decodeErr: any) {
-          throw new BadRequestException({
-            code: "validation_failed",
-            message: "Could not decode CSV file as UTF-8.",
-            hint: "Make sure the file is saved as UTF-8 CSV.",
-          });
+        // Try deterministic parser first; fall back to legacy parseRowsToRecipe only if it produces nothing.
+        const parsed = parseCSV(buf);
+        const adapted = parsedToExtractResult(parsed, "csv");
+        if (adapted) {
+          log.info({ filename: file.originalname, recipes: parsed.recipes.length }, "deterministic CSV parse succeeded");
+          csvResult = adapted;
+        } else {
+          log.warn({ filename: file.originalname, unparsed: parsed.unparsed }, "deterministic CSV parse found no recipes — falling back to legacy parser");
+          let text: string;
+          try {
+            text = buf.toString("utf8");
+          } catch (decodeErr: any) {
+            throw new BadRequestException({
+              code: "validation_failed",
+              message: "Could not decode CSV file as UTF-8.",
+              hint: "Make sure the file is saved as UTF-8 CSV.",
+            });
+          }
+          const rows = text.split(/\r?\n/).map((line: string) =>
+            line.split(",").map((cell: string) => cell.trim().replace(/^"|"$/g, "").replace(/""/g, '"')),
+          );
+          csvResult = { ...parseRowsToRecipe(rows), source: "csv" as const };
         }
-
-        const rows = text.split(/\r?\n/).map((line: string) =>
-          line.split(",").map((cell: string) => cell.trim().replace(/^"|"$/g, "").replace(/""/g, '"')),
-        );
-        result = { ...parseRowsToRecipe(rows), source: "csv" as const };
 
       } else {
         throw new BadRequestException({
@@ -123,7 +136,6 @@ export class RecipesExtractController {
       // Re-throw NestJS HTTP exceptions as-is
       if (err?.status >= 400) throw err;
 
-      // Unexpected errors — log full stack, return safe message
       log.error({ err, filename: file.originalname, mime }, "unexpected extraction error");
       const isDev = process.env.NODE_ENV !== "production";
       throw new BadRequestException({
@@ -133,50 +145,108 @@ export class RecipesExtractController {
       });
     }
 
-    // Warn if parser found no useful data
-    if (result.data.ingredientLines.length === 0 && result.fieldsFound === 0) {
-      log.warn({ filename: file.originalname }, "extraction returned no data");
+    // --- Vision path: new schema with ConvertedIngredient[] ---
+    if (visionResult) {
+      const ingredients = visionResult.data.ingredients;
+
+      if (ingredients.length === 0 && visionResult.fieldsFound === 0) {
+        log.warn({ filename: file.originalname }, "vision extraction returned no data");
+        return ok({
+          ...visionResult,
+          warning: "No recipe data detected. Check that the image is a recipe page and try again.",
+          data: { ...visionResult.data, ingredients: [] },
+        });
+      }
+
+      const enriched = await Promise.all(
+        ingredients.map(async (ing) => {
+          const match = await findIngredient(ctx.workspaceId, ing.name);
+          return { ...ing, ingredientId: match?.id ?? null, matchedName: match?.name ?? null };
+        }),
+      );
+
       return ok({
-        ...result,
-        warning: "Could not detect recipe columns. Check column headers: expected 'Ingredient' (or 'Item', 'Description'), 'Qty' (or 'Quantity'), 'Unit'. Review and fill in manually.",
-        data: { ...result.data, ingredientLines: [] },
+        ...visionResult,
+        data: { ...visionResult.data, ingredients: enriched, ingredientLines: enriched },
       });
     }
 
-    // Fuzzy-match ingredient names against workspace ingredients
-    const enriched = await Promise.all(
-      result.data.ingredientLines.map(async (line) => {
-        const match = await findIngredient(ctx.workspaceId, line.name);
-        return { ...line, ingredientId: match?.id ?? null, matchedName: match?.name ?? null };
-      }),
-    );
+    // --- CSV / Excel path: legacy schema with ingredientLines[] ---
+    if (csvResult) {
+      if (csvResult.data.ingredientLines.length === 0 && csvResult.fieldsFound === 0) {
+        log.warn({ filename: file.originalname }, "extraction returned no data");
+        return ok({
+          ...csvResult,
+          warning: "Could not detect recipe columns. Check column headers: expected 'Ingredient' (or 'Item', 'Description'), 'Qty' (or 'Quantity'), 'Unit'. Review and fill in manually.",
+          data: { ...csvResult.data, ingredientLines: [] },
+        });
+      }
 
-    return ok({
-      ...result,
-      data: { ...result.data, ingredientLines: enriched },
-    });
+      const enriched = await Promise.all(
+        csvResult.data.ingredientLines.map(async (line) => {
+          const match = await findIngredient(ctx.workspaceId, line.name);
+          return { ...line, ingredientId: match?.id ?? null, matchedName: match?.name ?? null };
+        }),
+      );
+
+      return ok({
+        ...csvResult,
+        data: { ...csvResult.data, ingredientLines: enriched },
+      });
+    }
+
+    // Should never reach here
+    throw new BadRequestException({ code: "extraction_failed", message: "No result produced." });
   }
+}
+
+function parsedToExtractResult(parsed: SpreadsheetParseResult, source: "excel" | "csv"): RecipeExtractResult | null {
+  if (parsed.recipes.length === 0) return null;
+  const recipe = parsed.recipes[0]!;
+  const data: ExtractedRecipe = {
+    name: recipe.name || null,
+    authorName: null,
+    category: recipe.category ?? null,
+    description: recipe.description ?? null,
+    totalPortions: recipe.yield_portions ?? null,
+    portionWeightOz: null,
+    portionVolumeFloz: null,
+    prepTimeMinutes: recipe.prep_time_minutes ?? null,
+    cookTimeMinutes: recipe.cook_time_minutes ?? null,
+    procedure: null,
+    goalFoodCostPct: null,
+    actualSellPriceCents: null,
+    ingredientLines: recipe.ingredients.map(ing => ({
+      name: ing.ingredient_name,
+      quantity: ing.quantity ?? 1,
+      unit: ing.unit ?? "each",
+      percentUtilized: ing.utilization_percent ?? null,
+      externalCode: ing.vendor_item_code ?? null,
+      needsMatch: true,
+    })),
+  };
+  const fieldsFound = [data.name, data.category, data.description, data.totalPortions,
+    data.prepTimeMinutes, data.cookTimeMinutes].filter(v => v != null).length
+    + (data.ingredientLines?.length ?? 0);
+  return { data, source, fieldsFound };
 }
 
 async function findIngredient(workspaceId: string, name: string) {
   const normalized = name.trim().toLowerCase();
   if (!normalized) return null;
 
-  // Exact match on ingredient name (case-insensitive)
   const exact = await prisma.ingredient.findFirst({
     where: { workspaceId, deletedAt: null, name: { equals: normalized, mode: "insensitive" } },
     select: { id: true, name: true },
   });
   if (exact) return exact;
 
-  // Alias match
   const alias = await prisma.ingredientAlias.findFirst({
     where: { workspaceId, text: normalized },
     include: { ingredient: { select: { id: true, name: true, deletedAt: true } } },
   });
   if (alias && !alias.ingredient.deletedAt) return alias.ingredient;
 
-  // Starts-with prefix match (simple fuzzy) — try multiple lengths for resilience
   const prefixLen = Math.min(6, normalized.length);
   if (prefixLen >= 3) {
     const prefix = await prisma.ingredient.findFirst({
