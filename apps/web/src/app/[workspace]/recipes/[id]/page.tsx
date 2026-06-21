@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button } from "@ibirdos/ui";
 import { IngredientsEditor, type EditableIngredientLine } from "./IngredientsEditor";
 import { DeleteRecipeButton } from "./delete-recipe-button";
+import { RecipePhotoImg } from "./RecipePhotoImg";
 
 interface RecipeIngredientLine extends EditableIngredientLine {}
 
@@ -227,30 +228,27 @@ export default async function RecipeDetailPage({
             </Card>
           )}
 
-          {/* Photos */}
-          {(recipe.photoUrl || recipe.prepPhotoUrl || recipe.finalPhotoUrl) && (
+          {/* Photos — guard empty strings as well as null; broken URLs get placeholder via RecipePhotoImg */}
+          {(!!recipe.photoUrl || !!recipe.prepPhotoUrl || !!recipe.finalPhotoUrl) && (
             <Card>
               <CardHeader><CardTitle>Photos</CardTitle></CardHeader>
               <CardBody className="flex gap-4 flex-wrap">
                 {recipe.photoUrl && !recipe.prepPhotoUrl && !recipe.finalPhotoUrl && (
                   <div>
                     <p className="text-xs text-text-tertiary mb-1">Recipe photo</p>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={recipe.photoUrl} alt="Recipe" className="h-32 w-auto rounded object-cover border border-bg-border" />
+                    <RecipePhotoImg src={recipe.photoUrl} alt="Recipe" label="Recipe" />
                   </div>
                 )}
                 {recipe.prepPhotoUrl && (
                   <div>
                     <p className="text-xs text-text-tertiary mb-1">Prep</p>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={recipe.prepPhotoUrl} alt="Prep" className="h-32 w-auto rounded object-cover border border-bg-border" />
+                    <RecipePhotoImg src={recipe.prepPhotoUrl} alt="Prep" label="Prep" />
                   </div>
                 )}
                 {recipe.finalPhotoUrl && (
                   <div>
                     <p className="text-xs text-text-tertiary mb-1">Final</p>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={recipe.finalPhotoUrl} alt="Final" className="h-32 w-auto rounded object-cover border border-bg-border" />
+                    <RecipePhotoImg src={recipe.finalPhotoUrl} alt="Final" label="Final" />
                   </div>
                 )}
               </CardBody>
