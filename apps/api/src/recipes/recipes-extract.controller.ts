@@ -324,8 +324,10 @@ async function findIngredient(workspaceId: string, name: string) {
   });
   if (alias && !alias.ingredient.deletedAt) return mapIngredientMatch(alias.ingredient);
 
-  const prefixLen = Math.min(6, normalized.length);
-  if (prefixLen >= 3) {
+  // Prefix match: require at least 8 chars to avoid false positives.
+  // "fresh " (6 chars) incorrectly matched "Fresh Dill Baby Fresh Herb" for "FRESH PASSIONFRUIT JUICE".
+  const prefixLen = Math.min(8, normalized.length);
+  if (prefixLen >= 8) {
     const prefix = await prisma.ingredient.findFirst({
       where: {
         workspaceId, deletedAt: null,

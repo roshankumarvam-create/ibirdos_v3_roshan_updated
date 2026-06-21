@@ -180,8 +180,13 @@ export default function NewRecipePage() {
 
   // --- Validation ---
   const nameError = touched["name"] && !name.trim() ? "Name is required" : null;
-  const validLines = lines.filter(l => l.ingredientId && parseFloat(l.quantity) > 0);
-  const canSubmit = name.trim().length > 0 && validLines.length >= 1 && !submitting;
+  // All lines with a quantity — whether matched to inventory or not.
+  const filledLines = lines.filter(l => parseFloat(l.quantity) > 0);
+  // Only matched lines can be persisted to RecipeIngredient (requires FK).
+  const validLines = filledLines.filter(l => !!l.ingredientId);
+  const unmatchedLines = filledLines.filter(l => !l.ingredientId);
+  // Allow save with just the recipe name + any ingredient lines (unmatched ones show a warning).
+  const canSubmit = name.trim().length > 0 && filledLines.length >= 1 && !submitting;
 
   // --- Ingredient search ---
   const searchIngredients = useCallback(async (key: string, query: string) => {
@@ -332,6 +337,18 @@ export default function NewRecipePage() {
     setSubmitting(true);
     setErrorBanner(null);
     try {
+      // [PROD3-A] Full form state before save — shows ALL ingredient lines (matched and unmatched)
+      console.log("[PROD3-A] FORM STATE before save:", JSON.stringify(
+        lines.map((l, i) => ({
+          i, ingredientName: l.ingredientName, searchQuery: l.searchQuery,
+          ingredientId: l.ingredientId || "(none)",
+          matchedName: l.matchedName,
+          quantity: l.quantity, unit: l.unit,
+          willBeSaved: !!l.ingredientId && parseFloat(l.quantity) > 0,
+        })), null, 2,
+      ));
+      console.log("[PROD3-A] Summary: total=" + lines.length + " | matched=" + validLines.length + " | unmatched=" + unmatchedLines.length);
+
       const body = {
         name: name.trim(),
         authorName: authorName.trim() || undefined,
@@ -361,18 +378,21 @@ export default function NewRecipePage() {
         })),
       };
 
-      // [LAYER-6] What is actually sent to POST /recipes — catches percentUtilized > 200
-      console.log("[LAYER-6] POST /recipes body.ingredientLines:", JSON.stringify(
+      // [PROD3-B] Payload going to POST /recipes — only matched lines are included
+      console.log("[PROD3-B] SAVE PAYLOAD ingredientLines:", JSON.stringify(
         body.ingredientLines?.map((il: any, i: number) => ({
           i,
           ingredientId: il.ingredientId,
           quantity: il.quantity,
           unit: il.unit,
           percentUtilized: il.percentUtilized,
-          percentUtilized_raw: validLines[i]?.percentUtilized,  // raw string before parseFloat
         })), null, 2,
       ));
-      console.log("[LAYER-6] validLines[*].percentUtilized raw strings:", validLines.map((l, i) => `[${i}] "${l.percentUtilized}" (qty="${l.quantity}")`));
+      if (unmatchedLines.length > 0) {
+        console.log("[PROD3-B] UNMATCHED (not in payload):", unmatchedLines.map(l => l.ingredientName));
+      }
+      // [LAYER-6] percentUtilized values
+      console.log("[LAYER-6] validLines[*].percentUtilized:", validLines.map((l, i) => `[${i}] "${l.percentUtilized}" (qty="${l.quantity}")`));
 
       const res = await api.post<{ id: string }>("/recipes", body);
       if (res.error) { setErrorBanner(res.error.message); return; }
@@ -397,7 +417,12 @@ export default function NewRecipePage() {
           </Button>
           <h1 className="text-xl font-semibold tracking-tight">Create recipe</h1>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {unmatchedLines.length > 0 && (
+            <span className="text-xs text-warning font-medium">
+              {unmatchedLines.length} ingredient{unmatchedLines.length !== 1 ? "s" : ""} need matching — won&apos;t be costed until linked
+            </span>
+          )}
           <Button variant="secondary" onClick={() => router.push(`/${workspaceSlug}/recipes` as Route)}>
             Cancel
           </Button>
