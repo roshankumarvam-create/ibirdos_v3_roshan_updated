@@ -69,6 +69,7 @@ interface EventDetail {
   computedFoodCostCents: number | null;
   computedLaborCostCents: number | null;
   computedMarginPct: number | null;
+  laborTotalCents: number;
   notes: string | null;
   frozenAt: string | null;
   frozenRecipeCostsCents: Record<string, number> | null;
@@ -129,10 +130,14 @@ export default async function EventDetailPage({
   const isPaid = event.paymentStatus === "PAID";
   const shortages = (event.inventoryShortages ?? []) as Shortage[];
   const shortagesActive = shortages.length > 0 && !event.shortageAcknowledged;
-  const totalLaborCents = event.staff.reduce(
+  // Staff-assignment labor when assignments exist; fall back to the simple estimate field
+  // (laborTotalCents is set at event creation via laborHoursEstimate × laborRateCentsPerHour,
+  //  and is what sendQuote uses for the customer-facing total — margin must match)
+  const staffLaborCents = event.staff.reduce(
     (sum, s) => sum + Math.round(Number(s.hours) * s.hourlyRateCents),
     0,
   );
+  const totalLaborCents = staffLaborCents || event.laborTotalCents;
   const shortItems = requirements.filter((r) => r.isShort);
 
   // Live food cost from menu items (used when computedFoodCostCents is not yet set)
@@ -147,9 +152,13 @@ export default async function EventDetailPage({
   // quotedTotalOverrideCents is set by the quote builder; quotedPriceCents is set
   // at event creation. Both serve as the "agreed price" so we merge them here.
   const effectiveQuoteCents = event.quotedTotalOverrideCents ?? event.quotedPriceCents;
-  const revenueCents = effectiveQuoteCents ?? 0;
-  const profitCents = revenueCents - foodCostCents - totalLaborCents;
-  const marginPct = revenueCents > 0 ? (profitCents / revenueCents) * 100 : null;
+  // Keep revenue as null when not set so Profit/Margin KPIs show "—" rather than a
+  // meaningless negative number computed against $0 revenue
+  const revenueCents = effectiveQuoteCents ?? null;
+  const profitCents = revenueCents != null ? revenueCents - foodCostCents - totalLaborCents : null;
+  const marginPct = revenueCents != null && revenueCents > 0
+    ? (profitCents! / revenueCents) * 100
+    : null;
 
   const prepTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "PREP");
   const serviceTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "SERVICE");
@@ -224,8 +233,8 @@ export default async function EventDetailPage({
         <KpiCard label="Guests" value={event.guestCount.toString()} />
         <KpiCard
           label="Revenue"
-          value={effectiveQuoteCents != null ? formatCents(revenueCents) : "—"}
-          {...(effectiveQuoteCents == null ? { sub: "No quote yet" } : {})}
+          value={revenueCents != null ? formatCents(revenueCents) : "—"}
+          {...(revenueCents == null ? { sub: "No quote yet" } : {})}
         />
         <KpiCard
           label={event.frozenAt ? "Food cost (frozen)" : "Food cost"}
@@ -243,11 +252,11 @@ export default async function EventDetailPage({
         />
         <KpiCard
           label="Profit"
-          value={effectiveQuoteCents != null ? formatCents(profitCents) : "—"}
-          tone={effectiveQuoteCents != null
+          value={profitCents != null ? formatCents(profitCents) : "—"}
+          tone={profitCents != null && revenueCents != null
             ? (profitCents < 0 ? "danger" : profitCents < revenueCents * 0.2 ? "warning" : "default")
             : "default"}
-          {...(effectiveQuoteCents == null ? { sub: "Set quote first" } : {})}
+          {...(profitCents == null ? { sub: "Set quote first" } : {})}
         />
         <KpiCard
           label="Margin %"

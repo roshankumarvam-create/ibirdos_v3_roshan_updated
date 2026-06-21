@@ -864,16 +864,17 @@ export class EventsService {
     });
     if (!event) return;
 
-    const laborCents = event.staff.reduce((sum, s) => sum + Math.round(Number(s.hours) * s.hourlyRateCents), 0);
+    // Staff-assignment labor if any exist; fall back to the simple estimate field
+    const staffLaborCents = event.staff.reduce((sum, s) => sum + Math.round(Number(s.hours) * s.hourlyRateCents), 0);
+    const laborCents = staffLaborCents || ((event as any).laborTotalCents ?? 0);
+
     const foodCents = event.kitchenPacket?.totalFoodCostMicrocents
       ? Math.round(Number(event.kitchenPacket.totalFoodCostMicrocents) / 1000)
       : event.computedFoodCostCents ?? 0;
 
-    let marginPct: Decimal | null = null;
-    if (event.quotedPriceCents && event.quotedPriceCents > 0) {
-      const pct = ((event.quotedPriceCents - foodCents - laborCents) / event.quotedPriceCents) * 100;
-      marginPct = new Decimal(pct.toFixed(2));
-    }
+    // Use the quote-builder override when present (consistent with sendQuote + frontend KPIs)
+    const effectiveRevenueCents = (event as any).quotedTotalOverrideCents ?? event.quotedPriceCents;
+    const marginPct = computeMarginPct(effectiveRevenueCents, foodCents, laborCents);
 
     await prisma.event.update({
       where: { id: eventId },
@@ -1111,4 +1112,15 @@ ${event.notes ? `<p style="font-size:13px;color:#666;margin-top:24px"><strong>No
     log.info({ eventId }, "event soft-deleted");
     return { deleted: true };
   }
+}
+
+/** Pure margin computation — extracted for unit testing. */
+export function computeMarginPct(
+  revenueCents: number | null | undefined,
+  foodCents: number,
+  laborCents: number,
+): Decimal | null {
+  if (!revenueCents || revenueCents <= 0) return null;
+  const pct = ((revenueCents - foodCents - laborCents) / revenueCents) * 100;
+  return new Decimal(pct.toFixed(2));
 }
