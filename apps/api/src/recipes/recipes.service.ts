@@ -141,7 +141,7 @@ export class RecipesService {
         name: input.name.trim(),
         authorName: input.authorName ?? null,
         category: input.category ?? null,
-        status: input.status ?? "DRAFT",
+        status: input.status ?? "ACTIVE",
         prepTimeMin,
         cookTimeMin,
         portionsYielded,

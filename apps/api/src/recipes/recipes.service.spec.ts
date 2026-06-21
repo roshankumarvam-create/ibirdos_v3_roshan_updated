@@ -51,6 +51,35 @@ function makeXlsxBase64(rows: (string | number)[][]): string {
   return buf.toString("base64");
 }
 
+describe("RecipesService.create", () => {
+  let svc: RecipesService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new RecipesService(mockRedis);
+    mockRecipeCreate.mockResolvedValue({ id: "rec-1", name: "Test Recipe" });
+    mockRecipeHistCreate.mockResolvedValue({});
+  });
+
+  it("defaults status to ACTIVE when no status is provided", async () => {
+    await svc.create(ctx, { name: "Test Recipe" });
+    expect(mockRecipeCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "ACTIVE" }),
+      }),
+    );
+  });
+
+  it("uses explicit status DRAFT when provided", async () => {
+    await svc.create(ctx, { name: "Draft Recipe", status: "DRAFT" });
+    expect(mockRecipeCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "DRAFT" }),
+      }),
+    );
+  });
+});
+
 describe("RecipesService.importCsv", () => {
   let svc: RecipesService;
 
