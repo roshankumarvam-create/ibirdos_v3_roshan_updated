@@ -1,0 +1,25 @@
+{
+  "recipeName": "Copycat Panera Broccoli Cheese Soup",
+  "yieldServings": 6,
+  "prepTimeMinutes": 15,
+  "cookTimeMinutes": 30,
+  "totalTimeMinutes": 45,
+  "category": "SOUP",
+  "description": null,
+  "isPartial": true,
+  "procedureSteps": [],
+  "ingredients": [
+    { "name": "butter", "prepNote": "cubed", "qty": 0.25, "nativeUnit": "cup", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "onion", "prepNote": "chopped", "qty": 0.5, "nativeUnit": "cup", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "garlic cloves", "prepNote": "minced", "qty": 2, "nativeUnit": "clove", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "broccoli florets", "prepNote": null, "qty": 4, "nativeUnit": "cup", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": 8, "isOptional": false },
+    { "name": "large carrot", "prepNote": "finely chopped", "qty": 1, "nativeUnit": "each", "sizeQualifier": "large", "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "chicken stock", "prepNote": null, "qty": 3, "nativeUnit": "cup", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "half-and-half cream", "prepNote": null, "qty": 2, "nativeUnit": "cup", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "bay leaves", "prepNote": null, "qty": 2, "nativeUnit": "leaf", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "salt", "prepNote": null, "qty": 0.5, "nativeUnit": "tsp", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "ground nutmeg", "prepNote": null, "qty": 0.25, "nativeUnit": "tsp", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "pepper", "prepNote": null, "qty": 0.25, "nativeUnit": "tsp", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false },
+    { "name": "cornstarch", "prepNote": null, "qty": 0.25, "nativeUnit": "cup", "sizeQualifier": null, "weightHintGrams": null, "weightHintOz": null, "isOptional": false }
+  ]
+}

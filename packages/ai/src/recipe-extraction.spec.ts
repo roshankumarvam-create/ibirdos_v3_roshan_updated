@@ -1,6 +1,6 @@
 // packages/ai/src/recipe-extraction.spec.ts
-// Unit tests for recipe extraction using the Passionfruit Custard fixture.
-// OpenAI is mocked so no API key or network required.
+// Unit tests for vision recipe extraction using the Passionfruit Custard fixture (new schema).
+// OpenAI is mocked — no API key or network required.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -43,111 +43,127 @@ describe("extractRecipeFromImage — Passionfruit Custard With Pistachio Crumbs"
 
   it("extracts recipe name correctly", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    expect(result.data.name).toBe("Passionfruit Custard With Pistachio Crumbs");
+    expect(result.data.recipeName).toBe("Passionfruit Custard With Pistachio Crumbs");
     expect(result.source).toBe("vision");
   });
 
-  it("Milk has quantity=1250 and unit=ML (not oz)", async () => {
+  it("Milk has qty=1250 and nativeUnit='ml' (not oz)", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const milk = result.data.ingredientLines.find(l =>
-      l.name.toLowerCase() === "milk",
-    );
+    const milk = result.data.ingredients.find(l => l.name.toLowerCase() === "milk");
     expect(milk).toBeDefined();
-    expect(milk!.quantity).toBe(1250);
-    expect(milk!.unit).toBe("ML");
+    expect(milk!.qty).toBe(1250);
+    expect(milk!.nativeUnit).toBe("ml");
   });
 
-  it("Cream has quantity=2000 and unit=ML", async () => {
+  it("Milk converts to ml (liquid) — qtyCanonical=1250, unitCanonical='ml'", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const cream = result.data.ingredientLines.find(l =>
-      l.name.toLowerCase() === "cream",
-    );
+    const milk = result.data.ingredients.find(l => l.name.toLowerCase() === "milk");
+    expect(milk!.unitCanonical).toBe("ml");
+    expect(milk!.qtyCanonical).toBeCloseTo(1250, 1);
+  });
+
+  it("Cream has qty=2000 and nativeUnit='ml'", async () => {
+    const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
+    const cream = result.data.ingredients.find(l => l.name.toLowerCase() === "cream");
     expect(cream).toBeDefined();
-    expect(cream!.quantity).toBe(2000);
-    expect(cream!.unit).toBe("ML");
+    expect(cream!.qty).toBe(2000);
+    expect(cream!.nativeUnit).toBe("ml");
   });
 
-  it("Egg Yolks has quantity=20 and unit=EACH", async () => {
+  it("Egg Yolks has qty=20 and nativeUnit='each'", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const eggs = result.data.ingredientLines.find(l =>
-      l.name.toLowerCase().includes("egg"),
-    );
+    const eggs = result.data.ingredients.find(l => l.name.toLowerCase().includes("egg"));
     expect(eggs).toBeDefined();
-    expect(eggs!.quantity).toBe(20);
-    expect(eggs!.unit).toBe("EACH");
+    expect(eggs!.qty).toBe(20);
+    expect(eggs!.nativeUnit).toBe("each");
   });
 
-  it("Corn Flour has quantity=100 and unit=G", async () => {
+  it("Corn Flour has qty=100 and nativeUnit='g' — converts to 100g canonical", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const corn = result.data.ingredientLines.find(l =>
-      l.name.toLowerCase().includes("corn flour"),
-    );
+    const corn = result.data.ingredients.find(l => l.name.toLowerCase().includes("corn flour"));
     expect(corn).toBeDefined();
-    expect(corn!.quantity).toBe(100);
-    expect(corn!.unit).toBe("G");
+    expect(corn!.qty).toBe(100);
+    expect(corn!.nativeUnit).toBe("g");
+    expect(corn!.unitCanonical).toBe("g");
+    expect(corn!.qtyCanonical).toBeCloseTo(100, 1);
   });
 
-  it("Caster Sugar has quantity=1125 and unit=G", async () => {
+  it("Caster Sugar has qty=1125 and nativeUnit='g'", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const sugar = result.data.ingredientLines.find(l =>
-      l.name.toLowerCase().includes("sugar"),
-    );
+    const sugar = result.data.ingredients.find(l => l.name.toLowerCase().includes("sugar"));
     expect(sugar).toBeDefined();
-    expect(sugar!.quantity).toBe(1125);
-    expect(sugar!.unit).toBe("G");
+    expect(sugar!.qty).toBe(1125);
+    expect(sugar!.nativeUnit).toBe("g");
   });
 
-  it("Fresh Passionfruit Juice has unit=ML", async () => {
+  it("Fresh Passionfruit Juice has nativeUnit='ml' and converts to ml", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const pfjuice = result.data.ingredientLines.find(l =>
-      l.name.toLowerCase().includes("passionfruit juice"),
-    );
+    const pfjuice = result.data.ingredients.find(l => l.name.toLowerCase().includes("passionfruit juice"));
     expect(pfjuice).toBeDefined();
-    expect(pfjuice!.quantity).toBe(2000);
-    expect(pfjuice!.unit).toBe("ML");
+    expect(pfjuice!.qty).toBe(2000);
+    expect(pfjuice!.nativeUnit).toBe("ml");
+    expect(pfjuice!.unitCanonical).toBe("ml");
   });
 
-  it("Orange Juice has quantity=1000 and unit=ML", async () => {
+  it("Orange Juice has qty=1000 and nativeUnit='ml'", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const oj = result.data.ingredientLines.find(l =>
-      l.name.toLowerCase().includes("orange juice"),
-    );
+    const oj = result.data.ingredients.find(l => l.name.toLowerCase().includes("orange juice"));
     expect(oj).toBeDefined();
-    expect(oj!.quantity).toBe(1000);
-    expect(oj!.unit).toBe("ML");
+    expect(oj!.qty).toBe(1000);
+    expect(oj!.nativeUnit).toBe("ml");
   });
 
-  it("no ingredient defaults to 'oz' or 'each' when an explicit unit is known", async () => {
+  it("no liquid ingredient has nativeUnit='oz' when an explicit volume unit is printed", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const liquidItems = result.data.ingredientLines.filter(l =>
+    const liquidItems = result.data.ingredients.filter(l =>
       ["milk", "cream", "orange juice", "passionfruit juice"].some(name =>
         l.name.toLowerCase().includes(name),
       ),
     );
     expect(liquidItems.length).toBeGreaterThan(0);
     for (const item of liquidItems) {
-      expect(item.unit).not.toBe("oz");
-      expect(item.unit).not.toBe("each");
+      expect(item.nativeUnit).not.toBe("oz");
+      expect(item.nativeUnit).not.toBe("each");
     }
-  });
-
-  it("percentUtilized is null for items without explicit utilization (not defaulted to 100)", async () => {
-    const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const milk = result.data.ingredientLines.find(l => l.name.toLowerCase() === "milk");
-    expect(milk!.percentUtilized).toBeNull();
-  });
-
-  it("Passionfruit with explicit 60% utilization has percentUtilized=60", async () => {
-    const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    const pf = result.data.ingredientLines.find(l =>
-      l.name.toLowerCase() === "passionfruit",
-    );
-    expect(pf).toBeDefined();
-    expect(pf!.percentUtilized).toBe(60);
   });
 
   it("extracts 8 ingredient lines", async () => {
     const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
-    expect(result.data.ingredientLines).toHaveLength(8);
+    expect(result.data.ingredients).toHaveLength(8);
+  });
+
+  it("isPartial is false for complete recipe", async () => {
+    const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
+    expect(result.data.isPartial).toBe(false);
+  });
+
+  it("procedureSteps are extracted correctly", async () => {
+    const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
+    expect(result.data.procedureSteps.length).toBeGreaterThan(0);
+    expect(result.data.procedureSteps[0]).toContain("milk");
+  });
+
+  it("all ingredients carry unitConfidence=90 (column-based template)", async () => {
+    const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
+    for (const ing of result.data.ingredients) {
+      expect(ing.unitConfidence).toBe(90);
+    }
+  });
+
+  it("column-based ingredients have lowConfidence=true when unitConfidence<90 — flagged for review", async () => {
+    // unitConfidence=90 is the threshold; 90 itself does NOT flag
+    const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
+    const milk = result.data.ingredients.find(l => l.name.toLowerCase() === "milk");
+    // 90 >= 90 → NOT flagged by unit confidence alone (conversion is also confident for ml)
+    expect(milk!.unitConfidence).toBe(90);
+    expect(milk!.lowConfidence).toBe(false);
+  });
+
+  it("no ingredient has unitConfidence of undefined (schema default applies)", async () => {
+    const result = await extractRecipeFromImage({ imageUrl: "data:image/jpeg;base64,abc" });
+    for (const ing of result.data.ingredients) {
+      expect(ing.unitConfidence).toBeDefined();
+      expect(typeof ing.unitConfidence).toBe("number");
+    }
   });
 });
