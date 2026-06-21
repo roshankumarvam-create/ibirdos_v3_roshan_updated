@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label, Textarea, Select, Switch } from "@ibirdos/ui";
 import { toCanonical } from "@ibirdos/types";
 import { api } from "@/lib/api";
+import { normalizeUnit, dimensionFromNativeUnit } from "@/lib/recipe-import-helpers";
 import type { Route } from "next";
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,8 @@ interface IngredientLine {
   key: string;
   ingredientId: string;
   ingredientName: string;
+  /** Inventory item name from auto-match — shown as a badge, NEVER replaces the extracted name. */
+  matchedName?: string;
   dimension: "MASS" | "VOLUME" | "COUNT";
   densityGPerMl: number | null;
   pricePerCanonicalCents: number;
@@ -282,18 +285,28 @@ export default function NewRecipePage() {
           nativeUnit: d.ingredientLines[0]?.nativeUnit,
           unit: d.ingredientLines[0]?.unit,
         });
-        const newLines: IngredientLine[] = d.ingredientLines.map((il: any) => ({
-          ...newLine(),
-          ingredientId: il.ingredientId ?? "",
-          ingredientName: il.matchedName ?? il.name ?? "",
-          searchQuery: il.matchedName ?? il.name ?? "",
-          quantity: String(il.quantity ?? ""),
-          unit: il.unit ?? "oz",
-          percentUtilized: String(il.percentUtilized ?? 100),
-          externalCode: il.externalCode ?? "",
-          // Yellow border if no match
-          needsReview: !il.ingredientId,
-        }));
+        const newLines: IngredientLine[] = d.ingredientLines.map((il: any) => {
+          // BUG A FIX: vision path exposes `qty`/`nativeUnit`; CSV path exposes `quantity`/`unit`.
+          // Read both field names so either path works. Normalize unit to lowercase dropdown values.
+          const rawQty = il.qty ?? il.quantity;
+          const extractedUnit = normalizeUnit(il.nativeUnit ?? il.unit);
+          const dim = dimensionFromNativeUnit(extractedUnit);
+          return {
+            ...newLine(),
+            ingredientId:    il.ingredientId ?? "",
+            // BUG B FIX: preserve the original extracted name; never replace with the matched inventory
+            // item name. matchedName is shown as a badge so the user can see and confirm the match.
+            ingredientName:  il.name ?? "",
+            matchedName:     il.matchedName ?? undefined,
+            searchQuery:     il.name ?? "",
+            quantity:        rawQty != null ? String(rawQty) : "",
+            unit:            extractedUnit,
+            dimension:       dim,
+            percentUtilized: String(il.percentUtilized ?? 100),
+            externalCode:    il.externalCode ?? "",
+            needsReview:     !il.ingredientId,
+          };
+        });
         console.log("[TRACE-4] FORM STATE init[0]:", {
           searchQuery: newLines[0]?.searchQuery,
           quantity: newLines[0]?.quantity,
@@ -605,6 +618,13 @@ export default function NewRecipePage() {
                                   </button>
                                 ))}
                               </div>
+                            )}
+                            {/* Auto-match badge — shows inventory item the extractor linked to this line.
+                                Displayed so the user can confirm or override the match. */}
+                            {line.matchedName && line.ingredientId && (
+                              <p className="mt-0.5 text-[10px] text-text-tertiary truncate" title={line.matchedName}>
+                                Matched: <span className="text-accent-500">{line.matchedName}</span>
+                              </p>
                             )}
                           </td>
 

@@ -194,4 +194,29 @@ describe("Edge cases", () => {
     expect(result.recipes[0]!.ingredients[0]!.quantity).toBe(200);
     expect(result.recipes[0]!.ingredients[1]!.quantity).toBe(0.5);
   });
+
+  // Regression: BUG B — ingredient names must be preserved exactly from the spreadsheet.
+  // The inventory-matching step runs AFTER parsing and must never mutate ingredient_name.
+  it("preserves 'Fresh Passionfruit Juice' verbatim — not replaced by any matched inventory name", () => {
+    const rows = [
+      ["Recipe Name", "Ingredient", "Qty", "Unit"],
+      ["Custard", "Fresh Passionfruit Juice", "2000", "ml"],
+    ];
+    const result = extractRecipesFromRows(rows);
+    expect(result.recipes[0]!.ingredients[0]!.ingredient_name).toBe("Fresh Passionfruit Juice");
+  });
+
+  it("unit is read verbatim from the Unit column — not converted, not defaulted to oz", () => {
+    const rows = [
+      ["Recipe Name", "Ingredient", "Qty", "Unit"],
+      ["Custard", "Milk", "1250", "ml"],
+      ["Custard", "Corn Flour", "100", "g"],
+      ["Custard", "Egg Yolks", "20", "each"],
+    ];
+    const result = extractRecipesFromRows(rows);
+    const ings = result.recipes[0]!.ingredients;
+    expect(ings[0]!.unit).toBe("ml");
+    expect(ings[1]!.unit).toBe("g");
+    expect(ings[2]!.unit).toBe("each");
+  });
 });
