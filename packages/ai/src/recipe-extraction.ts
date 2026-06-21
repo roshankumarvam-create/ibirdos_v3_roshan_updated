@@ -286,39 +286,8 @@ export async function extractRecipeFromImage(params: {
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error("OpenAI returned empty content");
 
-  // [LAYER-0] Raw Vision API response — before ANY transformation or Zod
-  console.log("[LAYER-0] VISION RAW OUTPUT (content):", content);
-
   const rawJson = JSON.parse(content);
-
-  // [LAYER-1.5] Pre-Zod DTO — exactly what we're about to validate
-  console.log("[LAYER-1.5] PRE-ZOD DTO keys:", Object.keys(rawJson));
-  console.log("[LAYER-1.5] ingredients count:", rawJson?.ingredients?.length ?? "missing");
-  console.log("[LAYER-1.5] ingredientLines count:", rawJson?.ingredientLines?.length ?? "missing (good)");
-
-  // [LAYER-1.5-DETAIL] Inspect index 4 — the ingredient failing Zod per Railway error
-  const ing4Vision = rawJson?.ingredients?.[4];
-  const ing4Lines  = rawJson?.ingredientLines?.[4];
-  if (ing4Vision) {
-    console.log("[LAYER-1.5-DETAIL] ingredients[4] full:", JSON.stringify(ing4Vision));
-    console.log("[LAYER-1.5-DETAIL] ingredients[4] keys:", Object.keys(ing4Vision));
-    console.log("[LAYER-1.5-DETAIL] ingredients[4] unitConfidence:", ing4Vision.unitConfidence, "(max allowed: 100)");
-    console.log("[LAYER-1.5-DETAIL] ingredients[4] percentUtilized:", ing4Vision.percentUtilized, "(should be undefined)");
-    console.log("[LAYER-1.5-DETAIL] ingredients[4] qty:", ing4Vision.qty);
-  }
-  if (ing4Lines) {
-    console.log("[LAYER-1.5-DETAIL] ingredientLines[4] full:", JSON.stringify(ing4Lines));
-    console.log("[LAYER-1.5-DETAIL] ingredientLines[4] percentUtilized:", ing4Lines.percentUtilized, "(max allowed: 200)");
-  }
-
-  let rawParsed: RawVisionParsed;
-  try {
-    rawParsed = RecipeExtractionSchema.parse(rawJson);
-  } catch (err: any) {
-    console.log("[LAYER-1.5-ZOD-FAIL] DTO that failed Zod:", JSON.stringify(rawJson?.ingredients?.slice(0, 6) ?? rawJson, null, 2));
-    console.log("[LAYER-1.5-ZOD-FAIL] Zod errors:", JSON.stringify(err?.errors ?? err?.message, null, 2));
-    throw err;
-  }
+  const rawParsed = RecipeExtractionSchema.parse(rawJson);
   const convertedIngredients = rawParsed.ingredients.map(convertIngredient);
 
   const totalTimeMin = rawParsed.totalTimeMinutes

@@ -178,13 +178,6 @@ export class RecipesService {
       },
     });
 
-    // [PROD3-C] After DB write — verify how many ingredient lines were persisted
-    console.log("[PROD3-C] DB recipe created:", recipe.id, "name:", recipe.name,
-      "| input ingredientLines count:", (input.ingredientLines ?? input.ingredients ?? []).length,
-      "| lines with ingredientId:", lines.filter(l => l.ingredientId).length,
-      "| lines without ingredientId (DROPPED):", lines.filter(l => !l.ingredientId).length,
-    );
-
     await writeAudit(ctx, {
       action: "recipe.created",
       entityType: "Recipe",
@@ -260,14 +253,6 @@ export class RecipesService {
       },
     });
     if (!r) throw new NotFoundException({ code: "not_found", message: "Recipe not found" });
-
-    // [PROD3-D] Detail GET — verify what ingredient lines the DB has for this recipe
-    console.log("[PROD3-D] GET /recipes/" + id + " ingredientLines from DB:", r.ingredients.map(i => ({
-      recipeIngredientId: i.id,
-      ingredientName: i.ingredient.name,
-      quantity: Number(i.quantity),
-      unit: i.unit,
-    })));
 
     // Compute live cost from current ingredient prices (source of truth)
     const live = computeLiveRecipeCost(r);

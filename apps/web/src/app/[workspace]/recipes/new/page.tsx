@@ -265,11 +265,6 @@ export default function NewRecipePage() {
       const d = json.data?.data;
       if (!d) { setExtractBanner("No data returned from extraction."); return; }
 
-      // [LAYER-4] Raw API response data arriving at the frontend
-      console.log("[LAYER-4] Raw d.ingredientLines[0] from API:", JSON.stringify(d.ingredientLines?.[0] ?? null, null, 2));
-      console.log("[LAYER-4] ALL KEYS on ingredientLines[0]:", d.ingredientLines?.[0] ? Object.keys(d.ingredientLines[0]).sort() : "empty");
-      console.log("[LAYER-4] CRITICAL FIELDS — qty:", d.ingredientLines?.[0]?.qty, "| nativeUnit:", d.ingredientLines?.[0]?.nativeUnit, "| quantity:", d.ingredientLines?.[0]?.quantity, "| unit:", d.ingredientLines?.[0]?.unit);
-
       // Pre-fill only empty fields
       if (d.name        && !name)           setName(d.name);
       if (d.authorName  && !authorName)     setAuthorName(d.authorName);
@@ -296,7 +291,7 @@ export default function NewRecipePage() {
           // [LAYER-5] Per-ingredient mapping — verify each field resolves correctly
           // matchedCostCents: price per canonical unit from inventory match (enables live cost display)
           // matchedDensityGPerMl: needed if recipe unit dimension differs from inventory canonical unit
-          const mapped = {
+          return {
             ...newLine(),
             ingredientId:        il.ingredientId ?? "",
             ingredientName:      il.name ?? "",
@@ -311,8 +306,6 @@ export default function NewRecipePage() {
             pricePerCanonicalCents: il.matchedCostCents ?? 0,
             densityGPerMl:       il.matchedDensityGPerMl ?? null,
           };
-          console.log(`[LAYER-5] Ingredient "${il.name}" → rawQty=${rawQty} (il.qty=${il.qty}, il.quantity=${il.quantity}) | rawUnit="${il.nativeUnit ?? il.unit}" → normalized="${extractedUnit}" | dim=${dim} | form.unit="${mapped.unit}" | form.dimension="${mapped.dimension}"`);
-          return mapped;
         });
         setLines(prev => {
           const hasOnlyBlank = prev.length === 1 && !prev[0]!.ingredientId && !prev[0]!.quantity;
@@ -337,18 +330,6 @@ export default function NewRecipePage() {
     setSubmitting(true);
     setErrorBanner(null);
     try {
-      // [PROD3-A] Full form state before save — shows ALL ingredient lines (matched and unmatched)
-      console.log("[PROD3-A] FORM STATE before save:", JSON.stringify(
-        lines.map((l, i) => ({
-          i, ingredientName: l.ingredientName, searchQuery: l.searchQuery,
-          ingredientId: l.ingredientId || "(none)",
-          matchedName: l.matchedName,
-          quantity: l.quantity, unit: l.unit,
-          willBeSaved: !!l.ingredientId && parseFloat(l.quantity) > 0,
-        })), null, 2,
-      ));
-      console.log("[PROD3-A] Summary: total=" + lines.length + " | matched=" + validLines.length + " | unmatched=" + unmatchedLines.length);
-
       const body = {
         name: name.trim(),
         authorName: authorName.trim() || undefined,
@@ -377,22 +358,6 @@ export default function NewRecipePage() {
           weightOz: l.weightOz ? parseFloat(l.weightOz) : undefined,
         })),
       };
-
-      // [PROD3-B] Payload going to POST /recipes — only matched lines are included
-      console.log("[PROD3-B] SAVE PAYLOAD ingredientLines:", JSON.stringify(
-        body.ingredientLines?.map((il: any, i: number) => ({
-          i,
-          ingredientId: il.ingredientId,
-          quantity: il.quantity,
-          unit: il.unit,
-          percentUtilized: il.percentUtilized,
-        })), null, 2,
-      ));
-      if (unmatchedLines.length > 0) {
-        console.log("[PROD3-B] UNMATCHED (not in payload):", unmatchedLines.map(l => l.ingredientName));
-      }
-      // [LAYER-6] percentUtilized values
-      console.log("[LAYER-6] validLines[*].percentUtilized:", validLines.map((l, i) => `[${i}] "${l.percentUtilized}" (qty="${l.quantity}")`));
 
       const res = await api.post<{ id: string }>("/recipes", body);
       if (res.error) {
