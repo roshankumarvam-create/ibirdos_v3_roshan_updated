@@ -158,23 +158,12 @@ export class RecipesExtractController {
         });
       }
 
-      console.log("[TRACE-1] AI EXTRACTION sample:", JSON.stringify(
-        ingredients.slice(0, 3).map(i => ({ name: i.name, qty: i.qty, nativeUnit: i.nativeUnit, unitConfidence: i.unitConfidence })),
-        null, 2,
-      ));
-
       const enriched = await Promise.all(
         ingredients.map(async (ing) => {
           const match = await findIngredient(ctx.workspaceId, ing.name);
           return { ...ing, ingredientId: match?.id ?? null, matchedName: match?.name ?? null };
         }),
       );
-
-      console.log("[TRACE-2] POST-ENRICH sample:", JSON.stringify(
-        enriched.slice(0, 3).map(e => ({ name: e.name, qty: e.qty, nativeUnit: e.nativeUnit, ingredientId: e.ingredientId, matchedName: e.matchedName })),
-        null, 2,
-      ));
-      console.log("[TRACE-3] API RESPONSE ingredientLines[0] keys:", enriched[0] ? Object.keys(enriched[0]) : "empty");
 
       return ok({
         ...visionResult,
