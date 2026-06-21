@@ -9,6 +9,8 @@ const mockCreate = vi.fn();
 const mockFindMany = vi.fn();
 const mockUpdate = vi.fn();
 const mockDelete = vi.fn();
+const mockDeleteMany = vi.fn();
+const mockTransaction = vi.fn();
 const mockWriteAudit = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@ibirdos/db", () => ({
@@ -20,16 +22,20 @@ vi.mock("@ibirdos/db", () => ({
       update: (...args: any[]) => mockUpdate(...args),
       delete: (...args: any[]) => mockDelete(...args),
     },
+    tenderEntry: {
+      deleteMany: (...args: any[]) => mockDeleteMany(...args),
+    },
+    $transaction: (...args: any[]) => mockTransaction(...args),
   },
   writeAudit: (...args: any[]) => mockWriteAudit(...args),
 }));
 
 import { DailySalesService } from "./daily-sales.service";
-import { NotFoundException } from "@nestjs/common";
+import { NotFoundException, ConflictException } from "@nestjs/common";
 
 const ctx = { workspaceId: "ws1", userId: "u1", role: "OWNER" as const };
 
-const makeRecord = (overrides = {}) => ({
+const makeRecord = (overrides: Record<string, any> = {}) => ({
   id: "ds1",
   workspaceId: "ws1",
   saleDate: new Date("2024-01-15"),
@@ -47,7 +53,8 @@ const makeRecord = (overrides = {}) => ({
   notes: null,
   sourceFileUrl: null,
   status: "NO_BUSINESS",
-  tenders: [{ id: "te1", tenderType: "CASH", amount: 900, count: 10 }],
+  shift: null,
+  tenders: [{ id: "te1", tenderType: "CASH", amount: 900, count: 10, dailySalesId: "ds1" }],
   ...overrides,
 });
 
@@ -59,8 +66,9 @@ describe("DailySalesService", () => {
     svc = new DailySalesService();
   });
 
-  it("create: persists DailySales with tenders", async () => {
+  it("create: no duplicate → persists DailySales with tenders", async () => {
     const record = makeRecord();
+    mockFindFirst.mockResolvedValue(null); // no existing
     mockCreate.mockResolvedValue(record);
 
     const result = await svc.create(ctx, {
@@ -76,11 +84,11 @@ describe("DailySalesService", () => {
     expect(created.workspaceId).toBe("ws1");
     expect(created.enteredById).toBe("u1");
     expect(created.tenders.create).toHaveLength(1);
-    expect(created.tenders.create[0].tenderType).toBe("CASH");
     expect(result.id).toBe("ds1");
   });
 
-  it("create: sets status to NO_BUSINESS by default", async () => {
+  it("create: no duplicate → sets status to NO_BUSINESS by default", async () => {
+    mockFindFirst.mockResolvedValue(null);
     mockCreate.mockResolvedValue(makeRecord());
 
     await svc.create(ctx, {
@@ -94,38 +102,100 @@ describe("DailySalesService", () => {
     expect(created.status).toBe("NO_BUSINESS");
   });
 
-  it("create: persists provided status", async () => {
-    mockCreate.mockResolvedValue(makeRecord({ status: "CLOSED_WON" }));
+  it("create: duplicate date and no mode → throws ConflictException with duplicate_date code", async () => {
+    const existing = makeRecord({ id: "old-id" });
+    mockFindFirst.mockResolvedValue(existing);
 
-    await svc.create(ctx, {
-      saleDate: "2024-01-15",
-      grossSales: 1000,
-      netSales: 900,
-      tax: 100,
-      status: "CLOSED_WON",
-    });
+    await expect(
+      svc.create(ctx, { saleDate: "2024-01-15", grossSales: 500, netSales: 450, tax: 50 }),
+    ).rejects.toThrow(ConflictException);
 
-    const created = mockCreate.mock.calls[0]![0].data;
-    expect(created.status).toBe("CLOSED_WON");
+    // Ensure create was NOT called
+    expect(mockCreate).not.toHaveBeenCalled();
+
+    // Check error shape
+    try {
+      await svc.create(ctx, { saleDate: "2024-01-15", grossSales: 500, netSales: 450, tax: 50 });
+    } catch (e: any) {
+      const body = e.getResponse();
+      expect(body.code).toBe("duplicate_date");
+      expect(body.details.existingId).toBe("old-id");
+      expect(body.details.saleDate).toBe("2024-01-15");
+    }
   });
 
-  it("create: allows multiple entries for same date (no ConflictException)", async () => {
-    const record1 = makeRecord({ id: "ds1", shift: "LUNCH" });
-    const record2 = makeRecord({ id: "ds2", shift: "DINNER" });
-    mockCreate.mockResolvedValueOnce(record1).mockResolvedValueOnce(record2);
+  it("create: mode=add → sums numeric fields and merges tenders in transaction", async () => {
+    const existing = makeRecord({
+      id: "old-id",
+      grossSales: 500,
+      netSales: 450,
+      tax: 50,
+      discounts: 10,
+      voids: 0,
+      refunds: 0,
+      cateringSales: 0,
+      onlineSales: 0,
+      deliveryAppSales: 0,
+      tenders: [{ id: "te1", tenderType: "CASH", amount: 450, count: 5, dailySalesId: "old-id" }],
+    });
+    mockFindFirst.mockResolvedValue(existing);
+    const merged = makeRecord({ id: "old-id", grossSales: 1000, netSales: 900, tax: 100 });
+    mockTransaction.mockImplementation(async (fn: any) => {
+      // Simulate tx with mocked prisma methods
+      const tx = {
+        tenderEntry: { deleteMany: mockDeleteMany },
+        dailySales: { update: mockUpdate },
+      };
+      return fn(tx);
+    });
+    mockUpdate.mockResolvedValue(merged);
 
-    const r1 = await svc.create(ctx, { saleDate: "2024-01-15", grossSales: 500, netSales: 450, tax: 50, shift: "LUNCH" });
-    const r2 = await svc.create(ctx, { saleDate: "2024-01-15", grossSales: 800, netSales: 720, tax: 80, shift: "DINNER" });
+    const result = await svc.create(ctx, {
+      saleDate: "2024-01-15",
+      grossSales: 500,
+      netSales: 450,
+      tax: 50,
+      tenders: [{ tenderType: "CASH", amount: 450, count: 5 }],
+    }, "add");
 
-    expect(mockCreate).toHaveBeenCalledTimes(2);
-    expect(r1.id).toBe("ds1");
-    expect(r2.id).toBe("ds2");
-    // shift stored on second create
-    const secondCall = mockCreate.mock.calls[1]![0].data;
-    expect(secondCall.shift).toBe("DINNER");
+    expect(mockTransaction).toHaveBeenCalledOnce();
+    expect(mockDeleteMany).toHaveBeenCalledOnce();
+    expect(mockUpdate).toHaveBeenCalledOnce();
+    const updateData = mockUpdate.mock.calls[0]![0].data;
+    expect(Number(updateData.grossSales)).toBe(1000); // 500 + 500
+    expect(Number(updateData.netSales)).toBe(900);    // 450 + 450
+    expect(result.id).toBe("old-id");
+  });
+
+  it("create: mode=replace → deletes existing and creates new in transaction", async () => {
+    const existing = makeRecord({ id: "old-id" });
+    mockFindFirst.mockResolvedValue(existing);
+    const newRecord = makeRecord({ id: "new-id" });
+    mockTransaction.mockImplementation(async (fn: any) => {
+      const tx = {
+        tenderEntry: { deleteMany: mockDeleteMany },
+        dailySales: { delete: mockDelete, create: mockCreate },
+      };
+      return fn(tx);
+    });
+    mockCreate.mockResolvedValue(newRecord);
+
+    const result = await svc.create(ctx, {
+      saleDate: "2024-01-15",
+      grossSales: 800,
+      netSales: 720,
+      tax: 80,
+    }, "replace");
+
+    expect(mockTransaction).toHaveBeenCalledOnce();
+    expect(mockDeleteMany).toHaveBeenCalledOnce();
+    expect(mockDelete).toHaveBeenCalledOnce();
+    expect(mockCreate).toHaveBeenCalledOnce();
+    expect(result.id).toBe("new-id");
   });
 
   it("create: supports new tender types (VISA, AMEX, ACH_INVOICE)", async () => {
+    mockFindFirst.mockResolvedValue(null);
     mockCreate.mockResolvedValue(makeRecord({
       tenders: [
         { id: "t1", tenderType: "VISA", amount: 300, count: 3 },
@@ -163,7 +233,7 @@ describe("DailySalesService", () => {
   });
 
   it("update: multi-tenant isolation — cannot update another workspace's record", async () => {
-    mockFindFirst.mockResolvedValue(null); // not found for other workspace
+    mockFindFirst.mockResolvedValue(null);
 
     await expect(
       svc.update({ workspaceId: "ws-other", userId: "u2", role: "OWNER" }, "ds1", { grossSales: 999 }),
@@ -176,10 +246,7 @@ describe("DailySalesService", () => {
   it("getVariance: math is correct", async () => {
     mockFindFirst.mockResolvedValue(makeRecord({
       netSales: 900,
-      tenders: [
-        { amount: 600 },
-        { amount: 300 },
-      ],
+      tenders: [{ amount: 600 }, { amount: 300 }],
     }));
 
     const variance = await svc.getVariance(ctx, "ds1");
@@ -205,6 +272,7 @@ describe("DailySalesService", () => {
   });
 
   it("multi-tenant isolation: create always scoped to caller workspaceId", async () => {
+    mockFindFirst.mockResolvedValue(null);
     mockCreate.mockResolvedValue(makeRecord());
 
     await svc.create({ workspaceId: "ws-other", userId: "u2", role: "OWNER" }, {

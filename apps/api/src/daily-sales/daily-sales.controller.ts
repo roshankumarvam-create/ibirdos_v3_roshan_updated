@@ -52,8 +52,13 @@ export class DailySalesController {
   @Post()
   @RequirePermission("daily_sales.create")
   @UsePipes(new ZodValidationPipe(CreateSchema))
-  create(@CurrentCtx() ctx: TenantContext, @Body() body: z.infer<typeof CreateSchema>) {
-    return this.svc.create(ctx, body).then(ok);
+  create(
+    @CurrentCtx() ctx: TenantContext,
+    @Body() body: z.infer<typeof CreateSchema>,
+    @Query("mode") mode?: string,
+  ) {
+    const resolvedMode = mode === "add" || mode === "replace" ? mode : undefined;
+    return this.svc.create(ctx, body, resolvedMode).then(ok);
   }
 
   @Get()

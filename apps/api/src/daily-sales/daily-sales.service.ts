@@ -1,5 +1,5 @@
 import {
-  Injectable, NotFoundException, BadRequestException,
+  Injectable, NotFoundException, BadRequestException, ConflictException,
 } from "@nestjs/common";
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
@@ -43,12 +43,132 @@ export interface UpdateDailySalesInput {
 
 @Injectable()
 export class DailySalesService {
-  async create(ctx: TenantContext, input: CreateDailySalesInput) {
+  async create(ctx: TenantContext, input: CreateDailySalesInput, mode?: "add" | "replace") {
     const saleDate = new Date(input.saleDate);
     if (isNaN(saleDate.getTime())) {
       throw new BadRequestException({ code: "validation_failed", message: "Invalid saleDate" });
     }
 
+    // Check for existing entry on this date
+    const existing = await prisma.dailySales.findFirst({
+      where: { workspaceId: ctx.workspaceId, saleDate },
+      include: { tenders: true },
+    });
+
+    if (existing) {
+      if (!mode) {
+        // No mode — signal the frontend to show the merge/replace modal
+        throw new ConflictException({
+          code: "duplicate_date",
+          message: `Daily sales for ${input.saleDate} already exists`,
+          details: { existingId: existing.id, saleDate: input.saleDate },
+        });
+      }
+
+      if (mode === "add") {
+        // Sum numeric fields + merge tenders
+        const updated = await prisma.$transaction(async (tx) => {
+          // Merge tenders: sum by tenderType
+          const mergedTenders = new Map<string, { amount: number; count: number }>();
+          for (const t of existing.tenders) {
+            mergedTenders.set(t.tenderType, { amount: Number(t.amount), count: t.count ?? 0 });
+          }
+          for (const t of input.tenders ?? []) {
+            const prev = mergedTenders.get(t.tenderType);
+            if (prev) {
+              mergedTenders.set(t.tenderType, { amount: prev.amount + t.amount, count: prev.count + (t.count ?? 0) });
+            } else {
+              mergedTenders.set(t.tenderType, { amount: t.amount, count: t.count ?? 0 });
+            }
+          }
+
+          await tx.tenderEntry.deleteMany({ where: { dailySalesId: existing.id } });
+
+          return tx.dailySales.update({
+            where: { id: existing.id },
+            data: {
+              grossSales: Number(existing.grossSales) + input.grossSales,
+              netSales: Number(existing.netSales) + input.netSales,
+              tax: Number(existing.tax) + input.tax,
+              discounts: Number(existing.discounts) + (input.discounts ?? 0),
+              voids: Number(existing.voids) + (input.voids ?? 0),
+              refunds: Number(existing.refunds) + (input.refunds ?? 0),
+              cateringSales: Number(existing.cateringSales) + (input.cateringSales ?? 0),
+              onlineSales: Number(existing.onlineSales) + (input.onlineSales ?? 0),
+              deliveryAppSales: Number(existing.deliveryAppSales) + (input.deliveryAppSales ?? 0),
+              notes: input.notes ?? existing.notes,
+              status: (input.status as any) ?? existing.status,
+              tenders: {
+                create: Array.from(mergedTenders.entries()).map(([tenderType, v]) => ({
+                  workspaceId: ctx.workspaceId,
+                  tenderType: tenderType as any,
+                  amount: v.amount,
+                  count: v.count,
+                })),
+              },
+            },
+            include: { tenders: true },
+          });
+        });
+        await writeAudit(ctx, {
+          action: "daily_sales.merged",
+          entityType: "DailySales",
+          entityId: updated.id,
+          metadata: { saleDate: input.saleDate },
+        });
+        log.info({ id: updated.id, saleDate: input.saleDate }, "daily sales merged (add)");
+        return updated;
+      }
+
+      if (mode === "replace") {
+        // Delete existing (cascade tenders), create new
+        const record = await prisma.$transaction(async (tx) => {
+          await tx.tenderEntry.deleteMany({ where: { dailySalesId: existing.id } });
+          await tx.dailySales.delete({ where: { id: existing.id } });
+          return tx.dailySales.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              enteredById: ctx.userId,
+              saleDate,
+              grossSales: input.grossSales,
+              netSales: input.netSales,
+              tax: input.tax,
+              discounts: input.discounts ?? 0,
+              voids: input.voids ?? 0,
+              refunds: input.refunds ?? 0,
+              cateringSales: input.cateringSales ?? 0,
+              onlineSales: input.onlineSales ?? 0,
+              deliveryAppSales: input.deliveryAppSales ?? 0,
+              notes: input.notes ?? null,
+              sourceFileUrl: input.sourceFileUrl ?? null,
+              status: (input.status as any) ?? "NO_BUSINESS",
+              shift: input.shift ?? null,
+              tenders: input.tenders?.length
+                ? {
+                    create: input.tenders.map((t) => ({
+                      workspaceId: ctx.workspaceId,
+                      tenderType: t.tenderType as any,
+                      amount: t.amount,
+                      count: t.count ?? 0,
+                    })),
+                  }
+                : undefined,
+            },
+            include: { tenders: true },
+          });
+        });
+        await writeAudit(ctx, {
+          action: "daily_sales.replaced",
+          entityType: "DailySales",
+          entityId: record.id,
+          metadata: { saleDate: input.saleDate, previousId: existing.id },
+        });
+        log.info({ id: record.id, saleDate: input.saleDate }, "daily sales replaced");
+        return record;
+      }
+    }
+
+    // No existing record — normal create
     const record = await prisma.dailySales.create({
       data: {
         workspaceId: ctx.workspaceId,
