@@ -6,7 +6,10 @@ import { Card, CardBody } from "@ibirdos/ui";
 
 interface Alert {
   id: string;
-  ingredient: { id: string; name: string; canonicalUnit: string };
+  ingredient: {
+    id: string; name: string; canonicalUnit: string;
+    purchaseUnit: string | null; reorderQty: number | null;
+  };
   currentCanonical: string;
   thresholdCanonical: string;
 }

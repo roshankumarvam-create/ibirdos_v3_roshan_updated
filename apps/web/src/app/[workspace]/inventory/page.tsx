@@ -13,7 +13,11 @@ interface Alert {
   currentCanonical: string;
   thresholdCanonical: string;
   detectedAt: string;
-  ingredient: { id: string; name: string; canonicalUnit: string; preferredDisplayUnit: string | null };
+  ingredient: {
+    id: string; name: string;
+    canonicalUnit: string; preferredDisplayUnit: string | null;
+    purchaseUnit: string | null; reorderQty: number | null;
+  };
 }
 
 interface Tx {
@@ -149,6 +153,7 @@ function InventoryContent() {
                 <th className="text-left px-5 py-3 font-medium">Ingredient</th>
                 <th className="text-right px-5 py-3 font-medium">Current</th>
                 <th className="text-right px-5 py-3 font-medium">Threshold</th>
+                <th className="text-left px-5 py-3 font-medium">Order</th>
                 <th className="text-left px-5 py-3 font-medium">Detected</th>
                 <th className="text-right px-5 py-3 font-medium"></th>
               </tr>
@@ -166,6 +171,11 @@ function InventoryContent() {
                   </td>
                   <td className="px-5 py-3 text-right tabular-nums text-text-secondary">
                     {formatStock(Number(a.thresholdCanonical), a.ingredient.canonicalUnit, a.ingredient.preferredDisplayUnit)}
+                  </td>
+                  <td className="px-5 py-3 tabular-nums text-xs text-accent-500 font-medium">
+                    {a.ingredient.reorderQty != null && a.ingredient.purchaseUnit
+                      ? `Order: ${a.ingredient.reorderQty} ${a.ingredient.purchaseUnit}`
+                      : "—"}
                   </td>
                   <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(a.detectedAt)}</td>
                   <td className="px-5 py-3 text-right">
