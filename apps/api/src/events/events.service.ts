@@ -85,7 +85,126 @@ export class EventsService {
       metadata: { from: event.status, to: newStatus, frozen: shouldFreeze },
     });
 
+    if (newStatus === "COMPLETED") {
+      await this.consumeInventoryForCompletedEvent(ctx, eventId).catch((err: any) =>
+        log.warn({ eventId, err: err.message }, "event completion inventory consume failed"),
+      );
+    }
+
     return updated;
+  }
+
+  private async consumeInventoryForCompletedEvent(ctx: TenantContext, eventId: string): Promise<void> {
+    const event = await prisma.event.findFirst({
+      where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
+      include: {
+        menuItems: {
+          include: {
+            recipe: {
+              select: {
+                id: true, name: true, portionsYielded: true,
+                ingredients: {
+                  include: {
+                    ingredient: {
+                      select: {
+                        id: true, name: true, dimension: true, canonicalUnit: true,
+                        densityGPerMl: true, defaultYieldPct: true, currentStockCanonical: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!event) return;
+
+    const eventMultiplier = Number(event.portionMultiplier);
+    const ingConsumption = new Map<string, {
+      name: string; canonicalUnit: string;
+      totalConsumed: number; currentStock: number;
+    }>();
+
+    for (const mi of event.menuItems) {
+      const effectivePortions = mi.portions * (mi.perItemMultiplier ? Number(mi.perItemMultiplier) : eventMultiplier);
+      const scale = effectivePortions / (mi.recipe.portionsYielded ?? 1);
+
+      for (const link of mi.recipe.ingredients) {
+        const ing = link.ingredient;
+        try {
+          const baseCanonical = toCanonical(Number(link.quantity), link.unit, {
+            dimension: ing.dimension,
+            densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
+          });
+          const yieldPct = Number((link as any).yieldPctOverride ?? ing.defaultYieldPct ?? 100);
+          const needed = baseCanonical * scale * (100 / Math.max(yieldPct, 1));
+
+          const existing = ingConsumption.get(ing.id);
+          if (existing) {
+            existing.totalConsumed += needed;
+          } else {
+            ingConsumption.set(ing.id, {
+              name: ing.name, canonicalUnit: ing.canonicalUnit,
+              totalConsumed: needed, currentStock: Number(ing.currentStockCanonical),
+            });
+          }
+        } catch {
+          // skip unconvertible units
+        }
+      }
+    }
+
+    for (const [ingredientId, data] of ingConsumption) {
+      const newBalance = data.currentStock - data.totalConsumed;
+      try {
+        await prisma.$transaction([
+          prisma.inventoryTransaction.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              ingredientId,
+              kind: "CONSUME",
+              quantityCanonical: new Decimal(-data.totalConsumed),
+              balanceAfterCanonical: new Decimal(newBalance),
+              sourceKind: "Event",
+              sourceRef: eventId,
+              notes: "Auto-consume on event COMPLETED",
+              createdById: ctx.userId,
+            },
+          }),
+          prisma.ingredient.update({
+            where: { id: ingredientId },
+            data: { currentStockCanonical: new Decimal(newBalance) },
+          }),
+        ]);
+
+        if (newBalance < 0) {
+          log.warn({ ingredientId, name: data.name, newBalance, eventId }, "negative stock after event completion");
+          await prisma.insight.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              kind: "REORDER_RECOMMENDATION",
+              severity: "WARNING",
+              title: `Negative stock: ${data.name}`,
+              body: `Event completion caused ${data.name} stock to go below zero (${newBalance.toFixed(2)} ${data.canonicalUnit}). Place a reorder.`,
+              metadataJson: { ingredientId, eventId, newBalance, canonicalUnit: data.canonicalUnit },
+              entityRefs: { ingredientId, eventId },
+            },
+          }).catch((err: any) => log.warn({ ingredientId, err: err.message }, "negative stock insight create failed"));
+        }
+      } catch (err: any) {
+        log.warn({ ingredientId, err: err.message }, "consume transaction failed — skipping ingredient");
+      }
+    }
+
+    await writeAudit(ctx, {
+      action: "event.inventory_consumed",
+      entityType: "Event",
+      entityId: eventId,
+      metadata: { ingredientCount: ingConsumption.size },
+    });
+    log.info({ eventId, ingredientCount: ingConsumption.size }, "event inventory consumed on COMPLETED");
   }
 
   // -----------------------------------------------------------------

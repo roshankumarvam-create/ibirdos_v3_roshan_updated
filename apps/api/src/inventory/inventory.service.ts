@@ -150,7 +150,15 @@ export class InventoryService {
   async listLowStockAlerts(ctx: TenantContext, status: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" = "OPEN"): Promise<any> {
     return prisma.lowStockAlert.findMany({
       where: { workspaceId: ctx.workspaceId, status },
-      include: { ingredient: { select: { id: true, name: true, canonicalUnit: true, preferredDisplayUnit: true } } },
+      include: {
+        ingredient: {
+          select: {
+            id: true, name: true,
+            canonicalUnit: true, preferredDisplayUnit: true,
+            purchaseUnit: true, reorderQty: true,
+          },
+        },
+      },
       orderBy: { detectedAt: "desc" },
     });
   }
@@ -227,8 +235,9 @@ export class InventoryService {
     const recostedIngIds = new Set<string>();
 
     for (const row of rows) {
-      const ingName = col(row, "ingredient name", "ingredient", "item", "name");
+      const ingName = col(row, "description", "product description", "product name", "item name", "ingredient name", "ingredient", "name", "item");
       if (!ingName) continue;
+      const vendorCode = col(row, "item code", "sku", "vendor code", "code", "item #", "item#", "product code") || null;
       const qty = parseFloat(col(row, "quantity", "qty", "amount", "count")) || 0;
       if (qty <= 0) continue;
       const unit = col(row, "unit", "uom") || "each";
@@ -244,6 +253,7 @@ export class InventoryService {
             workspaceId: ctx.workspaceId,
             createdById: ctx.userId,
             name: ingName,
+            vendorItemCode: vendorCode,
             dimension: dim.dimension,
             canonicalUnit: dim.canonicalUnit,
             preferredDisplayUnit: unit,

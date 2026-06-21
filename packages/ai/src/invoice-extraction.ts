@@ -42,6 +42,7 @@ const InvoiceLineSchema = z.object({
   // Legacy fields kept for confirm-service backward compat — may be null for new extractions
   packSize:           z.number().nullish(),
   packUnit:           z.string().nullish(),
+  confidence:         z.number().min(0).max(1).nullish(),
 });
 
 export const ExtractedInvoiceSchema = z.object({

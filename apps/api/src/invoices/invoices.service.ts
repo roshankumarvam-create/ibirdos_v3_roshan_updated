@@ -384,6 +384,16 @@ export class InvoicesService {
           notes: `line ${line.position}`,
         });
         inventoryTransactionsCreated++;
+        // Store vendor purchase/base units on the ingredient for display and reorder
+        await prisma.ingredient.update({
+          where: { id: ingredientId },
+          data: {
+            purchaseUnit: line.unit,
+            purchaseQty: Number(line.quantity),
+            baseUnit: line.packUnit ?? line.unit,
+            baseQty: totalUnitQty,
+          },
+        }).catch((err: any) => log.warn({ ingredientId, err: err.message }, "purchase unit writeback failed"));
       } catch (err: any) {
         log.warn({ lineId: line.id, err: err.message }, "inventory receive skipped");
       }
@@ -610,6 +620,7 @@ export class InvoicesService {
     // Build line items
     const lineItems: Array<{
       descriptionRaw: string;
+      vendorItemCode: string | null;
       quantity: number;
       unit: string;
       unitPriceCents: number;
@@ -617,9 +628,10 @@ export class InvoicesService {
     }> = [];
 
     for (const row of rows) {
-      const desc = col(row, "item", "description", "product", "ingredient", "name");
+      const desc = col(row, "description", "product description", "product name", "item name", "item", "product", "ingredient", "name");
       if (!desc) continue;
 
+      const vendorItemCode = col(row, "item code", "sku", "vendor code", "code", "item #", "item#") || null;
       const qty = parseFloat(col(row, "quantity", "qty", "count") || "1") || 1;
       const unit = col(row, "unit", "uom", "unit of measure") || "each";
       const unitPrice = parseDollars(col(row, "unit price", "unit cost", "price", "unit_price"));
@@ -628,6 +640,7 @@ export class InvoicesService {
 
       lineItems.push({
         descriptionRaw: desc,
+        vendorItemCode,
         quantity: qty,
         unit,
         unitPriceCents: unitPrice,
@@ -664,6 +677,7 @@ export class InvoicesService {
           invoiceId: inv.id,
           position: idx + 1,
           descriptionRaw: l.descriptionRaw,
+          vendorItemCode: l.vendorItemCode,
           quantity: l.quantity,
           unit: l.unit,
           unitPriceCents: l.unitPriceCents,

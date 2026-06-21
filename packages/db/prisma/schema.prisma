@@ -149,6 +149,11 @@ model Ingredient {
   preferredDisplayUnit      String?                  @map("preferred_display_unit")
   defaultYieldPct           Decimal                  @default(100) @map("default_yield_pct") @db.Decimal(5, 2)
   vendorItemCode            String?                  @map("vendor_item_code")
+  purchaseUnit              String?                  @map("purchase_unit")
+  purchaseQty               Decimal?                 @map("purchase_qty") @db.Decimal(14, 4)
+  baseUnit                  String?                  @map("base_unit")
+  baseQty                   Decimal?                 @map("base_qty") @db.Decimal(14, 4)
+  reorderQty                Decimal?                 @map("reorder_qty") @db.Decimal(14, 4)
   photoUrl                  String?                  @map("photo_url")
   matchStatus               String?                  @map("match_status")
   notes                     String?
