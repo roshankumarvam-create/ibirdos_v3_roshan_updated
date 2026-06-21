@@ -219,7 +219,11 @@ export default async function EventDetailPage({
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <KpiCard label="Guests" value={event.guestCount.toString()} />
-        <KpiCard label="Revenue" value={formatCents(revenueCents) } />
+        <KpiCard
+          label="Revenue"
+          value={event.quotedPriceCents != null ? formatCents(revenueCents) : "—"}
+          {...(event.quotedPriceCents == null ? { sub: "No quote yet" } : {})}
+        />
         <KpiCard
           label={event.frozenAt ? "Food cost (frozen)" : "Food cost"}
           value={formatCents(foodCostCents)}
@@ -236,8 +240,11 @@ export default async function EventDetailPage({
         />
         <KpiCard
           label="Profit"
-          value={formatCents(profitCents)}
-          tone={profitCents < 0 ? "danger" : profitCents < revenueCents * 0.2 ? "warning" : "default"}
+          value={event.quotedPriceCents != null ? formatCents(profitCents) : "—"}
+          tone={event.quotedPriceCents != null
+            ? (profitCents < 0 ? "danger" : profitCents < revenueCents * 0.2 ? "warning" : "default")
+            : "default"}
+          {...(event.quotedPriceCents == null ? { sub: "Set quote first" } : {})}
         />
         <KpiCard
           label="Margin %"

@@ -279,6 +279,7 @@ export function MenuSection({
         <AddRecipeModal
           workspace={workspace}
           eventId={eventId}
+          excludedRecipeIds={new Set(items.map(mi => mi.recipeId))}
           onClose={() => setShowAddModal(false)}
           onAdded={async () => { setShowAddModal(false); await refresh(); }}
         />
@@ -428,10 +429,11 @@ function TotalOverrideInput({
 // ---- Add Recipe Modal ----
 
 function AddRecipeModal({
-  workspace, eventId, onClose, onAdded,
+  workspace, eventId, excludedRecipeIds, onClose, onAdded,
 }: {
   workspace: string;
   eventId: string;
+  excludedRecipeIds: Set<string>;
   onClose: () => void;
   onAdded: () => void;
 }) {
@@ -482,7 +484,7 @@ function AddRecipeModal({
                 onChange={(e) => setRecipeId(e.target.value)}
               >
                 <option value="">Select a recipe…</option>
-                {recipes.map((r) => (
+                {recipes.filter(r => !excludedRecipeIds.has(r.id)).map((r) => (
                   <option key={r.id} value={r.id}>{r.name}</option>
                 ))}
               </select>

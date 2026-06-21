@@ -23,7 +23,7 @@ export function DeleteEventButton({ eventId, workspaceSlug, eventName }: Props) 
     const res = await api.delete(`/events/${eventId}`);
     setLoading(false);
     if (res.error) {
-      toast.error("Failed to delete event. Please try again.");
+      toast.error(res.error.message ?? "Failed to delete event. Please try again.");
       return;
     }
     toast.success("Event deleted successfully.");
