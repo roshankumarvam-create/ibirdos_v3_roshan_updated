@@ -185,19 +185,6 @@ export default function InvoiceReviewPage({
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <StatusBadge status={invoice.status} />
-          {invoice.status === "EXTRACTION_FAILED" && (
-            <Button
-              loading={retrying}
-              onClick={async () => {
-                setRetrying(true);
-                await api.post(`/invoices/${id}/retry`);
-                setRetrying(false);
-                setInvoice((inv) => inv && { ...inv, status: "EXTRACTING" });
-              }}
-            >
-              Try AI extraction
-            </Button>
-          )}
           {isEditable && (
             <Button
               loading={confirming}
@@ -251,14 +238,42 @@ export default function InvoiceReviewPage({
 
       {/* Extraction failed banner */}
       {invoice.status === "EXTRACTION_FAILED" && (
-        <Card className="border-danger/30 bg-danger/5">
+        <Card className="border-warning/30 bg-warning/5">
           <CardBody>
-            <div className="text-sm">
-              <span className="text-danger font-medium">AI extraction failed.</span>
-              {invoice.extractionError && (
-                <span className="text-text-secondary"> {invoice.extractionError}.</span>
-              )}
-              <span className="text-text-secondary"> Add lines manually below, or click "Try AI extraction" to retry.</span>
+            <div className="space-y-3">
+              <p className="text-sm text-text-primary font-medium">
+                We could not automatically extract all invoice items.
+              </p>
+              <p className="text-sm text-text-secondary">You can:</p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  loading={retrying}
+                  onClick={async () => {
+                    if (invoice.extractionError) console.error("[invoice extraction]", invoice.extractionError);
+                    setRetrying(true);
+                    await api.post(`/invoices/${id}/retry`);
+                    setRetrying(false);
+                    setInvoice((inv) => inv && { ...inv, status: "EXTRACTING" });
+                  }}
+                >
+                  Retry extraction
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => router.push(`/${workspace}/invoices/new` as any)}
+                >
+                  Upload CSV
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setShowAddForm(true)}
+                >
+                  Add items manually
+                </Button>
+              </div>
             </div>
           </CardBody>
         </Card>
