@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
+import { StatusBadge } from "@/components/common/status-badge";
 import { formatCents, formatDate, relativeTime } from "@/lib/format";
 
 interface InvoiceListItem {
@@ -98,9 +99,10 @@ export default async function InvoicesPage() {
                     {inv.invoiceDate ? formatDate(inv.invoiceDate) : "—"}
                   </td>
                   <td className="px-5 py-3">
-                    <Badge tone={STATUS_TONE[inv.status] ?? "neutral"}>
-                      {STATUS_LABEL[inv.status] ?? inv.status.toLowerCase().replace(/_/g, " ")}
-                    </Badge>
+                    <StatusBadge
+                      label={STATUS_LABEL[inv.status] ?? inv.status.toLowerCase().replace(/_/g, " ")}
+                      tone={STATUS_TONE[inv.status] ?? "neutral"}
+                    />
                   </td>
                   <td className="px-5 py-3 text-right tabular-nums">
                     {formatCents(inv.totalCents)}

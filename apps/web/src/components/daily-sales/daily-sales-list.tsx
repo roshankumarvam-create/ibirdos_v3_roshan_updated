@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/common/skeleton";
 import { Badge } from "@ibirdos/ui";
+import { StatusBadge } from "@/components/common/status-badge";
 
 type DailySalesStatus = "NO_BUSINESS" | "CLOSED_WON" | "LOST" | "FOLLOW_UP";
 
@@ -161,7 +162,7 @@ export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
                         </a>
                       </td>
                       <td className="px-4 py-2.5">
-                        <Badge tone={statusInfo.tone}>{statusInfo.label}</Badge>
+                        <StatusBadge label={statusInfo.label} tone={statusInfo.tone} />
                       </td>
                       <td className="px-4 py-2.5 text-right text-text-tertiary">{fmt(row.grossSales)}</td>
                       <td className="px-4 py-2.5 text-right text-text-secondary">{fmt(row.netSales)}</td>

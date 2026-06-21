@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
+import { StatusBadge } from "@/components/common/status-badge";
 import { formatCents, formatPct, formatDate, formatDateTime } from "@/lib/format";
 
 interface EventListItem {
@@ -99,7 +100,7 @@ export default async function EventsPage({ searchParams }: { searchParams: Promi
                       {formatPct(e.computedMarginPct)}
                     </span>
                   </td>
-                  <td className="px-5 py-3"><Badge tone={STATUS_TONE[e.status] ?? "neutral"}>{e.status.toLowerCase().replace(/_/g, " ")}</Badge></td>
+                  <td className="px-5 py-3"><StatusBadge label={e.status.toLowerCase().replace(/_/g, " ")} tone={STATUS_TONE[e.status] ?? "neutral"} /></td>
                 </tr>
               ))}
             </tbody>

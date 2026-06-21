@@ -2,6 +2,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Badge } from "@ibirdos/ui";
+import { StatusBadge } from "@/components/common/status-badge";
 import { Skeleton } from "@/components/common/skeleton";
 import { toast } from "@/lib/toast";
 
@@ -86,7 +87,7 @@ export function InsightFeed({
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <Badge tone={SEVERITY_TONE[insight.severity]}>{insight.severity.toLowerCase()}</Badge>
+                  <StatusBadge label={insight.severity.toLowerCase()} tone={SEVERITY_TONE[insight.severity]} />
                   <span className="text-[10px] uppercase tracking-wider text-text-tertiary">
                     {insight.kind.toLowerCase().replace(/_/g, " ")}
                   </span>

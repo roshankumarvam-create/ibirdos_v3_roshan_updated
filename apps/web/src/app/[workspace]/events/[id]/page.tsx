@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button, EmptyState } from "@ibirdos/ui";
+import { StatusBadge } from "@/components/common/status-badge";
 import { formatCents, formatPct, formatDateTime, formatDate } from "@/lib/format";
 import { MenuSection } from "./menu-section";
 import { ShortageBanner } from "./shortage-banner";
@@ -176,11 +177,9 @@ export default async function EventDetailPage({
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Badge tone={STATUS_TONE[event.status] ?? "neutral"}>
-            {event.status.toLowerCase().replace(/_/g, " ")}
-          </Badge>
+          <StatusBadge label={event.status.toLowerCase().replace(/_/g, " ")} tone={STATUS_TONE[event.status] ?? "neutral"} />
           {isPaid && (
-            <Badge tone="success">PAID</Badge>
+            <StatusBadge label="Paid" tone="success" />
           )}
           {event.frozenAt ? (
             <span
