@@ -260,6 +260,11 @@ export default function NewRecipePage() {
       const d = json.data?.data;
       if (!d) { setExtractBanner("No data returned from extraction."); return; }
 
+      // [LAYER-4] Raw API response data arriving at the frontend
+      console.log("[LAYER-4] Raw d.ingredientLines[0] from API:", JSON.stringify(d.ingredientLines?.[0] ?? null, null, 2));
+      console.log("[LAYER-4] ALL KEYS on ingredientLines[0]:", d.ingredientLines?.[0] ? Object.keys(d.ingredientLines[0]).sort() : "empty");
+      console.log("[LAYER-4] CRITICAL FIELDS — qty:", d.ingredientLines?.[0]?.qty, "| nativeUnit:", d.ingredientLines?.[0]?.nativeUnit, "| quantity:", d.ingredientLines?.[0]?.quantity, "| unit:", d.ingredientLines?.[0]?.unit);
+
       // Pre-fill only empty fields
       if (d.name        && !name)           setName(d.name);
       if (d.authorName  && !authorName)     setAuthorName(d.authorName);
@@ -283,11 +288,10 @@ export default function NewRecipePage() {
           const rawQty = il.qty ?? il.quantity;
           const extractedUnit = normalizeUnit(il.nativeUnit ?? il.unit);
           const dim = dimensionFromNativeUnit(extractedUnit);
-          return {
+          // [LAYER-5] Per-ingredient mapping — verify each field resolves correctly
+          const mapped = {
             ...newLine(),
             ingredientId:    il.ingredientId ?? "",
-            // BUG B FIX: preserve the original extracted name; never replace with the matched inventory
-            // item name. matchedName is shown as a badge so the user can see and confirm the match.
             ingredientName:  il.name ?? "",
             matchedName:     il.matchedName ?? undefined,
             searchQuery:     il.name ?? "",
@@ -298,6 +302,8 @@ export default function NewRecipePage() {
             externalCode:    il.externalCode ?? "",
             needsReview:     !il.ingredientId,
           };
+          console.log(`[LAYER-5] Ingredient "${il.name}" → rawQty=${rawQty} (il.qty=${il.qty}, il.quantity=${il.quantity}) | rawUnit="${il.nativeUnit ?? il.unit}" → normalized="${extractedUnit}" | dim=${dim} | form.unit="${mapped.unit}" | form.dimension="${mapped.dimension}"`);
+          return mapped;
         });
         setLines(prev => {
           const hasOnlyBlank = prev.length === 1 && !prev[0]!.ingredientId && !prev[0]!.quantity;

@@ -149,6 +149,17 @@ export class RecipesExtractController {
     if (visionResult) {
       const ingredients = visionResult.data.ingredients;
 
+      // [LAYER-1] Raw AI extraction output — the fields the frontend MUST receive correctly
+      console.log("[LAYER-1] AI extraction output (first 4 ingredients):", JSON.stringify(
+        ingredients.slice(0, 4).map(i => ({
+          name: i.name,
+          qty: i.qty,              // <-- vision uses this, NOT "quantity"
+          nativeUnit: i.nativeUnit, // <-- vision uses this, NOT "unit"
+          unitConfidence: i.unitConfidence,
+          unitCanonical: i.unitCanonical,
+        })), null, 2,
+      ));
+
       if (ingredients.length === 0 && visionResult.fieldsFound === 0) {
         log.warn({ filename: file.originalname }, "vision extraction returned no data");
         return ok({
@@ -164,6 +175,23 @@ export class RecipesExtractController {
           return { ...ing, ingredientId: match?.id ?? null, matchedName: match?.name ?? null };
         }),
       );
+
+      // [LAYER-2] After inventory matching — verify name is preserved, matchedName is separate
+      console.log("[LAYER-2] Enriched ingredientLines (first 4):", JSON.stringify(
+        enriched.slice(0, 4).map(e => ({
+          name: e.name,             // original extracted name — must NOT be replaced
+          matchedName: e.matchedName, // inventory match — badge only, never overwrites name
+          qty: e.qty,
+          nativeUnit: e.nativeUnit,
+          ingredientId: e.ingredientId,
+          // These are the ONLY field names on this object — no "unit" or "quantity"
+          hasFieldUnit: "unit" in e,
+          hasFieldQuantity: "quantity" in e,
+        })), null, 2,
+      ));
+
+      // [LAYER-3] Full keys on the object going into the API response
+      console.log("[LAYER-3] API response ingredientLines[0] ALL KEYS:", enriched[0] ? Object.keys(enriched[0]).sort() : "empty");
 
       return ok({
         ...visionResult,
@@ -188,6 +216,19 @@ export class RecipesExtractController {
           return { ...line, ingredientId: match?.id ?? null, matchedName: match?.name ?? null };
         }),
       );
+
+      // [LAYER-1/CSV] CSV path enriched (first 4)
+      console.log("[LAYER-1/CSV] CSV enriched ingredientLines (first 4):", JSON.stringify(
+        enriched.slice(0, 4).map(e => ({
+          name: e.name,
+          quantity: (e as any).quantity, // CSV uses "quantity"
+          unit: (e as any).unit,         // CSV uses "unit"
+          matchedName: (e as any).matchedName,
+          ingredientId: (e as any).ingredientId,
+          hasFieldQty: "qty" in e,
+          hasFieldNativeUnit: "nativeUnit" in e,
+        })), null, 2,
+      ));
 
       return ok({
         ...csvResult,
