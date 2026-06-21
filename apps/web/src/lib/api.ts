@@ -132,7 +132,12 @@ async function request<T>(
 
   // The API always returns ApiResponse envelope, even on errors
   try {
-    return (await res.json()) as ApiResponse<T>;
+    const parsed = (await res.json()) as ApiResponse<T>;
+    // Defense-in-depth: scrub any leaked "Cannot METHOD /path" strings from the API
+    if (parsed.error && /^Cannot (GET|POST|PUT|PATCH|DELETE) /i.test(parsed.error.message)) {
+      parsed.error.message = "Something went wrong. Please try again.";
+    }
+    return parsed;
   } catch {
     console.error(`[api] non-JSON response from ${method} ${path} (status ${res.status})`);
     return {

@@ -20,7 +20,7 @@ import { env } from "@ibirdos/config";
 import { logger } from "@ibirdos/logger";
 
 import { AppModule } from "./app.module";
-
+import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 
 import { initSentry } from "./observability/sentry.init";
 import { initOtel } from "./observability/otel.init";
@@ -66,6 +66,9 @@ async function bootstrap() {
 
   // ---- Global API prefix ----
   app.setGlobalPrefix("api/v1");
+
+  // ---- Global exception filter — friendly JSON for all errors, no path leakage ----
+  app.useGlobalFilters(new HttpExceptionFilter());
 
   // ---- Graceful shutdown for k8s ----
   // Prometheus metrics — record each HTTP request
