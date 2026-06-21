@@ -3,8 +3,10 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
-import { Card, Button, Badge, EmptyState } from "@ibirdos/ui";
+import { Card, Button, EmptyState } from "@ibirdos/ui";
 import type { Role } from "@ibirdos/types";
+import { RoleBadge } from "@/components/common/role-badge";
+import { StatusBadge } from "@/components/common/status-badge";
 
 interface UserListItem {
   id: string;
@@ -16,22 +18,6 @@ interface UserListItem {
   lastLoginAt: string | null;
   disabled: boolean;
 }
-
-const ROLE_TONE: Record<Role, "success" | "info" | "warning" | "neutral" | "danger" | "accent"> = {
-  OWNER:    "accent",
-  MANAGER:  "info",
-  CHEF:     "success",
-  STAFF:    "neutral",
-  CUSTOMER: "neutral",
-};
-
-const ROLE_LABEL: Record<Role, string> = {
-  OWNER:    "Owner",
-  MANAGER:  "Manager",
-  CHEF:     "Chef",
-  STAFF:    "Staff",
-  CUSTOMER: "Customer",
-};
 
 function fmtDate(iso: string | null) {
   if (!iso) return "Never";
@@ -98,12 +84,13 @@ export default async function UsersSettingsPage() {
                   </td>
                   <td className="px-5 py-3 font-mono text-xs text-text-secondary">{u.username}</td>
                   <td className="px-5 py-3">
-                    <Badge tone={ROLE_TONE[u.role]}>{ROLE_LABEL[u.role] ?? u.role.toLowerCase()}</Badge>
+                    <RoleBadge role={u.role} />
                   </td>
                   <td className="px-5 py-3">
-                    {u.disabled
-                      ? <Badge tone="neutral">disabled</Badge>
-                      : <Badge tone="success">active</Badge>}
+                    <StatusBadge
+                      label={u.disabled ? "Disabled" : "Active"}
+                      tone={u.disabled ? "danger" : "success"}
+                    />
                   </td>
                   <td className="px-5 py-3 text-xs text-text-tertiary">{fmtDate(u.lastLoginAt)}</td>
                   <td className="px-5 py-3 text-right">

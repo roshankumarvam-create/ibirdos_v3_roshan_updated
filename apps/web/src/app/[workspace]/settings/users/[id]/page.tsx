@@ -3,7 +3,9 @@
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { use } from "react";
-import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label, Badge } from "@ibirdos/ui";
+import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label } from "@ibirdos/ui";
+import { RoleBadge } from "@/components/common/role-badge";
+import { StatusBadge } from "@/components/common/status-badge";
 import { api } from "@/lib/api";
 import type { Route } from "next";
 import type { Role } from "@ibirdos/types";
@@ -222,7 +224,7 @@ export default function EditUserPage({
             <Label htmlFor="role">Role</Label>
             {user?.role === "OWNER" ? (
               <div className="mt-1">
-                <Badge tone="danger">OWNER</Badge>
+                <RoleBadge role="OWNER" />
                 <p className="mt-1 text-xs text-text-tertiary">Owner role cannot be changed via the UI.</p>
               </div>
             ) : (
@@ -246,10 +248,13 @@ export default function EditUserPage({
         <CardBody className="space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm text-text-primary font-medium">
-                {user?.disabled ? "Account disabled" : "Account active"}
+              <div className="text-sm text-text-primary font-medium flex items-center gap-2">
+                <StatusBadge
+                  label={user?.disabled ? "Disabled" : "Active"}
+                  tone={user?.disabled ? "danger" : "success"}
+                />
               </div>
-              <div className="text-xs text-text-tertiary">
+              <div className="text-xs text-text-tertiary mt-0.5">
                 {user?.disabled
                   ? "User cannot log in. Enable to restore access."
                   : "User can log in normally."}

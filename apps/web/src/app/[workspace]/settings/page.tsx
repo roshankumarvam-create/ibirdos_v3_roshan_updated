@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireSession } from "@/lib/session";
 import { Card, CardHeader, CardTitle, CardBody, Badge, Button } from "@ibirdos/ui";
+import { RoleBadge } from "@/components/common/role-badge";
 
 export default async function SettingsPage() {
   const user = await requireSession();
@@ -76,7 +77,7 @@ export default async function SettingsPage() {
         <CardBody className="space-y-2 text-sm">
           <div className="flex justify-between"><span className="text-text-tertiary">Username</span><span className="text-text-primary font-mono">{user.username}</span></div>
           {user.displayName && <div className="flex justify-between"><span className="text-text-tertiary">Display name</span><span className="text-text-primary">{user.displayName}</span></div>}
-          <div className="flex justify-between"><span className="text-text-tertiary">Role</span><Badge tone="info">{user.role}</Badge></div>
+          <div className="flex justify-between"><span className="text-text-tertiary">Role</span><RoleBadge role={user.role} /></div>
           <div className="flex justify-between"><span className="text-text-tertiary">Workspace</span><span className="text-text-primary">{user.workspaceSlug}</span></div>
         </CardBody>
       </Card>
