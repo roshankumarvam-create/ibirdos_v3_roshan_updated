@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { Card, Button, EmptyState } from "@ibirdos/ui";
 import type { Role } from "@ibirdos/types";
 import { RoleBadge } from "@/components/common/role-badge";
-import { StatusBadge } from "@/components/common/status-badge";
+import { UserDisabledBadge } from "@/components/common/user-status-badge";
 
 interface UserListItem {
   id: string;
@@ -87,10 +87,7 @@ export default async function UsersSettingsPage() {
                     <RoleBadge role={u.role} />
                   </td>
                   <td className="px-5 py-3">
-                    <StatusBadge
-                      label={u.disabled ? "Disabled" : "Active"}
-                      tone={u.disabled ? "danger" : "success"}
-                    />
+                    <UserDisabledBadge disabled={u.disabled} />
                   </td>
                   <td className="px-5 py-3 text-xs text-text-tertiary">{fmtDate(u.lastLoginAt)}</td>
                   <td className="px-5 py-3 text-right">

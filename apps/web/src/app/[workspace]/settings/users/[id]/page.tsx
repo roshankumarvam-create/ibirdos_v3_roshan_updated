@@ -5,7 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import { use } from "react";
 import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label } from "@ibirdos/ui";
 import { RoleBadge } from "@/components/common/role-badge";
-import { StatusBadge } from "@/components/common/status-badge";
+import { UserDisabledBadge } from "@/components/common/user-status-badge";
 import { api } from "@/lib/api";
 import type { Route } from "next";
 import type { Role } from "@ibirdos/types";
@@ -249,10 +249,7 @@ export default function EditUserPage({
           <div className="flex items-center justify-between">
             <div>
               <div className="text-sm text-text-primary font-medium flex items-center gap-2">
-                <StatusBadge
-                  label={user?.disabled ? "Disabled" : "Active"}
-                  tone={user?.disabled ? "danger" : "success"}
-                />
+                <UserDisabledBadge disabled={user?.disabled ?? false} />
               </div>
               <div className="text-xs text-text-tertiary mt-0.5">
                 {user?.disabled
