@@ -6,7 +6,6 @@ import { RoleBadge } from "@/components/common/role-badge";
 export default async function SettingsPage() {
   const user = await requireSession();
   const isOwner = user.role === "OWNER";
-  const isManagerOrOwner = user.role === "OWNER" || user.role === "MANAGER";
 
   return (
     <div className="space-y-6 max-w-3xl">
