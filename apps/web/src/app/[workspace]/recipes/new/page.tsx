@@ -396,7 +396,7 @@ export default function NewRecipePage() {
 
       const res = await api.post<{ id: string }>("/recipes", body);
       if (res.error) { setErrorBanner(res.error.message); return; }
-      router.push(`/${workspaceSlug}/recipes/${res.data!.id}` as Route);
+      router.push(`/${workspaceSlug}/recipes` as Route);
     } catch (err: any) {
       setErrorBanner(err?.message ?? "Failed to save recipe. Please try again.");
     } finally {
