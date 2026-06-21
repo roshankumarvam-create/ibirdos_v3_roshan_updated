@@ -172,7 +172,15 @@ export class RecipesExtractController {
       const enriched = await Promise.all(
         ingredients.map(async (ing) => {
           const match = await findIngredient(ctx.workspaceId, ing.name);
-          return { ...ing, ingredientId: match?.id ?? null, matchedName: match?.name ?? null };
+          return {
+            ...ing,
+            ingredientId:        match?.id ?? null,
+            matchedName:         match?.name ?? null,
+            matchedCostCents:    match?.currentCostCents ?? null,
+            matchedDimension:    match?.dimension ?? null,
+            matchedDensityGPerMl: match?.densityGPerMl ?? null,
+            matchedCanonicalUnit: match?.canonicalUnit ?? null,
+          };
         }),
       );
 
@@ -213,7 +221,15 @@ export class RecipesExtractController {
       const enriched = await Promise.all(
         csvResult.data.ingredientLines.map(async (line) => {
           const match = await findIngredient(ctx.workspaceId, line.name);
-          return { ...line, ingredientId: match?.id ?? null, matchedName: match?.name ?? null };
+          return {
+            ...line,
+            ingredientId:        match?.id ?? null,
+            matchedName:         match?.name ?? null,
+            matchedCostCents:    match?.currentCostCents ?? null,
+            matchedDimension:    match?.dimension ?? null,
+            matchedDensityGPerMl: match?.densityGPerMl ?? null,
+            matchedCanonicalUnit: match?.canonicalUnit ?? null,
+          };
         }),
       );
 
@@ -272,21 +288,41 @@ function parsedToExtractResult(parsed: SpreadsheetParseResult, source: "excel" |
   return { data, source, fieldsFound };
 }
 
+const INGREDIENT_SELECT = {
+  id: true, name: true,
+  currentCostMicrocents: true,
+  dimension: true,
+  canonicalUnit: true,
+  densityGPerMl: true,
+} as const;
+
+function mapIngredientMatch(raw: { id: string; name: string; currentCostMicrocents: bigint | null; dimension: string; canonicalUnit: string; densityGPerMl: any } | null) {
+  if (!raw) return null;
+  return {
+    id: raw.id,
+    name: raw.name,
+    currentCostCents: raw.currentCostMicrocents != null ? Number(raw.currentCostMicrocents) / 1000 : null,
+    dimension: raw.dimension as "MASS" | "VOLUME" | "COUNT",
+    canonicalUnit: raw.canonicalUnit,
+    densityGPerMl: raw.densityGPerMl != null ? Number(raw.densityGPerMl) : null,
+  };
+}
+
 async function findIngredient(workspaceId: string, name: string) {
   const normalized = name.trim().toLowerCase();
   if (!normalized) return null;
 
   const exact = await prisma.ingredient.findFirst({
     where: { workspaceId, deletedAt: null, name: { equals: normalized, mode: "insensitive" } },
-    select: { id: true, name: true },
+    select: INGREDIENT_SELECT,
   });
-  if (exact) return exact;
+  if (exact) return mapIngredientMatch(exact);
 
   const alias = await prisma.ingredientAlias.findFirst({
     where: { workspaceId, text: normalized },
-    include: { ingredient: { select: { id: true, name: true, deletedAt: true } } },
+    include: { ingredient: { select: { ...INGREDIENT_SELECT, deletedAt: true } } },
   });
-  if (alias && !alias.ingredient.deletedAt) return alias.ingredient;
+  if (alias && !alias.ingredient.deletedAt) return mapIngredientMatch(alias.ingredient);
 
   const prefixLen = Math.min(6, normalized.length);
   if (prefixLen >= 3) {
@@ -295,9 +331,9 @@ async function findIngredient(workspaceId: string, name: string) {
         workspaceId, deletedAt: null,
         name: { startsWith: normalized.slice(0, prefixLen), mode: "insensitive" },
       },
-      select: { id: true, name: true },
+      select: INGREDIENT_SELECT,
     });
-    if (prefix) return prefix;
+    if (prefix) return mapIngredientMatch(prefix);
   }
 
   return null;

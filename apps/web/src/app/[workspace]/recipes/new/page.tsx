@@ -289,18 +289,22 @@ export default function NewRecipePage() {
           const extractedUnit = normalizeUnit(il.nativeUnit ?? il.unit);
           const dim = dimensionFromNativeUnit(extractedUnit);
           // [LAYER-5] Per-ingredient mapping — verify each field resolves correctly
+          // matchedCostCents: price per canonical unit from inventory match (enables live cost display)
+          // matchedDensityGPerMl: needed if recipe unit dimension differs from inventory canonical unit
           const mapped = {
             ...newLine(),
-            ingredientId:    il.ingredientId ?? "",
-            ingredientName:  il.name ?? "",
-            matchedName:     il.matchedName ?? undefined,
-            searchQuery:     il.name ?? "",
-            quantity:        rawQty != null ? String(rawQty) : "",
-            unit:            extractedUnit,
-            dimension:       dim,
-            percentUtilized: String(il.percentUtilized ?? 100),
-            externalCode:    il.externalCode ?? "",
-            needsReview:     !il.ingredientId,
+            ingredientId:        il.ingredientId ?? "",
+            ingredientName:      il.name ?? "",
+            matchedName:         il.matchedName ?? undefined,
+            searchQuery:         il.name ?? "",
+            quantity:            rawQty != null ? String(rawQty) : "",
+            unit:                extractedUnit,
+            dimension:           dim,
+            percentUtilized:     String(il.percentUtilized ?? 100),
+            externalCode:        il.externalCode ?? "",
+            needsReview:         !il.ingredientId,
+            pricePerCanonicalCents: il.matchedCostCents ?? 0,
+            densityGPerMl:       il.matchedDensityGPerMl ?? null,
           };
           console.log(`[LAYER-5] Ingredient "${il.name}" → rawQty=${rawQty} (il.qty=${il.qty}, il.quantity=${il.quantity}) | rawUnit="${il.nativeUnit ?? il.unit}" → normalized="${extractedUnit}" | dim=${dim} | form.unit="${mapped.unit}" | form.dimension="${mapped.dimension}"`);
           return mapped;
