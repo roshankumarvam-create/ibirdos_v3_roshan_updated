@@ -343,7 +343,7 @@ export default function EditRecipePage() {
           externalCode: line.externalCode || undefined,
           quantity: parseFloat(line.quantity),
           unit: line.unit,
-          percentUtilized: parseFloat(line.percentUtilized) || 100,
+          percentUtilized: Math.min(200, Math.max(1, parseFloat(line.percentUtilized) || 100)),
           weightOz: line.weightOz ? parseFloat(line.weightOz) : undefined,
         });
       }

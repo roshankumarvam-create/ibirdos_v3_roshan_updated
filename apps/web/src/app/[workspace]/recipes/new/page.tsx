@@ -373,7 +373,7 @@ export default function NewRecipePage() {
           externalCode: l.externalCode || undefined,
           quantity: parseFloat(l.quantity),
           unit: l.unit,
-          percentUtilized: parseFloat(l.percentUtilized) || 100,
+          percentUtilized: Math.min(200, Math.max(1, parseFloat(l.percentUtilized) || 100)),
           weightOz: l.weightOz ? parseFloat(l.weightOz) : undefined,
         })),
       };
@@ -395,7 +395,13 @@ export default function NewRecipePage() {
       console.log("[LAYER-6] validLines[*].percentUtilized:", validLines.map((l, i) => `[${i}] "${l.percentUtilized}" (qty="${l.quantity}")`));
 
       const res = await api.post<{ id: string }>("/recipes", body);
-      if (res.error) { setErrorBanner(res.error.message); return; }
+      if (res.error) {
+        const d = res.error.details as any;
+        const fieldMsgs = Object.entries(d?.fieldErrors ?? {})
+          .flatMap(([field, msgs]: [string, any]) => (msgs as string[]).map((m: string) => `${field}: ${m}`));
+        setErrorBanner(fieldMsgs.length ? fieldMsgs.join("; ") : res.error.message);
+        return;
+      }
       router.push(`/${workspaceSlug}/recipes` as Route);
     } catch (err: any) {
       setErrorBanner(err?.message ?? "Failed to save recipe. Please try again.");
