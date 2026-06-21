@@ -157,7 +157,12 @@ export default async function RecipeDetailPage({
           </div>
         </div>
         {canEdit && (
-          <DeleteRecipeButton recipeId={id} workspaceSlug={workspace} recipeName={recipe.name} />
+          <div className="flex items-center gap-2">
+            <Link href={`/${workspace}/recipes/${id}/edit` as any}>
+              <Button variant="secondary" size="sm">Edit</Button>
+            </Link>
+            <DeleteRecipeButton recipeId={id} workspaceSlug={workspace} recipeName={recipe.name} />
+          </div>
         )}
       </div>
 
