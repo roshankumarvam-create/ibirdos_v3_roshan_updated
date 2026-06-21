@@ -31,10 +31,40 @@ function makeMembership(overrides: object = {}) {
   return {
     role: "CHEF",
     status: "ACTIVE",
-    user: { id: "u1", username: "jdoe" },
+    user: { id: "u1", username: "jdoe", email: "jdoe@example.com", displayName: "Jane Doe",
+            lastLoginAt: null, mustChangePassword: false, createdAt: new Date().toISOString() },
     ...overrides,
   };
 }
+
+describe("UsersService.getUser — GET /api/v1/users/:id", () => {
+  let svc: UsersService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new UsersService(mockPasswords as any);
+  });
+
+  it("returns email in the response payload", async () => {
+    mockMembershipFindUnique.mockResolvedValue(makeMembership());
+    const result = await svc.getUser(ctx, "u1");
+    expect(result.email).toBe("jdoe@example.com");
+  });
+
+  it("returns null email when user has none", async () => {
+    mockMembershipFindUnique.mockResolvedValue(makeMembership({
+      user: { id: "u2", username: "noemail", email: null, displayName: null,
+              lastLoginAt: null, mustChangePassword: false, createdAt: "" },
+    }));
+    const result = await svc.getUser(ctx, "u2");
+    expect(result.email).toBeNull();
+  });
+
+  it("throws 404 when user is not a workspace member", async () => {
+    mockMembershipFindUnique.mockResolvedValue(null);
+    await expect(svc.getUser(ctx, "ghost")).rejects.toThrow(NotFoundException);
+  });
+})
 
 describe("UsersService.updateUser — PATCH /api/v1/users/:id", () => {
   let svc: UsersService;

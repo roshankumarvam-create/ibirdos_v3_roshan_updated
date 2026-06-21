@@ -59,9 +59,9 @@ export default function EditUserPage({
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    api.get<{ users: UserDetail[] }>("/users").then(res => {
-      if (res.error) { setLoading(false); return; }
-      const found = res.data?.users.find(u => u.id === id);
+    api.get<{ user: UserDetail }>(`/users/${id}`).then(res => {
+      if (res.error) { setNotFound(true); setLoading(false); return; }
+      const found = res.data?.user;
       if (!found) { setNotFound(true); setLoading(false); return; }
       setUser(found);
       setDisplayName(found.displayName ?? "");
@@ -76,7 +76,7 @@ export default function EditUserPage({
     setErrorBanner(null);
     setSuccessBanner(null);
     try {
-      const res = await api.patch<UserDetail>(`/users/${id}`, {
+      const res = await api.patch<{ user: UserDetail }>(`/users/${id}`, {
         displayName: displayName.trim() || undefined,
         email: email.trim() || undefined,
         role: role !== "OWNER" ? role : undefined,
@@ -84,6 +84,13 @@ export default function EditUserPage({
       if (res.error) {
         setErrorBanner(res.error.message);
       } else {
+        const updated = res.data?.user;
+        if (updated) {
+          setUser(updated);
+          setDisplayName(updated.displayName ?? "");
+          setEmail(updated.email ?? "");
+          setRole(updated.role);
+        }
         setSuccessBanner("Saved.");
         setTimeout(() => setSuccessBanner(null), 3000);
       }
