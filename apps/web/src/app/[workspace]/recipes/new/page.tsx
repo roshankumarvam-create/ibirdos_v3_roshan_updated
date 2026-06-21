@@ -357,6 +357,19 @@ export default function NewRecipePage() {
         })),
       };
 
+      // [LAYER-6] What is actually sent to POST /recipes — catches percentUtilized > 200
+      console.log("[LAYER-6] POST /recipes body.ingredientLines:", JSON.stringify(
+        body.ingredientLines?.map((il: any, i: number) => ({
+          i,
+          ingredientId: il.ingredientId,
+          quantity: il.quantity,
+          unit: il.unit,
+          percentUtilized: il.percentUtilized,
+          percentUtilized_raw: validLines[i]?.percentUtilized,  // raw string before parseFloat
+        })), null, 2,
+      ));
+      console.log("[LAYER-6] validLines[*].percentUtilized raw strings:", validLines.map((l, i) => `[${i}] "${l.percentUtilized}" (qty="${l.quantity}")`));
+
       const res = await api.post<{ id: string }>("/recipes", body);
       if (res.error) { setErrorBanner(res.error.message); return; }
       router.push(`/${workspaceSlug}/recipes/${res.data!.id}` as Route);
