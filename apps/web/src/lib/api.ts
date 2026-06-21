@@ -125,15 +125,21 @@ async function request<T>(
     _csrfInFlight = null;
   }
 
+  // 204 No Content — success with no body
+  if (res.status === 204) {
+    return { data: null as any, error: null };
+  }
+
   // The API always returns ApiResponse envelope, even on errors
   try {
     return (await res.json()) as ApiResponse<T>;
   } catch {
+    console.error(`[api] non-JSON response from ${method} ${path} (status ${res.status})`);
     return {
       data: null,
       error: {
         code: "internal_error",
-        message: `Server returned non-JSON response (status ${res.status})`,
+        message: "Something went wrong. Please try again.",
       },
     };
   }

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@ibirdos/ui";
 import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
 import type { Route } from "next";
 
 interface Props {
@@ -21,7 +22,11 @@ export function DeleteEventButton({ eventId, workspaceSlug, eventName }: Props) 
     setLoading(true);
     const res = await api.delete(`/events/${eventId}`);
     setLoading(false);
-    if (res.error) { alert(res.error.message ?? "Delete failed"); return; }
+    if (res.error) {
+      toast.error("Failed to delete event. Please try again.");
+      return;
+    }
+    toast.success("Event deleted successfully.");
     router.push(`/${workspaceSlug}/events` as Route);
   };
 

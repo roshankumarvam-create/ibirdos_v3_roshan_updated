@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { use } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { toast } from "@/lib/toast";
 import { formatCostPerUnit, formatStock, formatDate, formatCents } from "@/lib/format";
 import { normalizeUnit, UNITS } from "@ibirdos/types";
 import {
@@ -226,8 +227,10 @@ export default function IngredientDetailPage({
                   const res = await api.delete(`/ingredients/${id}`);
                   setDeleting(false);
                   if (res.error) {
-                    setError(res.error.message);
+                    setShowDeleteModal(false);
+                    toast.error("Failed to delete ingredient. Please try again.");
                   } else {
+                    toast.success("Ingredient deleted successfully.");
                     router.push(`/${workspace}/ingredients` as any);
                     router.refresh();
                   }
