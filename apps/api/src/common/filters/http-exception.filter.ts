@@ -56,7 +56,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
       if (typeof body === "string") {
         // NestJS route-not-found produces "Cannot METHOD /path" — scrub it
-        if (/^Cannot (GET|POST|PUT|PATCH|DELETE) /i.test(body)) {
+        if (/^Cannot (GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /i.test(body)) {
           status = HttpStatus.NOT_FOUND;
           code = ErrorCodes.NOT_FOUND;
           message = "Requested resource not available.";
@@ -67,7 +67,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         code = body.code ?? this.codeForStatus(status);
         const rawMessage = body.message ?? exception.message;
         // NotFoundException("Cannot METHOD /path") wraps message in an object body — scrub here too
-        if (/^Cannot (GET|POST|PUT|PATCH|DELETE) /i.test(rawMessage)) {
+        if (/^Cannot (GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /i.test(rawMessage)) {
           status = HttpStatus.NOT_FOUND;
           code = ErrorCodes.NOT_FOUND;
           message = "Requested resource not available.";

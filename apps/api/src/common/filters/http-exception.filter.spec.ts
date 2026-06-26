@@ -44,6 +44,31 @@ describe("HttpExceptionFilter", () => {
     expect(JSON.stringify(body)).not.toContain("this-does-not-exist");
   });
 
+  it("scrubs Cannot GET / (root path, no api prefix) — never leaks path", () => {
+    const host = makeHost();
+    const exception = new NotFoundException("Cannot GET /");
+
+    filter.catch(exception, host);
+
+    const body = host._json.mock.calls[0][0];
+    expect(body.error.code).toBe("not_found");
+    expect(body.error.message).toBe("Requested resource not available.");
+    expect(JSON.stringify(body)).not.toContain("Cannot GET");
+    expect(JSON.stringify(body)).not.toContain('"/');
+  });
+
+  it("scrubs Cannot HEAD / (preflight path) — never leaks method or path", () => {
+    const host = makeHost();
+    const exception = new NotFoundException("Cannot HEAD /api/v1/health");
+
+    filter.catch(exception, host);
+
+    const body = host._json.mock.calls[0][0];
+    expect(body.error.code).toBe("not_found");
+    expect(body.error.message).toBe("Requested resource not available.");
+    expect(JSON.stringify(body)).not.toContain("Cannot HEAD");
+  });
+
   it("scrubs Cannot PATCH /path from NotFoundException string body", () => {
     const host = makeHost();
     const exception = new NotFoundException("Cannot PATCH /api/v1/users/cmqh3fvtj000mr62k3nlx3mge");

@@ -299,8 +299,29 @@ export class InvoicesService {
             autoCreatedUnmatched = true;
             created++;
           } catch (err: any) {
-            log.warn({ lineId: line.id, name, err: err.message }, "auto-create ingredient failed -- skipping line");
-            continue;
+            // P2002 = unique constraint: ingredient with this name was created concurrently
+            // (e.g. parallel confirm calls or prior import). Re-fetch rather than skip.
+            if (err?.code === "P2002") {
+              const existing = await prisma.ingredient.findFirst({
+                where: {
+                  workspaceId: ctx.workspaceId,
+                  name: { equals: name, mode: "insensitive" },
+                  deletedAt: null,
+                },
+                select: { id: true },
+              });
+              if (existing) {
+                ingredientId = existing.id;
+                matched++;
+                log.info({ lineId: line.id, name }, "ingredient re-fetched after P2002 race condition");
+              } else {
+                log.warn({ lineId: line.id, name, err: err.message }, "auto-create ingredient failed -- skipping line");
+                continue;
+              }
+            } else {
+              log.warn({ lineId: line.id, name, err: err.message }, "auto-create ingredient failed -- skipping line");
+              continue;
+            }
           }
         }
 

@@ -341,34 +341,57 @@ export class IngredientsService implements OnApplicationBootstrap {
       }];
     }
 
+    // ---- Pass 1b: exact ingredient name match (case-insensitive, no pg_trgm needed) ----
+    // Catches the common case where the ingredient exists but has no alias yet.
+    const exactName = await prisma.ingredient.findFirst({
+      where: {
+        workspaceId: ctx.workspaceId,
+        name: { equals: normalized, mode: "insensitive" },
+        deletedAt: null,
+      },
+      select: { id: true, name: true },
+    });
+    if (exactName) {
+      return [{
+        ingredientId: exactName.id,
+        ingredientName: exactName.name,
+        matchType: "exact",
+        confidence: 1.0,
+      }];
+    }
+
     // ---- Pass 2: trigram fuzzy match ----
-    // Requires pg_trgm extension. Migration 0002 enables it.
-    const fuzzy = await prisma.$queryRaw<
-      Array<{ id: string; name: string; sim: number }>
-    >`
-      SELECT i.id, i.name,
-             GREATEST(
-               similarity(LOWER(i.name), ${normalized}),
-               COALESCE((
-                 SELECT MAX(similarity(a.text, ${normalized}))
-                 FROM ingredient_aliases a
-                 WHERE a.ingredient_id = i.id
-               ), 0)
-             ) AS sim
-      FROM ingredients i
-      WHERE i.workspace_id = ${ctx.workspaceId}
-        AND i.deleted_at IS NULL
-        AND (
-          LOWER(i.name) % ${normalized}
-          OR EXISTS (
-            SELECT 1 FROM ingredient_aliases a
-            WHERE a.ingredient_id = i.id
-              AND a.text % ${normalized}
+    // Requires pg_trgm extension (install-pg-trgm.js migration).
+    // Falls through gracefully when the extension is not installed.
+    let fuzzy: Array<{ id: string; name: string; sim: number }> = [];
+    try {
+      fuzzy = await prisma.$queryRaw<Array<{ id: string; name: string; sim: number }>>`
+        SELECT i.id, i.name,
+               GREATEST(
+                 similarity(LOWER(i.name), ${normalized}),
+                 COALESCE((
+                   SELECT MAX(similarity(a.text, ${normalized}))
+                   FROM ingredient_aliases a
+                   WHERE a.ingredient_id = i.id
+                 ), 0)
+               ) AS sim
+        FROM ingredients i
+        WHERE i.workspace_id = ${ctx.workspaceId}
+          AND i.deleted_at IS NULL
+          AND (
+            LOWER(i.name) % ${normalized}
+            OR EXISTS (
+              SELECT 1 FROM ingredient_aliases a
+              WHERE a.ingredient_id = i.id
+                AND a.text % ${normalized}
+            )
           )
-        )
-      ORDER BY sim DESC
-      LIMIT 5
-    `;
+        ORDER BY sim DESC
+        LIMIT 5
+      `;
+    } catch (err: any) {
+      log.warn({ err: err.message }, "trigram match failed — pg_trgm not enabled, skipping fuzzy pass");
+    }
 
     if (fuzzy.length > 0) {
       return fuzzy.map((row) => ({
