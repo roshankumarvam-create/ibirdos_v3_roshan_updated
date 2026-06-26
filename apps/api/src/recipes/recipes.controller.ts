@@ -105,7 +105,8 @@ export class RecipesController {
     return this.svc.delete(ctx, id).then(() => ok(null));
   }
 
-  @Post("preview-import") @RequirePermission("recipe.create")
+  @Post("preview-import")
+  @RequirePermission("recipe.create")
   previewImport(@CurrentCtx() ctx: TenantContext,
                 @Body(new ZodValidationPipe(ImportCsvSchema)) body: z.infer<typeof ImportCsvSchema>) {
     return this.svc.previewImport(ctx, body).then(ok);
