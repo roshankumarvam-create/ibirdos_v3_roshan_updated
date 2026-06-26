@@ -172,15 +172,66 @@ describe("Edge cases", () => {
     expect(result.unparsed.length).toBeGreaterThan(0);
   });
 
-  it("skips data rows with empty recipe name in Format A", () => {
+  it("carries forward the last recipe for rows with empty recipe name in Format A", () => {
+    // Format A flat: recipe name appears only on the FIRST ingredient row;
+    // continuation rows have an empty Recipe Name cell but still belong to the same recipe.
     const rows = [
       ["Recipe Name", "Ingredient", "Qty", "Unit"],
       ["Salad", "Lettuce", "1", "head"],
-      ["", "Mystery item", "1", "each"],  // no recipe name — should be skipped
+      ["", "Mystery item", "1", "each"],  // empty recipe name → belongs to Salad
+    ];
+    const result = extractRecipesFromRows(rows);
+    expect(result.recipes).toHaveLength(1);
+    expect(result.recipes[0]!.ingredients).toHaveLength(2);
+    expect(result.recipes[0]!.ingredients[1]!.ingredient_name).toBe("Mystery item");
+  });
+
+  it("skips orphan ingredient rows that appear before any recipe name", () => {
+    const rows = [
+      ["Recipe Name", "Ingredient", "Qty", "Unit"],
+      ["", "Orphan item", "1", "each"],  // no recipe started yet — truly orphaned
+      ["Salad", "Lettuce", "1", "head"],
     ];
     const result = extractRecipesFromRows(rows);
     expect(result.recipes).toHaveLength(1);
     expect(result.recipes[0]!.ingredients).toHaveLength(1);
+    expect(result.recipes[0]!.ingredients[0]!.ingredient_name).toBe("Lettuce");
+  });
+
+  it("parses Cajun Chicken Wings fixture — 6 ingredients, carry-forward recipe name", () => {
+    // Mirrors the exact XLSX the client uploaded: recipe name + metadata on row 2 only,
+    // rows 3-7 have empty Recipe Name but belong to the same recipe.
+    const rows = [
+      ["Recipe Name", "Category", "Yield Portions", "Prep Time Min", "Cook Time Min", "Ingredient", "Qty", "Unit", "% Utilized", "Notes"],
+      ["Cajun Chicken Wings", "APPETIZER", "10", "20", "25", "Chicken Wing", "5", "LB", "90", ""],
+      ["", "", "", "", "", "Cajun Seasoning", "0.25", "LB", "100", ""],
+      ["", "", "", "", "", "Fresh Dill Baby Fresh Herb", "0.05", "LB", "80", "Garnish"],
+      ["", "", "", "", "", "Cucumber Pickling Fresh", "2", "LB", "95", "Side"],
+      ["", "", "", "", "", "Carrot Baby Peeled Tri Color", "1", "LB", "90", "Side"],
+      ["", "", "", "", "", "Salt Kosher", "0.05", "LB", "100", ""],
+    ];
+    const result = extractRecipesFromRows(rows);
+    expect(result.recipes).toHaveLength(1);
+    const r = result.recipes[0]!;
+    expect(r.name).toBe("Cajun Chicken Wings");
+    expect(r.category).toBe("APPETIZER");
+    expect(r.yield_portions).toBe(10);
+    expect(r.prep_time_minutes).toBe(20);
+    expect(r.cook_time_minutes).toBe(25);
+    expect(r.ingredients).toHaveLength(6);
+    // Names preserved verbatim
+    expect(r.ingredients[0]!.ingredient_name).toBe("Chicken Wing");
+    expect(r.ingredients[1]!.ingredient_name).toBe("Cajun Seasoning");
+    expect(r.ingredients[2]!.ingredient_name).toBe("Fresh Dill Baby Fresh Herb");
+    expect(r.ingredients[3]!.ingredient_name).toBe("Cucumber Pickling Fresh");
+    expect(r.ingredients[4]!.ingredient_name).toBe("Carrot Baby Peeled Tri Color");
+    expect(r.ingredients[5]!.ingredient_name).toBe("Salt Kosher");
+    // Quantities, units, utilization, notes preserved
+    expect(r.ingredients[0]!.quantity).toBe(5);
+    expect(r.ingredients[0]!.unit).toBe("LB");
+    expect(r.ingredients[0]!.utilization_percent).toBe(90);
+    expect(r.ingredients[2]!.notes).toBe("Garnish");
+    expect(r.ingredients[3]!.notes).toBe("Side");
   });
 
   it("handles numeric cell values (xlsx sometimes returns numbers)", () => {

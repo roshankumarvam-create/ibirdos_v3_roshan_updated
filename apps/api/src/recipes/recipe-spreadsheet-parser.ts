@@ -217,27 +217,37 @@ function parseFormatA(
     cook_time_minutes?: number; description?: string; ingredients: ParsedIngredient[];
   };
   const recipeMap = new Map<string, RecipeAccum>();
+  // Carry-forward: when Recipe Name cell is empty, the row belongs to the most
+  // recently seen recipe (Format A flat — recipe name appears only on the first
+  // ingredient row, not repeated on continuation rows).
+  let currentRecipeName: string | null = null;
 
   for (let i = headerRowIdx + 1; i < rows.length; i++) {
     const row = rows[i]!;
-    const recipeName = row[nameMatch.index] ?? "";
-    if (!recipeName) continue;
+    const rowRecipeName = row[nameMatch.index] ?? "";
 
-    if (!recipeMap.has(recipeName)) {
-      recipeMap.set(recipeName, {
-        category:           catMatch  ? row[catMatch.index]  || undefined : undefined,
-        yield_portions:     yldMatch  ? parseNum(row[yldMatch.index])     : undefined,
-        prep_time_minutes:  prepMatch ? parseInt10(row[prepMatch.index])  : undefined,
-        cook_time_minutes:  cookMatch ? parseInt10(row[cookMatch.index])  : undefined,
-        description:        descMatch ? row[descMatch.index] || undefined : undefined,
-        ingredients: [],
-      });
+    if (rowRecipeName) {
+      // New recipe name — update carry-forward and register on first occurrence only
+      currentRecipeName = rowRecipeName;
+      if (!recipeMap.has(currentRecipeName)) {
+        recipeMap.set(currentRecipeName, {
+          category:           catMatch  ? row[catMatch.index]  || undefined : undefined,
+          yield_portions:     yldMatch  ? parseNum(row[yldMatch.index])     : undefined,
+          prep_time_minutes:  prepMatch ? parseInt10(row[prepMatch.index])  : undefined,
+          cook_time_minutes:  cookMatch ? parseInt10(row[cookMatch.index])  : undefined,
+          description:        descMatch ? row[descMatch.index] || undefined : undefined,
+          ingredients: [],
+        });
+      }
     }
+
+    // Skip rows that appear before any recipe name has been seen
+    if (!currentRecipeName) continue;
 
     const ingName = row[ingMatch.index] ?? "";
     if (!ingName) continue;
 
-    recipeMap.get(recipeName)!.ingredients.push({
+    recipeMap.get(currentRecipeName)!.ingredients.push({
       ingredient_name: ingName,   // PRESERVED EXACTLY — no trimming or synonym mapping
       quantity:            qtyMatch   ? parseNum(row[qtyMatch.index])        : undefined,
       unit:                unitMatch  ? row[unitMatch.index] || undefined     : undefined,
