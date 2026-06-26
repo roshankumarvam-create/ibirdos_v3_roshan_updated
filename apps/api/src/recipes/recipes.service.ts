@@ -664,7 +664,14 @@ export class RecipesService {
     input: { filename: string; contentBase64: string },
   ) {
     type IngLine = { ingName: string; qty: number; unit: string; notes: string };
-    type RecipeMeta = { category: string | null; portions: number; lines: IngLine[] };
+    type RecipeMeta = {
+      category: string | null;
+      portions: number;
+      prepTimeMin: number | null;
+      cookTimeMin: number | null;
+      paperCostCents: number | null;
+      lines: IngLine[];
+    };
 
     const buf = Buffer.from(input.contentBase64, "base64");
 
@@ -678,10 +685,13 @@ export class RecipesService {
         recipeMap.set(r.name, {
           category: r.category ?? null,
           portions: r.yield_portions ?? 1,
+          prepTimeMin: r.prep_time_minutes ?? null,
+          cookTimeMin: r.cook_time_minutes ?? null,
+          paperCostCents: r.paper_cost_cents ?? null,
           lines: r.ingredients.map(ing => ({
             ingName: ing.ingredient_name,
             qty: ing.quantity ?? 0,
-            unit: ing.unit ?? "each",
+            unit: (ing.unit ?? "each").toLowerCase(),
             notes: ing.notes ?? "",
           })).filter(l => l.ingName && l.qty > 0),
         });
@@ -721,13 +731,16 @@ export class RecipesService {
           meta = {
             category: col(row, "category", "type") || null,
             portions: parseInt(col(row, "portions yielded", "portions", "yield"), 10) || 1,
+            prepTimeMin: parseInt(col(row, "prep time min", "prep time", "prep"), 10) || null,
+            cookTimeMin: parseInt(col(row, "cook time min", "cook time", "cook"), 10) || null,
+            paperCostCents: null,
             lines: [],
           };
           recipeMap.set(recipeName, meta);
         }
         const ingName = col(row, "ingredient name", "ingredient", "item");
         const qty = parseFloat(col(row, "quantity", "qty", "amount")) || 0;
-        const unit = col(row, "unit", "uom") || "each";
+        const unit = (col(row, "unit", "uom") || "each").toLowerCase();
         const notes = col(row, "notes", "note") || "";
         if (ingName && qty > 0) meta.lines.push({ ingName, qty, unit, notes });
       }
@@ -777,6 +790,9 @@ export class RecipesService {
           name: recipeName,
           category: meta.category,
           portionsYielded: meta.portions,
+          prepTimeMin: meta.prepTimeMin,
+          cookTimeMin: meta.cookTimeMin,
+          paperCostCents: meta.paperCostCents,
           status: "DRAFT",
           ingredients: resolvedLines.length
             ? { create: resolvedLines.map((l) => ({ workspaceId: ctx.workspaceId, ...l })) }

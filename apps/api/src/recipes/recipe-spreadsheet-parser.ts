@@ -31,6 +31,7 @@ export interface ParsedRecipe {
   prep_time_minutes: number | undefined;
   cook_time_minutes: number | undefined;
   description: string | undefined;
+  paper_cost_cents: number | undefined;
   ingredients: ParsedIngredient[];
   confidence: number;           // 0..1
   source: "deterministic" | "ai_fallback";
@@ -55,6 +56,7 @@ const FIELD_ALIASES = {
   prep_time_minutes: ["prep time min", "prep time", "prep minutes", "prep"],
   cook_time_minutes: ["cook time min", "cook time", "cook minutes", "cook"],
   description: ["description", "method", "instructions"],
+  paper_cost_cents: ["paper cost", "paper cost $", "paper cost (per portion)", "packaging cost", "packaging"],
 };
 
 const INGREDIENT_ALIASES = {
@@ -114,6 +116,13 @@ function parseInt10(s: string | undefined): number | undefined {
   if (!s) return undefined;
   const v = parseInt(s.replace(/[^0-9\-]/g, ""), 10);
   return isNaN(v) ? undefined : v;
+}
+
+// Parse a dollar value and return integer cents (e.g. "0.25" → 25, "$1.50" → 150)
+function parseCents(s: string | undefined): number | undefined {
+  if (!s) return undefined;
+  const v = parseFloat(s.replace(/[^0-9.\-]/g, ""));
+  return isNaN(v) ? undefined : Math.round(v * 100);
 }
 
 // ---- Public entry points ------------------------------------------------
@@ -200,11 +209,12 @@ function parseFormatA(
 ): SpreadsheetParseResult {
   const headers = rows[headerRowIdx]!;
 
-  const catMatch  = findColumn(headers, FIELD_ALIASES.category);
-  const yldMatch  = findColumn(headers, FIELD_ALIASES.yield_portions);
-  const prepMatch = findColumn(headers, FIELD_ALIASES.prep_time_minutes);
-  const cookMatch = findColumn(headers, FIELD_ALIASES.cook_time_minutes);
-  const descMatch = findColumn(headers, FIELD_ALIASES.description);
+  const catMatch      = findColumn(headers, FIELD_ALIASES.category);
+  const yldMatch      = findColumn(headers, FIELD_ALIASES.yield_portions);
+  const prepMatch     = findColumn(headers, FIELD_ALIASES.prep_time_minutes);
+  const cookMatch     = findColumn(headers, FIELD_ALIASES.cook_time_minutes);
+  const descMatch     = findColumn(headers, FIELD_ALIASES.description);
+  const paperCostMatch = findColumn(headers, FIELD_ALIASES.paper_cost_cents);
 
   const qtyMatch     = findColumn(headers, INGREDIENT_ALIASES.quantity);
   const unitMatch    = findColumn(headers, INGREDIENT_ALIASES.unit);
@@ -214,7 +224,8 @@ function parseFormatA(
 
   type RecipeAccum = {
     category?: string; yield_portions?: number; prep_time_minutes?: number;
-    cook_time_minutes?: number; description?: string; ingredients: ParsedIngredient[];
+    cook_time_minutes?: number; description?: string; paper_cost_cents?: number;
+    ingredients: ParsedIngredient[];
   };
   const recipeMap = new Map<string, RecipeAccum>();
   // Carry-forward: when Recipe Name cell is empty, the row belongs to the most
@@ -231,11 +242,12 @@ function parseFormatA(
       currentRecipeName = rowRecipeName;
       if (!recipeMap.has(currentRecipeName)) {
         recipeMap.set(currentRecipeName, {
-          category:           catMatch  ? row[catMatch.index]  || undefined : undefined,
-          yield_portions:     yldMatch  ? parseNum(row[yldMatch.index])     : undefined,
-          prep_time_minutes:  prepMatch ? parseInt10(row[prepMatch.index])  : undefined,
-          cook_time_minutes:  cookMatch ? parseInt10(row[cookMatch.index])  : undefined,
-          description:        descMatch ? row[descMatch.index] || undefined : undefined,
+          category:           catMatch       ? row[catMatch.index]       || undefined : undefined,
+          yield_portions:     yldMatch       ? parseNum(row[yldMatch.index])          : undefined,
+          prep_time_minutes:  prepMatch      ? parseInt10(row[prepMatch.index])       : undefined,
+          cook_time_minutes:  cookMatch      ? parseInt10(row[cookMatch.index])       : undefined,
+          description:        descMatch      ? row[descMatch.index]      || undefined : undefined,
+          paper_cost_cents:   paperCostMatch ? parseCents(row[paperCostMatch.index])  : undefined,
           ingredients: [],
         });
       }
@@ -272,6 +284,7 @@ function parseFormatA(
       prep_time_minutes:  entry.prep_time_minutes,
       cook_time_minutes:  entry.cook_time_minutes,
       description:        entry.description,
+      paper_cost_cents:   entry.paper_cost_cents,
       ingredients:        entry.ingredients,
       confidence:         hasIngredients ? nameMatch.confidence : nameMatch.confidence * 0.8,
       source:             "deterministic",
@@ -300,6 +313,7 @@ function parseFormatB(
   let prep_time_minutes: number | undefined;
   let cook_time_minutes: number | undefined;
   let description: string | undefined;
+  let paper_cost_cents: number | undefined;
   let nameConf = 0.95;
 
   // Helper: check if a normalized label matches any alias from the list
@@ -342,6 +356,10 @@ function parseFormatB(
     if (!description) {
       const r = checkAliases(label, FIELD_ALIASES.description);
       if (r.matched) { description = val; continue; }
+    }
+    if (!paper_cost_cents) {
+      const r = checkAliases(label, FIELD_ALIASES.paper_cost_cents);
+      if (r.matched) { paper_cost_cents = parseCents(val); continue; }
     }
   }
 
@@ -386,6 +404,7 @@ function parseFormatB(
           prep_time_minutes,
           cook_time_minutes,
           description,
+          paper_cost_cents,
           ingredients,
           confidence,
           source: "deterministic",

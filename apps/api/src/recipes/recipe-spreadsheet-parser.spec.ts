@@ -270,4 +270,23 @@ describe("Edge cases", () => {
     expect(ings[1]!.unit).toBe("g");
     expect(ings[2]!.unit).toBe("each");
   });
+
+  it("parses Paper Cost column and converts dollars → cents", () => {
+    const rows = [
+      ["Recipe Name", "Category", "Yield Portions", "Paper Cost", "Ingredient", "Qty", "Unit"],
+      ["Burger", "Main", "1", "0.25", "Beef Patty", "4", "oz"],
+    ];
+    const result = extractRecipesFromRows(rows);
+    const r = result.recipes[0]!;
+    expect(r.paper_cost_cents).toBe(25);
+  });
+
+  it("paper_cost_cents is undefined when column is absent", () => {
+    const rows = [
+      ["Recipe Name", "Ingredient", "Qty", "Unit"],
+      ["Burger", "Beef Patty", "4", "oz"],
+    ];
+    const result = extractRecipesFromRows(rows);
+    expect(result.recipes[0]!.paper_cost_cents).toBeUndefined();
+  });
 });
