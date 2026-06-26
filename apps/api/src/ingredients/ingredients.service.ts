@@ -507,6 +507,12 @@ export class IngredientsService implements OnApplicationBootstrap {
     });
     if (!ing) throw new NotFoundException({ code: "not_found", message: "Ingredient not found" });
 
+    // Hard-delete aliases so this ingredient's name can be reused after soft-delete.
+    // ingredient_aliases has @@unique([workspaceId, text]) with no deletedAt — leaving
+    // aliases behind causes P2002 ("resource already exists") when the user tries to
+    // create a new ingredient with the same name.
+    await prisma.ingredientAlias.deleteMany({ where: { ingredientId: id } });
+
     await prisma.ingredient.update({
       where: { id },
       data: { deletedAt: new Date() },
