@@ -746,9 +746,14 @@ export class RecipesService {
         if (!meta) {
           meta = {
             category: col(row, "category", "type") || null,
+            author: null,
             portions: parseInt(col(row, "portions yielded", "portions", "yield"), 10) || 1,
+            portionWeightOz: null,
+            portionVolumeFloz: null,
             prepTimeMin: parseInt(col(row, "prep time min", "prep time", "prep"), 10) || null,
             cookTimeMin: parseInt(col(row, "cook time min", "cook time", "cook"), 10) || null,
+            description: null,
+            procedure: null,
             paperCostCents: null,
             lines: [],
           };
@@ -758,7 +763,7 @@ export class RecipesService {
         const qty = parseFloat(col(row, "quantity", "qty", "amount")) || 0;
         const unit = (col(row, "unit", "uom") || "each").toLowerCase();
         const notes = col(row, "notes", "note") || "";
-        if (ingName && qty > 0) meta.lines.push({ ingName, qty, unit, notes });
+        if (ingName && qty > 0) meta.lines.push({ ingName, qty, unit, notes, percentUtilized: undefined });
       }
     }
 
@@ -775,7 +780,7 @@ export class RecipesService {
     let newIngredientCount = 0;
 
     for (const [recipeName, meta] of recipeMap) {
-      const resolvedLines: Array<{ ingredientId: string; quantity: number; unit: string; notes?: string; displayOrder: number }> = [];
+      const resolvedLines: Array<{ ingredientId: string; quantity: number; unit: string; notes?: string; prepNote?: string; yieldPctOverride?: number; displayOrder: number }> = [];
       for (let i = 0; i < meta.lines.length; i++) {
         const line = meta.lines[i];
         if (!line) continue;
