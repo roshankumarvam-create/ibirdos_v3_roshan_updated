@@ -9,6 +9,7 @@ import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 
 import { RecipesService } from "./recipes.service";
 
+// LineSchema: used by addIngredient — requires a resolved ingredientId.
 const LineSchema = z.object({
   ingredientId:    z.string().min(1),
   externalCode:    z.string().optional(),
@@ -18,6 +19,22 @@ const LineSchema = z.object({
   percentUtilized: z.number().min(1).max(200).optional(),
   weightOz:        z.number().positive().optional(),
   notes:           z.string().max(500).optional(),
+});
+
+// CreateLineSchema: used on recipe create — accepts either a resolved
+// ingredientId OR an ingredientName (auto-created by the service).
+const CreateLineSchema = z.object({
+  ingredientId:    z.string().min(1).optional(),
+  ingredientName:  z.string().min(1).max(200).optional(),
+  externalCode:    z.string().optional(),
+  quantity:        z.number().positive(),
+  unit:            z.string().min(1).max(32),
+  yieldPctOverride: z.number().min(0).max(200).nullable().optional(),
+  percentUtilized: z.number().min(1).max(200).optional(),
+  weightOz:        z.number().positive().optional(),
+  notes:           z.string().max(500).optional(),
+}).refine(d => d.ingredientId || d.ingredientName, {
+  message: "Either ingredientId or ingredientName is required",
 });
 
 const CreateRecipeSchema = z.object({
@@ -49,8 +66,8 @@ const CreateRecipeSchema = z.object({
   instructionsMd:       z.string().max(20000).optional(),
   procedure:            z.string().max(20000).optional(),
   notes:                z.string().max(2000).optional(),
-  ingredients:          z.array(LineSchema).optional(),
-  ingredientLines:      z.array(LineSchema).optional(),
+  ingredients:          z.array(CreateLineSchema).optional(),
+  ingredientLines:      z.array(CreateLineSchema).optional(),
 });
 
 const UpdateRecipeSchema = CreateRecipeSchema.partial().omit({ ingredients: true }).extend({

@@ -267,8 +267,10 @@ export default function NewRecipePage() {
 
       // Pre-fill only empty fields
       if (d.name && !name) {
-        setName(d.name);
-      } else if (!d.name && !name && extractFile) {
+        setName(d.name);                    // CSV/spreadsheet path
+      } else if (d.recipeName && !name) {
+        setName(d.recipeName);              // Vision/OCR path (field name differs)
+      } else if (!d.name && !d.recipeName && !name && extractFile) {
         const stem = extractFile.name
           .replace(/\.[^.]+$/, "")
           .replace(/[-_]+/g, " ")
@@ -358,14 +360,18 @@ export default function NewRecipePage() {
         prepPhotoUrl: prepPhotoUrl || undefined,
         finalPhotoUrl: finalPhotoUrl || undefined,
         videoUrl: videoUrl || undefined,
-        ingredientLines: validLines.map(l => ({
-          ingredientId: l.ingredientId,
-          externalCode: l.externalCode || undefined,
-          quantity: parseFloat(l.quantity),
-          unit: l.unit,
-          percentUtilized: Math.min(200, Math.max(1, parseFloat(l.percentUtilized) || 100)),
-          weightOz: l.weightOz ? parseFloat(l.weightOz) : undefined,
-        })),
+        ingredientLines: filledLines
+          .filter(l => l.ingredientId || l.ingredientName || l.searchQuery)
+          .map(l => ({
+            ...(l.ingredientId
+              ? { ingredientId: l.ingredientId }
+              : { ingredientName: (l.ingredientName || l.searchQuery).trim() }),
+            externalCode: l.externalCode || undefined,
+            quantity: parseFloat(l.quantity),
+            unit: l.unit,
+            percentUtilized: Math.min(200, Math.max(1, parseFloat(l.percentUtilized) || 100)),
+            weightOz: l.weightOz ? parseFloat(l.weightOz) : undefined,
+          })),
       };
 
       const res = await api.post<{ id: string }>("/recipes", body);
@@ -971,7 +977,7 @@ export default function NewRecipePage() {
               Save recipe
             </Button>
 
-            {validLines.length < 1 && (
+            {filledLines.length < 1 && (
               <p className="text-xs text-text-tertiary text-center">Add at least one ingredient to save.</p>
             )}
           </div>

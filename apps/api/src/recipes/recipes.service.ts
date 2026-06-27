@@ -43,7 +43,9 @@ const MICROCENTS_PER_CENT = 1000n;
 // ---------------------------------------------------------------------
 
 export interface RecipeIngredientLineInput {
-  ingredientId: string;
+  ingredientId?: string;
+  /** Auto-creates the ingredient when ingredientId is absent. */
+  ingredientName?: string;
   externalCode?: string;
   quantity: number;
   unit: string;
@@ -127,13 +129,72 @@ export class RecipesService {
 
   async create(ctx: TenantContext, input: CreateRecipeInput) {
     // Normalize aliased field names from the new-form API
-    const lines = input.ingredientLines ?? input.ingredients ?? [];
+    const rawLines = input.ingredientLines ?? input.ingredients ?? [];
     const portionsYielded = input.totalPortions ?? input.portionsYielded ?? null;
     const prepTimeMin = input.prepTimeMinutes ?? input.prepTimeMin ?? null;
     const cookTimeMin = input.cookTimeMinutes ?? input.cookTimeMin ?? null;
     const salePriceCents = input.actualSellPriceCents ?? input.salePriceCents ?? null;
     const instructionsMd = input.procedure ?? input.instructionsMd ?? null;
 
+    // Phase A: resolve ingredient IDs — auto-create when only a name is supplied.
+    type ResolvedLine = {
+      ingredientId: string;
+      externalCode: string | null;
+      quantity: number;
+      unit: string;
+      yieldPctOverride: number | null;
+      weightOz: number | null;
+      notes: string | null;
+      displayOrder: number;
+    };
+    const resolvedLines: ResolvedLine[] = [];
+    for (let idx = 0; idx < rawLines.length; idx++) {
+      const line = rawLines[idx]!;
+      let ingredientId = line.ingredientId ?? "";
+      if (!ingredientId && line.ingredientName) {
+        const ingName = line.ingredientName.trim();
+        const existing = await prisma.ingredient.findFirst({
+          where: { workspaceId: ctx.workspaceId, deletedAt: null, name: { equals: ingName, mode: "insensitive" } },
+          select: { id: true },
+        });
+        if (existing) {
+          ingredientId = existing.id;
+        } else {
+          const created = await prisma.ingredient.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              createdById: ctx.userId,
+              name: ingName,
+              dimension: "MASS",
+              canonicalUnit: "g",
+              preferredDisplayUnit: line.unit,
+              currentStockCanonical: 0,
+              reorderThresholdCanonical: 1,
+            },
+          });
+          ingredientId = created.id;
+          await prisma.lowStockAlert.upsert({
+            where: { workspaceId_ingredientId_status: { workspaceId: ctx.workspaceId, ingredientId, status: "OPEN" } },
+            create: { workspaceId: ctx.workspaceId, ingredientId, currentCanonical: new Decimal(0), thresholdCanonical: new Decimal(1) },
+            update: { currentCanonical: new Decimal(0) },
+          }).catch(() => {});
+        }
+      }
+      if (ingredientId) {
+        resolvedLines.push({
+          ingredientId,
+          externalCode: line.externalCode ?? null,
+          quantity: line.quantity,
+          unit: line.unit,
+          yieldPctOverride: line.percentUtilized ?? line.yieldPctOverride ?? null,
+          weightOz: line.weightOz ?? null,
+          notes: line.notes ?? null,
+          displayOrder: idx,
+        });
+      }
+    }
+
+    // Phase B: create recipe with resolved ingredient IDs.
     const recipe = await prisma.recipe.create({
       data: {
         workspaceId: ctx.workspaceId,
@@ -160,18 +221,18 @@ export class RecipesService {
         videoUrl: input.videoUrl ?? null,
         instructionsMd,
         notes: input.notes ?? (input.description ?? null),
-        ingredients: lines.length
+        ingredients: resolvedLines.length
           ? {
-              create: lines.map((line, idx) => ({
+              create: resolvedLines.map(line => ({
                 workspaceId: ctx.workspaceId,
                 ingredientId: line.ingredientId,
-                externalCode: line.externalCode ?? null,
+                externalCode: line.externalCode,
                 quantity: line.quantity,
                 unit: line.unit,
-                yieldPctOverride: line.percentUtilized ?? line.yieldPctOverride ?? null,
-                weightOz: line.weightOz ?? null,
-                notes: line.notes ?? null,
-                displayOrder: idx,
+                yieldPctOverride: line.yieldPctOverride,
+                weightOz: line.weightOz,
+                notes: line.notes,
+                displayOrder: line.displayOrder,
               })),
             }
           : undefined,
@@ -182,11 +243,11 @@ export class RecipesService {
       action: "recipe.created",
       entityType: "Recipe",
       entityId: recipe.id,
-      metadata: { name: recipe.name, ingredientCount: input.ingredients?.length ?? 0 },
+      metadata: { name: recipe.name, ingredientCount: resolvedLines.length },
     });
 
     // Trigger initial cost compute
-    if (lines.length) {
+    if (resolvedLines.length) {
       await this.recost(ctx, recipe.id, "recipe_edit");
     }
 
@@ -351,6 +412,9 @@ export class RecipesService {
   // -----------------------------------------------------------------
 
   async addIngredient(ctx: TenantContext, recipeId: string, line: RecipeIngredientLineInput) {
+    // ingredientId is guaranteed non-empty by LineSchema (Zod) at the controller layer.
+    if (!line.ingredientId) throw new BadRequestException({ code: "validation_failed", message: "ingredientId is required" });
+
     const recipe = await prisma.recipe.findFirst({
       where: { id: recipeId, workspaceId: ctx.workspaceId, deletedAt: null },
     });
