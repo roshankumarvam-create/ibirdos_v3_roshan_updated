@@ -831,7 +831,7 @@ export class RecipesService {
           notes: meta.description ?? null,
           instructionsMd: meta.procedure ?? null,
           paperCostCents: meta.paperCostCents,
-          status: "DRAFT",
+          status: "ACTIVE",
           ingredients: uniqueLines.length
             ? { create: uniqueLines.map((l) => ({ workspaceId: ctx.workspaceId, ...l })) }
             : undefined,

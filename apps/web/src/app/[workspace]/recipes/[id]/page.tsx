@@ -151,9 +151,9 @@ export default async function RecipeDetailPage({
               <h1 className="text-xl font-semibold tracking-tight">{recipe.name}</h1>
               <Badge tone={statusTone}>{recipe.status.toLowerCase()}</Badge>
             </div>
-            {recipe.authorName && (
-              <p className="text-xs text-text-tertiary mt-0.5">by {recipe.authorName}</p>
-            )}
+            <p className="text-xs text-text-tertiary mt-0.5">
+              {recipe.authorName ? `by ${recipe.authorName}` : <span className="italic">No author</span>}
+            </p>
           </div>
         </div>
         {canEdit && (
@@ -173,29 +173,19 @@ export default async function RecipeDetailPage({
           <Card>
             <CardHeader>
               <CardTitle>Recipe info</CardTitle>
-              {recipe.category && <CardDescription>{recipe.category}</CardDescription>}
+              <CardDescription>{recipe.category ?? <span className="text-text-tertiary italic">No category</span>}</CardDescription>
             </CardHeader>
             <CardBody className="space-y-4">
-              {(recipe.description || recipe.notes) && (
-                <p className="text-sm text-text-secondary">{recipe.description ?? recipe.notes}</p>
-              )}
+              <p className="text-sm text-text-secondary">
+                {recipe.description ?? recipe.notes ?? <span className="italic text-text-tertiary">No description</span>}
+              </p>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                {recipe.portionsYielded != null && (
-                  <StatBox label="Portions" value={String(recipe.portionsYielded)} />
-                )}
-                {portionWeightOz && (
-                  <StatBox label="Portion weight" value={`${portionWeightOz} oz`} />
-                )}
-                {portionVolumeFloz && (
-                  <StatBox label="Portion volume" value={`${portionVolumeFloz} fl oz`} />
-                )}
-                {recipe.prepTimeMin != null && (
-                  <StatBox label="Prep time" value={`${recipe.prepTimeMin} min`} />
-                )}
-                {recipe.cookTimeMin != null && (
-                  <StatBox label="Cook time" value={`${recipe.cookTimeMin} min`} />
-                )}
+                <StatBox label="Portions" value={recipe.portionsYielded != null ? String(recipe.portionsYielded) : "—"} />
+                <StatBox label="Portion weight" value={portionWeightOz ? `${portionWeightOz} oz` : "—"} />
+                <StatBox label="Portion volume" value={portionVolumeFloz ? `${portionVolumeFloz} fl oz` : "—"} />
+                <StatBox label="Prep time" value={recipe.prepTimeMin != null ? `${recipe.prepTimeMin} min` : "—"} />
+                <StatBox label="Cook time" value={recipe.cookTimeMin != null ? `${recipe.cookTimeMin} min` : "—"} />
               </div>
             </CardBody>
           </Card>
@@ -222,43 +212,55 @@ export default async function RecipeDetailPage({
           </Card>
 
           {/* Procedure / Instructions */}
-          {(recipe.instructionsMd) && (
-            <Card>
-              <CardHeader><CardTitle>Procedure</CardTitle></CardHeader>
-              <CardBody>
+          <Card>
+            <CardHeader><CardTitle>Procedure</CardTitle></CardHeader>
+            <CardBody>
+              {recipe.instructionsMd ? (
                 <pre className="whitespace-pre-wrap font-sans text-sm text-text-secondary leading-relaxed">
                   {recipe.instructionsMd}
                 </pre>
-              </CardBody>
-            </Card>
-          )}
+              ) : (
+                <p className="text-sm italic text-text-tertiary">No procedure added yet. <Link href={`/${workspace}/recipes/${id}/edit` as any} className="underline hover:text-text-secondary">Add via Edit.</Link></p>
+              )}
+            </CardBody>
+          </Card>
 
-          {/* Photos — guard empty strings as well as null; broken URLs get placeholder via RecipePhotoImg */}
-          {(!!recipe.photoUrl || !!recipe.prepPhotoUrl || !!recipe.finalPhotoUrl) && (
-            <Card>
-              <CardHeader><CardTitle>Photos</CardTitle></CardHeader>
-              <CardBody className="flex gap-4 flex-wrap">
-                {recipe.photoUrl && !recipe.prepPhotoUrl && !recipe.finalPhotoUrl && (
-                  <div>
-                    <p className="text-xs text-text-tertiary mb-1">Recipe photo</p>
-                    <RecipePhotoImg src={recipe.photoUrl} alt="Recipe" label="Recipe" />
-                  </div>
-                )}
-                {recipe.prepPhotoUrl && (
-                  <div>
-                    <p className="text-xs text-text-tertiary mb-1">Prep</p>
-                    <RecipePhotoImg src={recipe.prepPhotoUrl} alt="Prep" label="Prep" />
-                  </div>
-                )}
-                {recipe.finalPhotoUrl && (
-                  <div>
-                    <p className="text-xs text-text-tertiary mb-1">Final</p>
-                    <RecipePhotoImg src={recipe.finalPhotoUrl} alt="Final" label="Final" />
-                  </div>
-                )}
-              </CardBody>
-            </Card>
-          )}
+          {/* Photos & Media */}
+          <Card>
+            <CardHeader><CardTitle>Photos &amp; Media</CardTitle></CardHeader>
+            <CardBody className="flex gap-4 flex-wrap">
+              {recipe.photoUrl && !recipe.prepPhotoUrl && !recipe.finalPhotoUrl && (
+                <div>
+                  <p className="text-xs text-text-tertiary mb-1">Recipe photo</p>
+                  <RecipePhotoImg src={recipe.photoUrl} alt="Recipe" label="Recipe" />
+                </div>
+              )}
+              {recipe.prepPhotoUrl ? (
+                <div>
+                  <p className="text-xs text-text-tertiary mb-1">Prep photo</p>
+                  <RecipePhotoImg src={recipe.prepPhotoUrl} alt="Prep" label="Prep" />
+                </div>
+              ) : (
+                <PhotoSlot label="Prep photo" editHref={`/${workspace}/recipes/${id}/edit`} />
+              )}
+              {recipe.finalPhotoUrl ? (
+                <div>
+                  <p className="text-xs text-text-tertiary mb-1">Final photo</p>
+                  <RecipePhotoImg src={recipe.finalPhotoUrl} alt="Final" label="Final" />
+                </div>
+              ) : (
+                <PhotoSlot label="Final photo" editHref={`/${workspace}/recipes/${id}/edit`} />
+              )}
+              {recipe.videoUrl ? (
+                <div>
+                  <p className="text-xs text-text-tertiary mb-1">Demo video</p>
+                  <span className="text-xs text-text-secondary truncate max-w-[200px] block">{recipe.videoUrl}</span>
+                </div>
+              ) : (
+                <PhotoSlot label="Demo video" editHref={`/${workspace}/recipes/${id}/edit`} />
+              )}
+            </CardBody>
+          </Card>
         </div>
 
         {/* Cost summary sidebar */}
@@ -332,6 +334,15 @@ function CostRow({ label, value, valueClass }: { label: string; value: string; v
     <div className="flex justify-between items-center text-xs">
       <span className="text-text-secondary">{label}</span>
       <span className={valueClass ?? "tabular-nums text-text-primary font-medium"}>{value}</span>
+    </div>
+  );
+}
+
+function PhotoSlot({ label, editHref }: { label: string; editHref: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center rounded-md border border-dashed border-bg-border bg-bg-inset w-28 h-20 gap-1">
+      <p className="text-[10px] text-text-tertiary font-medium">{label}</p>
+      <Link href={editHref as any} className="text-[10px] text-accent-400 hover:text-accent-300 underline">Add via Edit</Link>
     </div>
   );
 }
