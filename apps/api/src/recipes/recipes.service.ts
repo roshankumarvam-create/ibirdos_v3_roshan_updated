@@ -258,6 +258,11 @@ export class RecipesService {
     const live = computeLiveRecipeCost(r);
     return {
       ...r,
+      ingredients: r.ingredients.map(row => ({
+        ...row,
+        percentUtilized: row.yieldPctOverride != null ? Number(row.yieldPctOverride) : null,
+        prepNote: row.prepNote ?? row.notes ?? null,
+      })),
       liveCostCents: live.totalCostCents,
       livePerPortionCostCents: live.perPortionCostCents,
       liveFoodCostPct: live.foodCostPct,
@@ -663,12 +668,17 @@ export class RecipesService {
     ctx: TenantContext,
     input: { filename: string; contentBase64: string },
   ) {
-    type IngLine = { ingName: string; qty: number; unit: string; notes: string };
+    type IngLine = { ingName: string; qty: number; unit: string; notes: string; percentUtilized: number | undefined };
     type RecipeMeta = {
       category: string | null;
+      author: string | null;
       portions: number;
+      portionWeightOz: number | null;
+      portionVolumeFloz: number | null;
       prepTimeMin: number | null;
       cookTimeMin: number | null;
+      description: string | null;
+      procedure: string | null;
       paperCostCents: number | null;
       lines: IngLine[];
     };
@@ -684,15 +694,21 @@ export class RecipesService {
       for (const r of parsed.recipes) {
         recipeMap.set(r.name, {
           category: r.category ?? null,
+          author: r.author ?? null,
           portions: r.yield_portions ?? 1,
+          portionWeightOz: r.portion_weight_oz ?? null,
+          portionVolumeFloz: r.portion_volume_floz ?? null,
           prepTimeMin: r.prep_time_minutes ?? null,
           cookTimeMin: r.cook_time_minutes ?? null,
+          description: r.description ?? null,
+          procedure: r.procedure ?? null,
           paperCostCents: r.paper_cost_cents ?? null,
           lines: r.ingredients.map(ing => ({
             ingName: ing.ingredient_name,
             qty: ing.quantity ?? 0,
             unit: (ing.unit ?? "each").toLowerCase(),
             notes: ing.notes ?? "",
+            percentUtilized: ing.utilization_percent,
           })).filter(l => l.ingName && l.qty > 0),
         });
       }
@@ -780,7 +796,7 @@ export class RecipesService {
           ingByName.set(ingName.toLowerCase(), ingredientId);
           newIngredientCount++;
         }
-        resolvedLines.push({ ingredientId, quantity: qty, unit, notes: notes || undefined, displayOrder: i });
+        resolvedLines.push({ ingredientId, quantity: qty, unit, notes: notes || undefined, prepNote: notes || undefined, yieldPctOverride: line.percentUtilized ?? undefined, displayOrder: i });
       }
 
       // Guard against RecipeIngredient.@@unique([recipeId, ingredientId]) P2002:
@@ -793,15 +809,22 @@ export class RecipesService {
         return true;
       });
 
+      const portionWeightG = meta.portionWeightOz ? meta.portionWeightOz * 28.3495 : null;
+      const portionVolumeMl = meta.portionVolumeFloz ? meta.portionVolumeFloz * 29.5735 : null;
       const recipe = await prisma.recipe.create({
         data: {
           workspaceId: ctx.workspaceId,
           createdById: ctx.userId,
           name: recipeName,
           category: meta.category,
+          authorName: meta.author ?? null,
           portionsYielded: meta.portions,
+          portionWeightG,
+          portionVolumeMl,
           prepTimeMin: meta.prepTimeMin,
           cookTimeMin: meta.cookTimeMin,
+          notes: meta.description ?? null,
+          instructionsMd: meta.procedure ?? null,
           paperCostCents: meta.paperCostCents,
           status: "DRAFT",
           ingredients: uniqueLines.length

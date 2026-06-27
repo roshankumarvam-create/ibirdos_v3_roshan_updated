@@ -10,12 +10,12 @@ import type { Route } from "next";
 const TEMPLATE_CSV =
   "data:text/csv;charset=utf-8," +
   encodeURIComponent(
-    "Recipe Name,Category,Portions Yielded,Ingredient Name,Quantity,Unit,Notes\n" +
-    "Pasta Marinara,Entrees,4,Pasta,16,oz,dry pasta\n" +
-    "Pasta Marinara,Entrees,4,Tomato Sauce,2,cup,\n" +
-    "Pasta Marinara,Entrees,4,Garlic,3,clove,\n" +
-    "Caesar Salad,Salads,6,Romaine Lettuce,24,oz,\n" +
-    "Caesar Salad,Salads,6,Caesar Dressing,6,oz,\n",
+    "Recipe Name,Category,Author,Yield Portions,Portion Weight (oz),Portion Volume (fl oz),Prep Time Min,Cook Time Min,Description,Procedure,Ingredient,Qty,Unit,% Utilized,Notes\n" +
+    "Pasta Marinara,Entrees,Chef Maria,4,8,,30,20,Classic Italian pasta.,1. Boil pasta. 2. Heat sauce.,Pasta,16,oz,100,dry pasta\n" +
+    "Pasta Marinara,,,,,,,,,,Tomato Sauce,2,cup,95,\n" +
+    "Pasta Marinara,,,,,,,,,,Garlic,3,clove,100,\n" +
+    "Caesar Salad,Salads,,6,,,15,0,Fresh caesar salad.,,Romaine Lettuce,24,oz,100,\n" +
+    "Caesar Salad,,,,,,,,,,Caesar Dressing,6,oz,100,\n",
   );
 
 interface PreviewIngredient {

@@ -27,10 +27,14 @@ export interface ParsedIngredient {
 export interface ParsedRecipe {
   name: string;
   category: string | undefined;
+  author: string | undefined;
   yield_portions: number | undefined;
+  portion_weight_oz: number | undefined;
+  portion_volume_floz: number | undefined;
   prep_time_minutes: number | undefined;
   cook_time_minutes: number | undefined;
   description: string | undefined;
+  procedure: string | undefined;
   paper_cost_cents: number | undefined;
   ingredients: ParsedIngredient[];
   confidence: number;           // 0..1
@@ -51,11 +55,15 @@ export interface SpreadsheetParseResult {
 const FIELD_ALIASES = {
   name: ["recipe name", "recipe", "name", "dish", "item", "menu item"],
   category: ["category", "type", "course", "menu category"],
+  author: ["author", "chef", "author / chef", "chef name"],
   yield_portions: ["yield portions", "yield", "portions yielded", "portions",
     "servings", "serves", "yield/servings", "total portions"],
+  portion_weight_oz: ["portion weight (oz)", "portion weight oz", "portion weight", "serving weight (oz)"],
+  portion_volume_floz: ["portion volume (fl oz)", "portion volume fl oz", "portion volume", "serving volume (fl oz)"],
   prep_time_minutes: ["prep time min", "prep time", "prep minutes", "prep"],
   cook_time_minutes: ["cook time min", "cook time", "cook minutes", "cook"],
   description: ["description", "method", "instructions"],
+  procedure: ["procedure", "cooking steps", "steps", "cooking instructions"],
   paper_cost_cents: ["paper cost", "paper cost $", "paper cost (per portion)", "packaging cost", "packaging"],
 };
 
@@ -209,11 +217,15 @@ function parseFormatA(
 ): SpreadsheetParseResult {
   const headers = rows[headerRowIdx]!;
 
-  const catMatch      = findColumn(headers, FIELD_ALIASES.category);
-  const yldMatch      = findColumn(headers, FIELD_ALIASES.yield_portions);
-  const prepMatch     = findColumn(headers, FIELD_ALIASES.prep_time_minutes);
-  const cookMatch     = findColumn(headers, FIELD_ALIASES.cook_time_minutes);
-  const descMatch     = findColumn(headers, FIELD_ALIASES.description);
+  const catMatch       = findColumn(headers, FIELD_ALIASES.category);
+  const authorMatch    = findColumn(headers, FIELD_ALIASES.author);
+  const yldMatch       = findColumn(headers, FIELD_ALIASES.yield_portions);
+  const wtOzMatch      = findColumn(headers, FIELD_ALIASES.portion_weight_oz);
+  const volFlozMatch   = findColumn(headers, FIELD_ALIASES.portion_volume_floz);
+  const prepMatch      = findColumn(headers, FIELD_ALIASES.prep_time_minutes);
+  const cookMatch      = findColumn(headers, FIELD_ALIASES.cook_time_minutes);
+  const descMatch      = findColumn(headers, FIELD_ALIASES.description);
+  const procMatch      = findColumn(headers, FIELD_ALIASES.procedure);
   const paperCostMatch = findColumn(headers, FIELD_ALIASES.paper_cost_cents);
 
   const qtyMatch     = findColumn(headers, INGREDIENT_ALIASES.quantity);
@@ -223,8 +235,10 @@ function parseFormatA(
   const codeIdx      = findVendorCodeCol(headers);
 
   type RecipeAccum = {
-    category?: string; yield_portions?: number; prep_time_minutes?: number;
-    cook_time_minutes?: number; description?: string; paper_cost_cents?: number;
+    category?: string; author?: string; yield_portions?: number;
+    portion_weight_oz?: number; portion_volume_floz?: number;
+    prep_time_minutes?: number; cook_time_minutes?: number;
+    description?: string; procedure?: string; paper_cost_cents?: number;
     ingredients: ParsedIngredient[];
   };
   const recipeMap = new Map<string, RecipeAccum>();
@@ -242,12 +256,16 @@ function parseFormatA(
       currentRecipeName = rowRecipeName;
       if (!recipeMap.has(currentRecipeName)) {
         recipeMap.set(currentRecipeName, {
-          category:           catMatch       ? row[catMatch.index]       || undefined : undefined,
-          yield_portions:     yldMatch       ? parseNum(row[yldMatch.index])          : undefined,
-          prep_time_minutes:  prepMatch      ? parseInt10(row[prepMatch.index])       : undefined,
-          cook_time_minutes:  cookMatch      ? parseInt10(row[cookMatch.index])       : undefined,
-          description:        descMatch      ? row[descMatch.index]      || undefined : undefined,
-          paper_cost_cents:   paperCostMatch ? parseCents(row[paperCostMatch.index])  : undefined,
+          category:            catMatch       ? row[catMatch.index]        || undefined : undefined,
+          author:              authorMatch    ? row[authorMatch.index]     || undefined : undefined,
+          yield_portions:      yldMatch       ? parseNum(row[yldMatch.index])           : undefined,
+          portion_weight_oz:   wtOzMatch      ? parseNum(row[wtOzMatch.index])          : undefined,
+          portion_volume_floz: volFlozMatch   ? parseNum(row[volFlozMatch.index])       : undefined,
+          prep_time_minutes:   prepMatch      ? parseInt10(row[prepMatch.index])        : undefined,
+          cook_time_minutes:   cookMatch      ? parseInt10(row[cookMatch.index])        : undefined,
+          description:         descMatch      ? row[descMatch.index]       || undefined : undefined,
+          procedure:           procMatch      ? row[procMatch.index]       || undefined : undefined,
+          paper_cost_cents:    paperCostMatch ? parseCents(row[paperCostMatch.index])   : undefined,
           ingredients: [],
         });
       }
@@ -279,16 +297,20 @@ function parseFormatA(
     const hasIngredients = entry.ingredients.length > 0;
     recipes.push({
       name,
-      category:           entry.category,
-      yield_portions:     entry.yield_portions,
-      prep_time_minutes:  entry.prep_time_minutes,
-      cook_time_minutes:  entry.cook_time_minutes,
-      description:        entry.description,
-      paper_cost_cents:   entry.paper_cost_cents,
-      ingredients:        entry.ingredients,
-      confidence:         hasIngredients ? nameMatch.confidence : nameMatch.confidence * 0.8,
-      source:             "deterministic",
-      warnings:           hasIngredients ? [] : [`No ingredients found for recipe "${name}"`],
+      category:            entry.category,
+      author:              entry.author,
+      yield_portions:      entry.yield_portions,
+      portion_weight_oz:   entry.portion_weight_oz,
+      portion_volume_floz: entry.portion_volume_floz,
+      prep_time_minutes:   entry.prep_time_minutes,
+      cook_time_minutes:   entry.cook_time_minutes,
+      description:         entry.description,
+      procedure:           entry.procedure,
+      paper_cost_cents:    entry.paper_cost_cents,
+      ingredients:         entry.ingredients,
+      confidence:          hasIngredients ? nameMatch.confidence : nameMatch.confidence * 0.8,
+      source:              "deterministic",
+      warnings:            hasIngredients ? [] : [`No ingredients found for recipe "${name}"`],
     });
   }
 
@@ -309,10 +331,14 @@ function parseFormatB(
   const headers = rows[ingHeaderRowIdx]!;
   let name: string | undefined;
   let category: string | undefined;
+  let author: string | undefined;
   let yield_portions: number | undefined;
+  let portion_weight_oz: number | undefined;
+  let portion_volume_floz: number | undefined;
   let prep_time_minutes: number | undefined;
   let cook_time_minutes: number | undefined;
   let description: string | undefined;
+  let procedure: string | undefined;
   let paper_cost_cents: number | undefined;
   let nameConf = 0.95;
 
@@ -341,9 +367,21 @@ function parseFormatB(
       const r = checkAliases(label, FIELD_ALIASES.category);
       if (r.matched) { category = val; continue; }
     }
+    if (!author) {
+      const r = checkAliases(label, FIELD_ALIASES.author);
+      if (r.matched) { author = val; continue; }
+    }
     if (!yield_portions) {
       const r = checkAliases(label, FIELD_ALIASES.yield_portions);
       if (r.matched) { yield_portions = parseNum(val); continue; }
+    }
+    if (!portion_weight_oz) {
+      const r = checkAliases(label, FIELD_ALIASES.portion_weight_oz);
+      if (r.matched) { portion_weight_oz = parseNum(val); continue; }
+    }
+    if (!portion_volume_floz) {
+      const r = checkAliases(label, FIELD_ALIASES.portion_volume_floz);
+      if (r.matched) { portion_volume_floz = parseNum(val); continue; }
     }
     if (!prep_time_minutes) {
       const r = checkAliases(label, FIELD_ALIASES.prep_time_minutes);
@@ -356,6 +394,10 @@ function parseFormatB(
     if (!description) {
       const r = checkAliases(label, FIELD_ALIASES.description);
       if (r.matched) { description = val; continue; }
+    }
+    if (!procedure) {
+      const r = checkAliases(label, FIELD_ALIASES.procedure);
+      if (r.matched) { procedure = val; continue; }
     }
     if (!paper_cost_cents) {
       const r = checkAliases(label, FIELD_ALIASES.paper_cost_cents);
@@ -400,10 +442,14 @@ function parseFormatB(
       ? [{
           name: recipeName,
           category,
+          author,
           yield_portions,
+          portion_weight_oz,
+          portion_volume_floz,
           prep_time_minutes,
           cook_time_minutes,
           description,
+          procedure,
           paper_cost_cents,
           ingredients,
           confidence,
