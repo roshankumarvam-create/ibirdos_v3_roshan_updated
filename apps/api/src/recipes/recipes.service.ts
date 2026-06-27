@@ -783,6 +783,16 @@ export class RecipesService {
         resolvedLines.push({ ingredientId, quantity: qty, unit, notes: notes || undefined, displayOrder: i });
       }
 
+      // Guard against RecipeIngredient.@@unique([recipeId, ingredientId]) P2002:
+      // if the XLSX has duplicate ingredient rows for the same recipe they resolve
+      // to the same ingredientId via ingByName — keep first occurrence only.
+      const seenIds = new Set<string>();
+      const uniqueLines = resolvedLines.filter(l => {
+        if (seenIds.has(l.ingredientId)) return false;
+        seenIds.add(l.ingredientId);
+        return true;
+      });
+
       const recipe = await prisma.recipe.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -794,13 +804,13 @@ export class RecipesService {
           cookTimeMin: meta.cookTimeMin,
           paperCostCents: meta.paperCostCents,
           status: "DRAFT",
-          ingredients: resolvedLines.length
-            ? { create: resolvedLines.map((l) => ({ workspaceId: ctx.workspaceId, ...l })) }
+          ingredients: uniqueLines.length
+            ? { create: uniqueLines.map((l) => ({ workspaceId: ctx.workspaceId, ...l })) }
             : undefined,
         },
       });
 
-      if (resolvedLines.length) {
+      if (uniqueLines.length) {
         await this.recost(ctx, recipe.id, "recipe_edit").catch(() => null);
       }
       importedRecipeIds.push(recipe.id);
