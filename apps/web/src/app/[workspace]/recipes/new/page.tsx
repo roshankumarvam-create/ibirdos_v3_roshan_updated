@@ -266,7 +266,16 @@ export default function NewRecipePage() {
       if (!d) { setExtractBanner("No data returned from extraction."); return; }
 
       // Pre-fill only empty fields
-      if (d.name        && !name)           setName(d.name);
+      if (d.name && !name) {
+        setName(d.name);
+      } else if (!d.name && !name && extractFile) {
+        const stem = extractFile.name
+          .replace(/\.[^.]+$/, "")
+          .replace(/[-_]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (stem) setName(stem);
+      }
       if (d.authorName  && !authorName)     setAuthorName(d.authorName);
       if (d.category    && !category)       setCategory(d.category);
       if (d.description && !description)    setDescription(d.description);

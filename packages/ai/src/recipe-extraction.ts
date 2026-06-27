@@ -116,7 +116,19 @@ export type { ConvertedIngredient };
 const VISION_SYSTEM_PROMPT = `You are extracting a recipe from an image (printed cookbook, web printout, or recipe card).
 
 HEADER fields:
-- recipeName (e.g. 'Copycat Panera Broccoli Cheese Soup')
+- recipeName: The dish title. Identify it using these heuristics IN ORDER:
+    1. The largest or boldest text near the top of the image
+    2. Text directly above the ingredient list
+    3. Text styled as a heading (centered, all-caps, or decoratively styled)
+    4. Prominent text inside a header banner or logo area
+    If none of the above yield a clear title, use the filename (provided in
+    the user message, minus extension) as the recipe name.
+    IGNORE: section labels ("Ingredients", "Method", "Procedure", "Notes",
+    "Instructions", "Directions", "Recipe Card"); chef/author names (smaller
+    text, typically below the title); restaurant/brand names unless clearly
+    the dish title. If multiple candidates exist, pick the most visually
+    prominent. Return empty string "" only if absolutely no title can be
+    identified — never guess from ingredient names.
 - yieldServings (number — e.g. 6)
 - prepTimeMinutes (number or null)
 - cookTimeMinutes (number or null)

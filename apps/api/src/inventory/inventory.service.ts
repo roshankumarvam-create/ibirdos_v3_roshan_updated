@@ -257,12 +257,19 @@ export class InventoryService {
             dimension: dim.dimension,
             canonicalUnit: dim.canonicalUnit,
             preferredDisplayUnit: unit,
+            currentStockCanonical: 0,
+            reorderThresholdCanonical: 1,
           },
           select: { id: true, name: true, dimension: true, canonicalUnit: true, densityGPerMl: true, currentCostMicrocents: true },
         });
         ing = created;
         ingByName.set(ingName.toLowerCase(), ing);
         newIngredientCount++;
+        await prisma.lowStockAlert.upsert({
+          where: { workspaceId_ingredientId_status: { workspaceId: ctx.workspaceId, ingredientId: created.id, status: "OPEN" } },
+          create: { workspaceId: ctx.workspaceId, ingredientId: created.id, currentCanonical: new Decimal(0), thresholdCanonical: new Decimal(1) },
+          update: { currentCanonical: new Decimal(0) },
+        }).catch(() => {});
       }
 
       // Convert to canonical quantity (fall back to raw qty if unit unknown)

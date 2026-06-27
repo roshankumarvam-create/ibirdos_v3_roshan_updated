@@ -795,11 +795,18 @@ export class RecipesService {
               dimension: "MASS",
               canonicalUnit: "g",
               preferredDisplayUnit: unit,
+              currentStockCanonical: 0,
+              reorderThresholdCanonical: 1,
             },
           });
           ingredientId = created.id;
           ingByName.set(ingName.toLowerCase(), ingredientId);
           newIngredientCount++;
+          await prisma.lowStockAlert.upsert({
+            where: { workspaceId_ingredientId_status: { workspaceId: ctx.workspaceId, ingredientId, status: "OPEN" } },
+            create: { workspaceId: ctx.workspaceId, ingredientId, currentCanonical: new Decimal(0), thresholdCanonical: new Decimal(1) },
+            update: { currentCanonical: new Decimal(0) },
+          }).catch(() => {});
         }
         resolvedLines.push({ ingredientId, quantity: qty, unit, notes: notes || undefined, prepNote: notes || undefined, yieldPctOverride: line.percentUtilized ?? undefined, displayOrder: i });
       }
