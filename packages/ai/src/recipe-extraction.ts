@@ -323,6 +323,70 @@ export async function extractRecipeFromImage(params: {
   return { data, source: "vision", fieldsFound };
 }
 
+export async function extractRecipeFromImages(params: {
+  imageUrls: string[];
+  filename?: string;
+}): Promise<RecipeVisionResult> {
+  if (!env.OPENAI_API_KEY) {
+    log.warn("OPENAI_API_KEY not set — returning fixture");
+    return { data: fixtureVisionRecipe(), source: "fixture", fieldsFound: 0 };
+  }
+
+  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+
+  const response = await client.chat.completions.create({
+    model: env.OPENAI_VISION_MODEL,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: VISION_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Extract this recipe. Filename: ${params.filename ?? "unknown"}. The recipe spans ${params.imageUrls.length} page(s). Return JSON matching the schema described in the system prompt.`,
+          },
+          ...params.imageUrls.map((url) => ({
+            type: "image_url" as const,
+            image_url: { url, detail: "high" as const },
+          })),
+        ],
+      },
+    ],
+    max_tokens: 4096,
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned empty content");
+
+  const rawJson = JSON.parse(content);
+  const rawParsed = RecipeExtractionSchema.parse(rawJson);
+  const convertedIngredients = rawParsed.ingredients.map(convertIngredient);
+
+  const totalTimeMin = rawParsed.totalTimeMinutes
+    ?? (((rawParsed.prepTimeMinutes ?? 0) + (rawParsed.cookTimeMinutes ?? 0)) || null);
+
+  const data: VisionExtractedRecipe = {
+    recipeName: rawParsed.recipeName,
+    yieldServings: rawParsed.yieldServings,
+    prepTimeMinutes: rawParsed.prepTimeMinutes ?? null,
+    cookTimeMinutes: rawParsed.cookTimeMinutes ?? null,
+    totalTimeMinutes: totalTimeMin,
+    category: rawParsed.category ?? null,
+    description: rawParsed.description ?? null,
+    isPartial: rawParsed.isPartial,
+    procedureSteps: rawParsed.procedureSteps,
+    ingredients: convertedIngredients,
+  };
+
+  const fieldsFound = countVisionFields(data);
+  log.info(
+    { filename: params.filename, pages: params.imageUrls.length, fieldsFound, isPartial: data.isPartial },
+    "recipe extracted via vision (multi-page)",
+  );
+  return { data, source: "vision", fieldsFound };
+}
+
 // ---------------------------------------------------------------------
 // Row parser — exported so apps/api can call it after parsing xlsx/csv
 // into rows. Not called from this module directly.

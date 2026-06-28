@@ -8,11 +8,13 @@ import { prisma, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
 import {
   extractRecipeFromImage,
+  extractRecipeFromImages,
   parseRowsToRecipe,
   type RecipeVisionResult,
   type RecipeExtractResult,
   type ExtractedRecipe,
 } from "@ibirdos/ai";
+import { convertPdfToPngs } from "./pdf-converter";
 import { env } from "@ibirdos/config";
 import { CurrentCtx } from "../common/decorators/current-ctx.decorator";
 import { RequirePermission } from "../common/decorators/require-permission.decorator";
@@ -61,11 +63,33 @@ export class RecipesExtractController {
         visionResult = await extractRecipeFromImage({ imageUrl: dataUrl, filename: file.originalname });
 
       } else if (mime === "application/pdf" || ext === "pdf") {
-        throw new ServiceUnavailableException({
-          code: "service_unavailable",
-          message: "PDF extraction requires server-side conversion.",
-          hint: "Upload as JPEG/PNG screenshot, or export as Excel/CSV.",
-        });
+        if (!env.OPENAI_API_KEY) {
+          throw new ServiceUnavailableException({
+            code: "service_unavailable",
+            message: "Image extraction requires OPENAI_API_KEY. Excel and CSV imports still work.",
+            hint: "Set OPENAI_API_KEY in your environment, or upload an Excel/CSV file instead.",
+          });
+        }
+        let pngBuffers: Buffer[];
+        try {
+          pngBuffers = await convertPdfToPngs(buf);
+        } catch (pdfErr: any) {
+          const pdfMsg: string = pdfErr?.message ?? "PDF conversion failed";
+          if (/password|encrypted|protect/i.test(pdfMsg)) {
+            throw new BadRequestException({ code: "validation_failed", message: pdfMsg });
+          }
+          if (/max is \d|pages —/i.test(pdfMsg)) {
+            throw new BadRequestException({ code: "validation_failed", message: pdfMsg });
+          }
+          throw new BadRequestException({
+            code: "validation_failed",
+            message: "Could not read PDF. The file may be corrupted. Try a different file.",
+          });
+        }
+        const imageUrls = pngBuffers.map(
+          (pageBuf) => `data:image/png;base64,${pageBuf.toString("base64")}`,
+        );
+        visionResult = await extractRecipeFromImages({ imageUrls, filename: file.originalname });
 
       } else if (EXCEL_MIMES.has(mime) || ["xlsx","xls"].includes(ext)) {
         // Try deterministic parser first; fall back to legacy parseRowsToRecipe only if it produces nothing.
