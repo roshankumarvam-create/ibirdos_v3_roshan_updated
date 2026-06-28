@@ -1,6 +1,9 @@
 import { pdfToPng } from "pdf-to-png-converter";
+import { moduleLogger } from "@ibirdos/logger";
 
+const log = moduleLogger("pdf-converter");
 const MAX_PAGES = 5;
+const MIN_PNG_BYTES = 10_000; // 10 KB — a blank or failed render is far smaller
 
 export async function convertPdfToPngs(pdfBuffer: Buffer): Promise<Buffer[]> {
   // Step 1: get page count via metadata-only pass (no PNG rendering — fast).
@@ -27,13 +30,28 @@ export async function convertPdfToPngs(pdfBuffer: Buffer): Promise<Buffer[]> {
   }
 
   // Step 3: render all pages to PNG buffers (in memory, no disk writes).
+  // viewportScale 3.0 → ~216 DPI effective for text-heavy recipe tables.
+  // disableFontFace: false → use embedded fonts for accurate text rendering.
   const pages = await pdfToPng(pdfBuffer, {
-    viewportScale: 2.0,
-    disableFontFace: true,
+    viewportScale: 3.0,
+    disableFontFace: false,
     useSystemFonts: false,
   });
 
-  return pages
-    .map((p) => p.content)
-    .filter((c): c is Buffer => c != null);
+  const buffers: Buffer[] = [];
+  for (const page of pages) {
+    if (page.content == null) continue;
+    if (page.content.length < MIN_PNG_BYTES) {
+      throw new Error(
+        "PDF page rendered as a near-blank image. Try converting the PDF to PNG or JPG before uploading.",
+      );
+    }
+    log.info(
+      { pageNumber: page.pageNumber, bufferBytes: page.content.length, width: page.width, height: page.height },
+      "pdf page converted to png",
+    );
+    buffers.push(page.content);
+  }
+
+  return buffers;
 }
