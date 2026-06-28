@@ -13,6 +13,7 @@ import { moduleLogger } from "@ibirdos/logger";
 import { toCanonical } from "@ibirdos/types";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
+import { isHierarchicalCsv, convertHierarchicalToFlat } from "./hierarchical-csv-parser";
 
 const log = moduleLogger("InventoryService");
 
@@ -212,8 +213,14 @@ export class InventoryService {
     const ws = sheetName ? wb.Sheets[sheetName] : undefined;
     if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
 
-    const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+    let rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
     if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+
+    if (isHierarchicalCsv(rows)) {
+      log.info({ workspaceId: ctx.workspaceId }, "hierarchical CSV detected — pre-processing to flat format");
+      rows = convertHierarchicalToFlat(rows);
+      if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No item rows found in hierarchical CSV" });
+    }
 
     const col = (row: Record<string, unknown>, ...names: string[]): string => {
       for (const n of names) {
