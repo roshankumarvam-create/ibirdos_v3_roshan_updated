@@ -32,6 +32,8 @@ const s3 = new S3Client({
     secretAccessKey: env.R2_SECRET_ACCESS_KEY ?? "dev",
   },
   forcePathStyle: true, // required for MinIO
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
 });
 
 const log = moduleLogger("invoice-extraction.worker");
