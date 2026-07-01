@@ -109,7 +109,7 @@ export default function SignupPage() {
               }
               required
               placeholder="your-cafe"
-              pattern="^[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])$"
+              pattern="^[a-z0-9]+(-[a-z0-9]+)*$"
               className={input}
             />
           </Field>
