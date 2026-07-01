@@ -649,13 +649,14 @@ export class InvoicesService {
     }> = [];
 
     for (const row of rows) {
-      const desc = col(row, "description", "product description", "product name", "item name", "item", "product", "ingredient", "name");
+      const desc = col(row, "item description", "description", "product description", "product name", "item name", "item", "product", "ingredient name", "ingredient", "name");
       if (!desc) continue;
 
       const vendorItemCode = col(row, "item code", "sku", "vendor code", "code", "item #", "item#") || null;
-      const qty = parseFloat(col(row, "quantity", "qty", "count") || "1") || 1;
+      const qtyRaw = col(row, "quantity", "qty", "cases", "case quantity", "amount", "count");
+      const qty = qtyRaw.trim() === "" ? 1 : (parseFloat(qtyRaw.replace(/[^0-9.\-]/g, "")) || 0);
       const unit = col(row, "unit", "uom", "unit of measure") || "each";
-      const unitPrice = parseDollars(col(row, "unit price", "unit cost", "price", "unit_price"));
+      const unitPrice = parseDollars(col(row, "unit price", "unit cost", "price", "rate", "each price", "cost per unit", "unit_price"));
       const extPrice = parseDollars(col(row, "line total", "total", "extended price", "amount", "ext price", "extended_price"))
         || Math.round(unitPrice * qty);
 
