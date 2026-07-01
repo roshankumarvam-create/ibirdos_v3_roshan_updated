@@ -213,7 +213,35 @@ export class InventoryService {
     const ws = sheetName ? wb.Sheets[sheetName] : undefined;
     if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
 
-    let rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+    // Pass 1 — parse as raw array-of-arrays; no header assumed
+    const rawRows = xlsx.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
+    if (!rawRows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+
+    // Pass 2 — find header row (first of the first 10 rows that contains "Ingredient Name" or "Row Labels")
+    const HEADER_SIGNALS = /^(row labels?|ingredient name)$/i;
+    const headerIdx = rawRows.slice(0, 10).findIndex((row) =>
+      (row as unknown[]).some((cell) => HEADER_SIGNALS.test(String(cell ?? "").trim())),
+    );
+    if (headerIdx === -1) {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: "Could not find a header row. Expected a row containing 'Ingredient Name' or 'Row Labels'.",
+        hint: "Make sure your spreadsheet has a header row with column names like 'Ingredient Name', 'Quantity', 'Unit'.",
+      });
+    }
+
+    // Pass 3 — re-key data rows using the header row as column names
+    const headerCells = rawRows[headerIdx] as unknown[];
+    let rows: Record<string, unknown>[] = (rawRows.slice(headerIdx + 1) as unknown[][])
+      .map((arr) => {
+        const obj: Record<string, unknown> = {};
+        for (let i = 0; i < headerCells.length; i++) {
+          const key = String(headerCells[i] ?? "").trim();
+          if (key) obj[key] = arr[i] ?? "";
+        }
+        return obj;
+      })
+      .filter((obj) => Object.values(obj).some((v) => String(v).trim() !== ""));
     if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
 
     if (isHierarchicalCsv(rows)) {
