@@ -1,3 +1,4 @@
+// cachebust: force ibirdos_workers rebuild 2026-07-01
 // =====================================================================
 // apps/api/src/workers/invoice-extraction.worker.ts
 // =====================================================================
