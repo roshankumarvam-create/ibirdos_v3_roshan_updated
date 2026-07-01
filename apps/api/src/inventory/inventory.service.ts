@@ -149,7 +149,7 @@ export class InventoryService {
   }
 
   async listLowStockAlerts(ctx: TenantContext, status: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" = "OPEN"): Promise<any> {
-    return prisma.lowStockAlert.findMany({
+    const alerts = await prisma.lowStockAlert.findMany({
       where: { workspaceId: ctx.workspaceId, status },
       include: {
         ingredient: {
@@ -157,11 +157,28 @@ export class InventoryService {
             id: true, name: true,
             canonicalUnit: true, preferredDisplayUnit: true,
             purchaseUnit: true, reorderQty: true,
+            currentStockCanonical: true,
+            reorderThresholdCanonical: true,
           },
         },
       },
       orderBy: { detectedAt: "desc" },
     });
+
+    // Filter by live ingredient stock instead of the stale alert-row snapshot
+    // written at import time. Mirrors checkLowStock: resolves when gte threshold,
+    // so "low" is strictly-less-than. No threshold → not low → excluded.
+    return alerts
+      .filter((a) => {
+        const threshold = a.ingredient.reorderThresholdCanonical;
+        if (threshold == null) return false;
+        return new Decimal(a.ingredient.currentStockCanonical).lt(new Decimal(threshold));
+      })
+      .map((a) => ({
+        ...a,
+        currentCanonical:   a.ingredient.currentStockCanonical,
+        thresholdCanonical: a.ingredient.reorderThresholdCanonical!,
+      }));
   }
 
   async reverseTransaction(ctx: TenantContext, transactionId: string): Promise<any> {
