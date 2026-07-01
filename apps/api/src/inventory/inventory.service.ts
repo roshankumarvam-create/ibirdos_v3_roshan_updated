@@ -218,7 +218,7 @@ export class InventoryService {
     if (!rawRows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
 
     // Pass 2 — find header row (first of the first 10 rows that contains "Ingredient Name" or "Row Labels")
-    const HEADER_SIGNALS = /^(row labels?|ingredient name)$/i;
+    const HEADER_SIGNALS = /^(row labels?|ingredient name|item description|product description|description|product name|item name|item)$/i;
     const headerIdx = rawRows.slice(0, 10).findIndex((row) =>
       (row as unknown[]).some((cell) => HEADER_SIGNALS.test(String(cell ?? "").trim())),
     );
@@ -270,14 +270,14 @@ export class InventoryService {
     const recostedIngIds = new Set<string>();
 
     for (const row of rows) {
-      const ingName = col(row, "description", "product description", "product name", "item name", "ingredient name", "ingredient", "name", "item");
+      const ingName = col(row, "description", "product description", "item description", "product name", "item name", "ingredient name", "ingredient", "name", "item");
       if (!ingName) continue;
       const vendorCode = col(row, "item code", "sku", "vendor code", "code", "item #", "item#", "product code") || null;
       const qty = parseFloat(col(row, "quantity", "qty", "amount", "count")) || 0;
       if (qty <= 0) continue;
-      const unit = col(row, "unit", "uom") || "each";
-      const notes = col(row, "notes", "note") || undefined;
-      const unitCostStr = col(row, "unit cost", "cost per unit", "cost", "price");
+      const unit = col(row, "unit", "uom", "u/m", "unit of measure") || "each";
+      const notes = col(row, "notes", "note", "inventory locations", "dc category") || undefined;
+      const unitCostStr = col(row, "unit cost", "cost per unit", "unit price", "rate", "each price", "cost", "price");
       const unitCostDollars = unitCostStr ? parseFloat(unitCostStr.replace(/[^0-9.]/g, "")) : NaN;
 
       let ing = ingByName.get(ingName.toLowerCase());

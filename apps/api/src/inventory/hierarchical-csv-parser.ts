@@ -2,6 +2,10 @@ import { moduleLogger } from "@ibirdos/logger";
 
 const log = moduleLogger("hierarchical-csv-parser");
 
+// Signals that a column is a per-item description column, meaning this is a
+// flat/detail table — not a pivot with standalone category subtotal rows.
+const ITEM_COL_SIGNALS = /^(item description|ingredient name|product description|product name|item name|description|name|item)$/i;
+
 /**
  * Returns true when xlsx-parsed rows represent an Excel pivot-table export
  * with "Classifications > Locations > ..." hierarchy rows.
@@ -13,6 +17,9 @@ export function isHierarchicalCsv(rows: Record<string, unknown>[]): boolean {
   const keys = Object.keys(first);
   // Primary signal: a header key is exactly "Row Labels" or "Row Label"
   if (keys.some((k) => /^Row Labels?$/i.test(k.trim()))) return true;
+  // Guard: if any column is a named item-description column, this is a per-item
+  // flat/detail table (e.g. Sysco detail report). The flat col() path handles it.
+  if (keys.some((k) => ITEM_COL_SIGNALS.test(k.trim()))) return false;
   // Fallback: any row's first value starts with "Classifications >"
   return rows.some((r) => {
     const v = String(Object.values(r)[0] ?? "").trim();
