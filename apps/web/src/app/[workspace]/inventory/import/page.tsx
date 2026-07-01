@@ -103,15 +103,15 @@ export default function InventoryImportPage() {
         </CardHeader>
         <CardBody className="space-y-4">
           <div>
-            <Label htmlFor="inv-csv">Excel or CSV file *</Label>
+            <Label htmlFor="inv-csv">Excel, CSV, or PDF file *</Label>
             <input
               id="inv-csv"
               type="file"
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.xls,.csv,.pdf"
               onChange={(e) => { setFile(e.target.files?.[0] ?? null); setError(null); setResult(null); }}
               className="mt-1 block w-full text-sm text-text-secondary file:mr-3 file:text-xs file:rounded file:border file:border-bg-border file:bg-bg-elevated file:px-3 file:py-1.5 file:text-text-primary hover:file:bg-bg-hover"
             />
-            <p className="mt-1 text-xs text-text-tertiary">Supported: .xlsx, .xls, .csv</p>
+            <p className="mt-1 text-xs text-text-tertiary">Supported: .xlsx, .xls, .csv, .pdf</p>
           </div>
 
           {file && (

@@ -14,6 +14,8 @@ import { toCanonical } from "@ibirdos/types";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { isHierarchicalCsv, convertHierarchicalToFlat } from "./hierarchical-csv-parser";
+import { convertPdfToPngs } from "../recipes/pdf-converter";
+import { extractInventoryFromImages } from "@ibirdos/ai";
 
 const log = moduleLogger("InventoryService");
 
@@ -216,55 +218,91 @@ export class InventoryService {
     input: { filename: string; contentBase64: string },
   ) {
     const buf = Buffer.from(input.contentBase64, "base64");
-    let wb: xlsx.WorkBook;
-    try {
-      wb = xlsx.read(buf, { type: "buffer", cellDates: true });
-    } catch (xlsxErr: any) {
-      throw new BadRequestException({
-        code: "validation_failed",
-        message: `Could not parse file: ${xlsxErr?.message ?? "unknown error"}`,
-        hint: "Make sure the file is a valid .xlsx, .xls, or .csv and is not password-protected.",
-      });
-    }
-    const sheetName = wb.SheetNames[0];
-    const ws = sheetName ? wb.Sheets[sheetName] : undefined;
-    if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
 
-    // Pass 1 — parse as raw array-of-arrays; no header assumed
-    const rawRows = xlsx.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
-    if (!rawRows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+    // Detect PDF by filename extension or magic bytes (%PDF = 0x25504446)
+    const isPdf = input.filename.toLowerCase().endsWith(".pdf") ||
+      buf.slice(0, 4).toString("ascii") === "%PDF";
 
-    // Pass 2 — find header row (first of the first 10 rows that contains "Ingredient Name" or "Row Labels")
-    const HEADER_SIGNALS = /^(row labels?|ingredient name|item description|product description|description|product name|item name|item)$/i;
-    const headerIdx = rawRows.slice(0, 10).findIndex((row) =>
-      (row as unknown[]).some((cell) => HEADER_SIGNALS.test(String(cell ?? "").trim())),
-    );
-    if (headerIdx === -1) {
-      throw new BadRequestException({
-        code: "validation_failed",
-        message: "Could not find a header row. Expected a row containing 'Ingredient Name' or 'Row Labels'.",
-        hint: "Make sure your spreadsheet has a header row with column names like 'Ingredient Name', 'Quantity', 'Unit'.",
-      });
-    }
+    let rows: Record<string, unknown>[];
 
-    // Pass 3 — re-key data rows using the header row as column names
-    const headerCells = rawRows[headerIdx] as unknown[];
-    let rows: Record<string, unknown>[] = (rawRows.slice(headerIdx + 1) as unknown[][])
-      .map((arr) => {
-        const obj: Record<string, unknown> = {};
-        for (let i = 0; i < headerCells.length; i++) {
-          const key = String(headerCells[i] ?? "").trim();
-          if (key) obj[key] = arr[i] ?? "";
-        }
-        return obj;
-      })
-      .filter((obj) => Object.values(obj).some((v) => String(v).trim() !== ""));
-    if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+    if (isPdf) {
+      let pngBuffers: Buffer[];
+      try {
+        pngBuffers = await convertPdfToPngs(buf);
+      } catch (err: any) {
+        throw new BadRequestException({
+          code: "validation_failed",
+          message: err?.message ?? "Could not convert PDF to images.",
+          hint: "Make sure the PDF is not password-protected and is under 5 pages.",
+        });
+      }
+      const imageUrls = pngBuffers.map((b) => `data:image/png;base64,${b.toString("base64")}`);
+      const items = await extractInventoryFromImages({ imageUrls, filename: input.filename });
+      if (!items.length) {
+        throw new BadRequestException({
+          code: "validation_failed",
+          message: "No items could be extracted from the PDF.",
+          hint: "Check that the PDF contains a readable inventory list with product names and quantities.",
+        });
+      }
+      rows = items.map((i) => ({
+        "Ingredient Name": i.name,
+        "Quantity":        i.quantity,
+        "Unit":            i.unit,
+        "Unit Cost":       i.unitCost != null ? String(i.unitCost) : "",
+        "Notes":           i.notes ?? "",
+      }));
+    } else {
+      let wb: xlsx.WorkBook;
+      try {
+        wb = xlsx.read(buf, { type: "buffer", cellDates: true });
+      } catch (xlsxErr: any) {
+        throw new BadRequestException({
+          code: "validation_failed",
+          message: `Could not parse file: ${xlsxErr?.message ?? "unknown error"}`,
+          hint: "Make sure the file is a valid .xlsx, .xls, or .csv and is not password-protected.",
+        });
+      }
+      const sheetName = wb.SheetNames[0];
+      const ws = sheetName ? wb.Sheets[sheetName] : undefined;
+      if (!ws) throw new BadRequestException({ code: "validation_failed", message: "Spreadsheet is empty" });
 
-    if (isHierarchicalCsv(rows)) {
-      log.info({ workspaceId: ctx.workspaceId }, "hierarchical CSV detected — pre-processing to flat format");
-      rows = convertHierarchicalToFlat(rows);
-      if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No item rows found in hierarchical CSV" });
+      // Pass 1 — parse as raw array-of-arrays; no header assumed
+      const rawRows = xlsx.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
+      if (!rawRows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+
+      // Pass 2 — find header row (first of the first 10 rows that contains "Ingredient Name" or "Row Labels")
+      const HEADER_SIGNALS = /^(row labels?|ingredient name|item description|product description|description|product name|item name|item)$/i;
+      const headerIdx = rawRows.slice(0, 10).findIndex((row) =>
+        (row as unknown[]).some((cell) => HEADER_SIGNALS.test(String(cell ?? "").trim())),
+      );
+      if (headerIdx === -1) {
+        throw new BadRequestException({
+          code: "validation_failed",
+          message: "Could not find a header row. Expected a row containing 'Ingredient Name' or 'Row Labels'.",
+          hint: "Make sure your spreadsheet has a header row with column names like 'Ingredient Name', 'Quantity', 'Unit'.",
+        });
+      }
+
+      // Pass 3 — re-key data rows using the header row as column names
+      const headerCells = rawRows[headerIdx] as unknown[];
+      rows = (rawRows.slice(headerIdx + 1) as unknown[][])
+        .map((arr) => {
+          const obj: Record<string, unknown> = {};
+          for (let i = 0; i < headerCells.length; i++) {
+            const key = String(headerCells[i] ?? "").trim();
+            if (key) obj[key] = arr[i] ?? "";
+          }
+          return obj;
+        })
+        .filter((obj) => Object.values(obj).some((v) => String(v).trim() !== ""));
+      if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No data rows found" });
+
+      if (isHierarchicalCsv(rows)) {
+        log.info({ workspaceId: ctx.workspaceId }, "hierarchical CSV detected — pre-processing to flat format");
+        rows = convertHierarchicalToFlat(rows);
+        if (!rows.length) throw new BadRequestException({ code: "validation_failed", message: "No item rows found in hierarchical CSV" });
+      }
     }
 
     const col = (row: Record<string, unknown>, ...names: string[]): string => {
