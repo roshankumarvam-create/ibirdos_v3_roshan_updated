@@ -5,7 +5,7 @@ const log = moduleLogger("pdf-converter");
 const MAX_PAGES = 5;
 const MIN_PNG_BYTES = 10_000; // 10 KB — a blank or failed render is far smaller
 
-export async function convertPdfToPngs(pdfBuffer: Buffer): Promise<Buffer[]> {
+export async function convertPdfToPngs(pdfBuffer: Buffer, maxPages = MAX_PAGES): Promise<Buffer[]> {
   // Step 1: get page count via metadata-only pass (no PNG rendering — fast).
   // Also detects encrypted PDFs (pdfjs throws PasswordException here) and corrupt files.
   let pageCount: number;
@@ -23,9 +23,9 @@ export async function convertPdfToPngs(pdfBuffer: Buffer): Promise<Buffer[]> {
   }
 
   // Step 2: enforce page cap BEFORE any rendering.
-  if (pageCount > MAX_PAGES) {
+  if (pageCount > maxPages) {
     throw new Error(
-      `PDF has ${pageCount} pages — max is ${MAX_PAGES}. Upload a shorter recipe.`,
+      `PDF has ${pageCount} pages — max is ${maxPages}. Upload a shorter recipe.`,
     );
   }
 

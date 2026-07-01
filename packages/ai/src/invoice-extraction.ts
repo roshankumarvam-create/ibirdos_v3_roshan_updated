@@ -60,7 +60,24 @@ export const ExtractedInvoiceSchema = z.object({
   groupTotals:        z.record(z.string(), z.number()).nullish().transform(v => v ?? {}),
   reconciliationNote: z.string().nullish(),
   needsReview:        z.boolean().nullish().transform(v => v ?? false),
-  lines:              z.array(InvoiceLineSchema).nullish().transform(v => v ?? []),
+  lines: z
+    .array(z.unknown())
+    .nullish()
+    .transform((items) => {
+      const result: z.infer<typeof InvoiceLineSchema>[] = [];
+      for (const item of items ?? []) {
+        const r = InvoiceLineSchema.safeParse(item);
+        if (r.success) {
+          result.push(r.data);
+        } else {
+          log.warn(
+            { err: r.error.issues[0]?.message, item },
+            "skipping malformed invoice line",
+          );
+        }
+      }
+      return result;
+    }),
 });
 
 export type ExtractedInvoice = z.infer<typeof ExtractedInvoiceSchema> & {
@@ -203,12 +220,18 @@ Return JSON. Use null (not undefined, not omitted) for missing fields. Example s
 // ---------------------------------------------------------------------
 
 export interface ExtractParams {
-  /** Raw file bytes fetched from storage */
-  buffer: Buffer;
-  /** MIME type of the file (e.g. "image/jpeg", "application/pdf") */
-  mimeType: string;
+  /** Raw file bytes fetched from storage. Required unless imageDataUrls is provided. */
+  buffer?: Buffer;
+  /** MIME type of the file. Required unless imageDataUrls is provided. */
+  mimeType?: string;
   /** Original filename for AI context */
   filename?: string;
+  /**
+   * Pre-converted image data URLs (one per page). When provided, buffer/mimeType
+   * are ignored and these are sent directly as image_url blocks — used for PDFs
+   * converted to PNGs by the worker before calling extractInvoice.
+   */
+  imageDataUrls?: string[];
 }
 
 export interface ExtractResult {
@@ -227,17 +250,36 @@ export async function extractInvoice(params: ExtractParams): Promise<ExtractResu
     return fixtureResult();
   }
 
-  if (params.buffer.length > MAX_BYTES) {
+  if (params.buffer && params.buffer.length > MAX_BYTES) {
     throw new Error(
       `Image too large for OpenAI Vision: ${(params.buffer.length / 1024 / 1024).toFixed(1)} MB (max 20 MB)`,
     );
   }
 
-  const b64 = params.buffer.toString("base64");
-  const dataUrl = `data:${params.mimeType};base64,${b64}`;
+  // Build image content blocks: N blocks for pre-converted PDF pages, 1 block for raw image.
+  const imageBlocks: Array<{ type: "image_url"; image_url: { url: string; detail: "high" } }> =
+    params.imageDataUrls?.length
+      ? params.imageDataUrls.map((url) => ({
+          type: "image_url" as const,
+          image_url: { url, detail: "high" as const },
+        }))
+      : [
+          {
+            type: "image_url" as const,
+            image_url: {
+              url: `data:${params.mimeType};base64,${params.buffer!.toString("base64")}`,
+              detail: "high" as const,
+            },
+          },
+        ];
 
   log.info(
-    { model: env.OPENAI_VISION_MODEL, bytes: params.buffer.length, mimeType: params.mimeType },
+    {
+      model: env.OPENAI_VISION_MODEL,
+      pages: imageBlocks.length,
+      bytes: params.buffer?.length,
+      mimeType: params.mimeType,
+    },
     "Calling OpenAI Vision",
   );
 
@@ -245,7 +287,6 @@ export async function extractInvoice(params: ExtractParams): Promise<ExtractResu
   const t0 = Date.now();
 
   const model = env.OPENAI_VISION_MODEL;
-  const max_tokens = 4096;
   const messages: any[] = [
     { role: "system", content: SYSTEM_PROMPT },
     {
@@ -253,9 +294,9 @@ export async function extractInvoice(params: ExtractParams): Promise<ExtractResu
       content: [
         {
           type: "text",
-          text: `${USER_PROMPT}\n\nFilename: ${params.filename ?? "unknown"}`,
+          text: `${USER_PROMPT}\n\nFilename: ${params.filename ?? "unknown"}${imageBlocks.length > 1 ? ` (${imageBlocks.length} pages)` : ""}`,
         },
-        { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
+        ...imageBlocks,
       ],
     },
   ];
@@ -264,7 +305,7 @@ export async function extractInvoice(params: ExtractParams): Promise<ExtractResu
     model,
     response_format: { type: "json_object" },
     messages,
-    max_tokens,
+    max_completion_tokens: 16384,
   });
 
   const tokensInput = response.usage?.prompt_tokens ?? 0;

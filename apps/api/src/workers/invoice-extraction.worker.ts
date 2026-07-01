@@ -21,6 +21,7 @@ import { env } from "@ibirdos/config";
 import { prisma, writeAudit } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
 import { extractInvoice } from "@ibirdos/ai";
+import { convertPdfToPngs } from "../recipes/pdf-converter";
 
 import { INVOICE_EXTRACTION_QUEUE } from "../invoices/invoices.service";
 
@@ -76,7 +77,24 @@ const worker = new Worker<JobData>(
         `Reading file from storage: ${uploadKey} (${buffer.length} bytes, ${uploadMimeType})`,
       );
 
-      const result = await extractInvoice({ buffer, mimeType: uploadMimeType, filename: uploadKey });
+      // Detect PDF by MIME type, filename extension, or magic bytes (%PDF header).
+      const isPdf =
+        uploadMimeType === "application/pdf" ||
+        uploadKey.toLowerCase().endsWith(".pdf") ||
+        buffer.slice(0, 4).toString("ascii") === "%PDF";
+
+      let imageDataUrls: string[] | undefined;
+      if (isPdf) {
+        log.info({ key: uploadKey }, "PDF detected — converting to PNG pages");
+        const pngs = await convertPdfToPngs(buffer, 25);
+        imageDataUrls = pngs.map((b) => `data:image/png;base64,${b.toString("base64")}`);
+        log.info({ pages: imageDataUrls.length }, "PDF converted to PNG pages");
+      }
+
+      const result = await extractInvoice({
+        ...(imageDataUrls ? { imageDataUrls } : { buffer, mimeType: uploadMimeType }),
+        filename: uploadKey,
+      });
 
       // Resolve vendor by name BEFORE line matching (vendorId needed for SKU lookup)
       let vendorId: string | null = null;
