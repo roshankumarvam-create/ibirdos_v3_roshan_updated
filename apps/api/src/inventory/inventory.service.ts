@@ -14,8 +14,6 @@ import { toCanonical } from "@ibirdos/types";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { isHierarchicalCsv, convertHierarchicalToFlat } from "./hierarchical-csv-parser";
-import { convertPdfToPngs } from "../recipes/pdf-converter";
-import { extractInventoryFromImages } from "@ibirdos/ai";
 
 const log = moduleLogger("InventoryService");
 
@@ -226,32 +224,11 @@ export class InventoryService {
     let rows: Record<string, unknown>[];
 
     if (isPdf) {
-      let pngBuffers: Buffer[];
-      try {
-        pngBuffers = await convertPdfToPngs(buf);
-      } catch (err: any) {
-        throw new BadRequestException({
-          code: "validation_failed",
-          message: err?.message ?? "Could not convert PDF to images.",
-          hint: "Make sure the PDF is not password-protected and is under 5 pages.",
-        });
-      }
-      const imageUrls = pngBuffers.map((b) => `data:image/png;base64,${b.toString("base64")}`);
-      const items = await extractInventoryFromImages({ imageUrls, filename: input.filename });
-      if (!items.length) {
-        throw new BadRequestException({
-          code: "validation_failed",
-          message: "No items could be extracted from the PDF.",
-          hint: "Check that the PDF contains a readable inventory list with product names and quantities.",
-        });
-      }
-      rows = items.map((i) => ({
-        "Ingredient Name": i.name,
-        "Quantity":        i.quantity,
-        "Unit":            i.unit,
-        "Unit Cost":       i.unitCost != null ? String(i.unitCost) : "",
-        "Notes":           i.notes ?? "",
-      }));
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: "PDF import isn't supported for inventory. Please upload an Excel (.xlsx) or CSV file.",
+        hint: "Export your inventory as Excel or CSV and upload that instead.",
+      });
     } else {
       let wb: xlsx.WorkBook;
       try {
