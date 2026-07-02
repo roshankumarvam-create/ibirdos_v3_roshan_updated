@@ -21,8 +21,8 @@ import { Readable } from "stream";
 import { env } from "@ibirdos/config";
 import { prisma, writeAudit } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
-import { extractInvoice } from "@ibirdos/ai";
-import { convertPdfToPngs } from "../recipes/pdf-converter";
+import { extractInvoice, type ExtractResult } from "@ibirdos/ai";
+import pdfParse from "pdf-parse";
 
 import { INVOICE_EXTRACTION_QUEUE } from "../invoices/invoices.service";
 
@@ -84,18 +84,21 @@ const worker = new Worker<JobData>(
         uploadKey.toLowerCase().endsWith(".pdf") ||
         buffer.slice(0, 4).toString("ascii") === "%PDF";
 
-      let imageDataUrls: string[] | undefined;
+      let result!: ExtractResult;
       if (isPdf) {
-        log.info({ key: uploadKey }, "PDF detected — converting to PNG pages");
-        const pngs = await convertPdfToPngs(buffer, 25);
-        imageDataUrls = pngs.map((b) => `data:image/png;base64,${b.toString("base64")}`);
-        log.info({ pages: imageDataUrls.length }, "PDF converted to PNG pages");
+        log.info({ key: uploadKey }, "PDF detected — extracting text layer");
+        const parsed = await pdfParse(buffer);
+        const pdfText = parsed.text ?? "";
+        log.info({ pages: parsed.numpages, textLen: pdfText.length }, "PDF text extracted");
+        if (pdfText.trim().length < 50) {
+          throw new Error(
+            "PDF has no readable text layer. Please upload the invoice as an image (PNG/JPG) instead.",
+          );
+        }
+        result = await extractInvoice({ pdfText, filename: uploadKey });
+      } else {
+        result = await extractInvoice({ buffer, mimeType: uploadMimeType, filename: uploadKey });
       }
-
-      const result = await extractInvoice({
-        ...(imageDataUrls ? { imageDataUrls } : { buffer, mimeType: uploadMimeType }),
-        filename: uploadKey,
-      });
 
       // Resolve vendor by name BEFORE line matching (vendorId needed for SKU lookup)
       let vendorId: string | null = null;

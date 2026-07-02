@@ -216,22 +216,133 @@ Return JSON. Use null (not undefined, not omitted) for missing fields. Example s
 }`;
 
 // ---------------------------------------------------------------------
+// Prompt — PDF text-layer extraction (Sysco / Compass / US Foods)
+// ---------------------------------------------------------------------
+
+const PDF_TEXT_PROMPT =
+`You are given the RAW TEXT extracted from a food-distributor invoice PDF (Sysco / Compass / US Foods). PDF text extraction scrambles layout: fields for one line item are spread across multiple lines and may be interleaved. Reconstruct every line item using the rules below.
+
+HEADER fields (extract once per invoice):
+- vendorName: distributor name (e.g. "Sysco Corporation", "Compass Group USA")
+- vendorAddress: full street address, city, state, zip if present; else null
+- invoiceNumber: near "Invoice #", "Doc #", "Order #"
+- invoiceDate: use the INVOICED date, ISO YYYY-MM-DD (not the ordered/ship date)
+- dueDate: ISO YYYY-MM-DD from "PAYABLE ON OR BEFORE" / "Due Date" / terms like "Net 30"; else null
+- poNumber: PO# if present, else null
+- subtotalCents, taxCents, totalCents: integer cents; 0 if absent or not on this page
+- isPartial: true if text contains "CONT. ON PAGE", "CONTINUED", or no invoice total is present
+- groupTotals: object mapping category name → integer cents for each printed GROUP TOTAL row (e.g. {"DAIRY": 24026}); empty object if none
+
+LINE ITEMS — each item is a multi-line BLOCK. Extract one object per product/charge:
+
+vendorItemCode — the Dist # / item code: a 6–8 digit number that may be split across two lines (e.g. "7967" on one line, "946" on the next → join to "7967946"). Do NOT use GTIN/barcode numbers. Return null if unclear.
+gtin — barcode/UPC/GTIN if separately printed near a barcode symbol (12–14 digit number); null otherwise.
+descriptionRaw — clean product name (e.g. "HHI PASTA PENNE RIGATE"). Do NOT confabulate or expand abbreviations unless 100% certain.
+size — Pack Type text exactly as printed (e.g. "2/10 LB", "4/1 GAL", "12/42OZ"). Preserve exactly.
+storageClass — "C" cooler/chilled, "D" dry/grocery, "F" frozen; null if unclear.
+category — the section header above this item, propagated until the next header (e.g. "Grocery/Storeroom", "Dairy/Milk", "Meat/Poultry", "Cleaning Supplies", "MEATS", "PRODUCE", "FROZEN", "MISC CHARGES").
+lineType — "inventory" for products going into stock; "misc_charge" for fuel surcharge, delivery fee, service charge, environmental fee, or similar.
+lineStatus — "out_of_stock" if the quantity field shows "OUT"; else "in_stock".
+needsReview — true if uncertain about ANY field on this line; else false.
+
+ORDERED vs INVOICED — CRITICAL: each block shows Quantity / Price / Total TWICE: an ORDERED set and an INVOICED set. ALWAYS extract the INVOICED values (the actual billed amounts). When the two differ (e.g. ordered $30.11, invoiced $29.10), use the INVOICED value ($29.10).
+
+QUANTITY / UNIT / PRICE — always return the INVOICED (billed) values only.
+unit_price and line_total MUST be a single plain decimal number (e.g. 29.10).
+NO "$", NO commas, NO ranges, NO lists, NO slash-separated pairs.
+
+- Simple case: "Quantity: 1 CA  Price: $25.25  Total: $25.25"
+  → quantity=1, unit="CS" (CA = case = CS), unit_price=25.25, line_total=25.25.
+
+- Split pack: "Quantity: 0 CS, 2 EA  Price: $54.58 , $13.64  Total: $27.28"
+  → 0 full cases + 2 eaches were billed. Return the EA (invoiced) figures only:
+     quantity=2, unit="EA", unit_price=13.64, line_total=27.28.
+     Ignore the CS quantity (0) and CS price ($54.58).
+     unit_price must be 13.64 — NOT "54.58,13.64", NOT "13.64/54.58", NOT a list.
+
+- Catch-weight LB: "Quantity: 1 LB (55 LB)  Price: $6.70  Total: $368.50"
+  → Billed by weight. quantity=55 (the invoiced weight), unit="LB",
+     unit_price=6.70 (per lb), line_total=368.50.
+
+- Trailing "S" suffix (e.g. "2S") → unit="SP" (split case).
+- "OUT" or "OUT OF STOCK" → quantity=0, lineStatus="out_of_stock". Exclude from totals.
+
+PRICES: return as plain decimal dollars (e.g. 29.10, 368.50). Strip "$" and commas.
+Trust the printed total over arithmetic. If quantity × unit_price differs from printed
+line_total by more than $0.01 (or $0.05 for catch-weight), set needsReview=true.
+
+MISC CHARGES (fuel surcharge, delivery fee, service charge, environmental fee, etc.):
+- lineType="misc_charge"; vendorItemCode=null; gtin=null; storageClass=null; size=null
+- descriptionRaw = the charge name (e.g. "Fuel Surcharge")
+- unitPriceCents = extendedPriceCents; quantity=1; unit="EA"
+
+IGNORE — never emit these as line items:
+- Page headers/footers: "Property Of Compass Group USA", "Page X of 3", "Printed By …"
+- General Information block, Bill To / Ship To sections
+- Any row containing "GROUP TOTAL", "SUBTOTAL", "SUB TOTAL", "PAGE TOTAL", "Total Tax", "Total Cost", "INVOICE TOTAL", "ORDER SUMMARY", "TOTAL DUE"
+- Bare category header lines (no price or quantity on them)
+
+SELF-CHECK before returning:
+1. For each category with a printed GROUP TOTAL, sum extendedPriceCents of in_stock lines in that category. If off by more than $0.01, set needsReview=true on the affected lines and add a reconciliationNote.
+2. If a printed INVOICE TOTAL exists on this page (isPartial=false, totalCents>0), compare sum of in_stock lines to it. If off by more than $0.01, set needsReview=true and add a reconciliationNote.
+3. Re-read any low-confidence digits before giving up.
+
+Return STRICT JSON only — no markdown fences, no commentary. Use null (not undefined, not omitted) for every missing field. Extract EVERY line item across ALL pages.`;
+
+// ---------------------------------------------------------------------
+// normalizeLine — maps model's human-friendly keys + dollar amounts to
+// the strict InvoiceLineSchema shape (camelCase keys, integer cents).
+// Applied only in the pdfText branch before safeParse; image path unchanged.
+// ---------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeLine(raw: any): Record<string, unknown> {
+  const toCents = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    if (typeof v === "number") return Math.round(v * 100);
+    const n = parseFloat(String(v).replace(/[$,\s]/g, ""));
+    return Number.isFinite(n) ? Math.round(n * 100) : null;
+  };
+  const toNum = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = parseFloat(String(v).replace(/[^0-9.-]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    descriptionRaw:
+      raw.descriptionRaw ?? raw.description ?? raw.item_description ??
+      raw.product_name ?? raw.name ?? "",
+    vendorItemCode:
+      (String(raw.vendorItemCode ?? raw.item_code ?? raw.dist_number ?? raw.distNumber ?? "") || null),
+    quantity: toNum(raw.quantity ?? raw.qty),
+    unit: raw.unit ?? raw.uom ?? null,
+    size: raw.size ?? raw.pack_size ?? raw.packType ?? raw.pack ?? null,
+    unitPriceCents: toCents(raw.unitPriceCents ?? raw.unit_price ?? raw.price),
+    extendedPriceCents: toCents(
+      raw.extendedPriceCents ?? raw.line_total ?? raw.total ?? raw.extended
+    ),
+    category: raw.category ?? null,
+    storageClass: null,
+    lineType: null,
+    lineStatus: null,
+  };
+}
+
+// ---------------------------------------------------------------------
 // Extraction entrypoint
 // ---------------------------------------------------------------------
 
 export interface ExtractParams {
-  /** Raw file bytes fetched from storage. Required unless imageDataUrls is provided. */
+  /** Raw file bytes fetched from storage. Used for direct image uploads. */
   buffer?: Buffer;
-  /** MIME type of the file. Required unless imageDataUrls is provided. */
+  /** MIME type of the file. Required when buffer is provided. */
   mimeType?: string;
   /** Original filename for AI context */
   filename?: string;
-  /**
-   * Pre-converted image data URLs (one per page). When provided, buffer/mimeType
-   * are ignored and these are sent directly as image_url blocks — used for PDFs
-   * converted to PNGs by the worker before calling extractInvoice.
-   */
+  /** Pre-converted image data URLs (one per page), used for PDF→PNG path. */
   imageDataUrls?: string[];
+  /** Raw text extracted from a PDF text layer. When present, uses text-only prompt; no image_url. */
+  pdfText?: string;
 }
 
 export interface ExtractResult {
@@ -249,6 +360,109 @@ export async function extractInvoice(params: ExtractParams): Promise<ExtractResu
     log.warn("OPENAI_API_KEY not set — returning fixture data");
     return fixtureResult();
   }
+
+  // ── Text-extraction path (PDF with text layer) ──────────────────────────
+  if (params.pdfText) {
+    log.info(
+      { model: env.OPENAI_VISION_MODEL, textLen: params.pdfText.length },
+      "Calling OpenAI (text-extraction mode)",
+    );
+    const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    const t0 = Date.now();
+    const model = env.OPENAI_VISION_MODEL;
+    const messages: any[] = [
+      { role: "system", content: SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: `${PDF_TEXT_PROMPT}\n\n=== RAW INVOICE TEXT ===\n${params.pdfText}`,
+      },
+    ];
+    const response = await client.chat.completions.create({
+      model,
+      response_format: { type: "json_object" },
+      messages,
+      max_completion_tokens: 16384,
+    });
+    const tokensInput = response.usage?.prompt_tokens ?? 0;
+    const tokensOutput = response.usage?.completion_tokens ?? 0;
+    log.info({ durationMs: Date.now() - t0, tokensInput, tokensOutput }, "OpenAI responded");
+    const content = response.choices[0]?.message?.content;
+    if (!content) throw new Error("OpenAI returned empty content");
+    const rawObj = JSON.parse(content);
+    // Model may return {header, lineItems} OR flat {…, lines}. Normalize to schema shape.
+    const lineArr = rawObj.lineItems ?? rawObj.lines ?? rawObj.line_items ?? [];
+    const hdr = rawObj.header ?? rawObj;
+    const shaped = {
+      vendorName:    hdr.vendorName    ?? "",
+      vendorAddress: hdr.vendorAddress ?? "",
+      invoiceNumber: hdr.invoiceNumber ?? "",
+      invoiceDate:   hdr.invoiceDate   ?? null,
+      subtotalCents: hdr.subtotalCents ?? 0,
+      taxCents:      hdr.taxCents      ?? 0,
+      totalCents:    hdr.totalCents    ?? 0,
+      currency:      hdr.currency      ?? "USD",
+      isPartial:     hdr.isPartial     ?? false,
+      groupTotals:   hdr.groupTotals   ?? {},
+      needsReview:   hdr.needsReview   ?? false,
+      lines:         (Array.isArray(lineArr) ? lineArr : []).map(normalizeLine),
+    };
+    const parsed = ExtractedInvoiceSchema.parse(shaped);
+    log.info({ lineCount: parsed.lines.length }, `Parsed ${parsed.lines.length} lines`);
+
+    const inStockLines = parsed.lines.filter((l) => l.lineStatus !== "out_of_stock");
+    const lineSum = inStockLines.reduce((s, l) => s + l.extendedPriceCents, 0);
+    let reconciles = true;
+    let finalNeedReview = parsed.needsReview;
+    let finalReconciliationNote = parsed.reconciliationNote ?? null;
+    const groupTotals = parsed.groupTotals;
+    const hasGroupTotals = Object.keys(groupTotals).length > 0;
+    if (!parsed.isPartial && parsed.totalCents > 0) {
+      reconciles = Math.abs(lineSum - parsed.totalCents) <= 1;
+      if (!reconciles) {
+        finalNeedReview = true;
+        finalReconciliationNote =
+          parsed.reconciliationNote ??
+          `line sum ${lineSum} does not match printed total ${parsed.totalCents}`;
+        log.warn(
+          { lineSum, totalCents: parsed.totalCents },
+          "Reconciliation failed — line sum does not match invoice total",
+        );
+      }
+    } else if (hasGroupTotals) {
+      const catSums: Record<string, number> = {};
+      for (const line of inStockLines) {
+        const cat = line.category ?? "UNCATEGORIZED";
+        catSums[cat] = (catSums[cat] ?? 0) + line.extendedPriceCents;
+      }
+      const mismatches: string[] = [];
+      for (const [cat, printed] of Object.entries(groupTotals)) {
+        const computed = catSums[cat] ?? 0;
+        if (Math.abs(computed - printed) > 1) {
+          mismatches.push(`${cat}: computed=${computed} vs printed=${printed}`);
+        }
+      }
+      reconciles = mismatches.length === 0;
+      if (!reconciles) {
+        finalNeedReview = true;
+        finalReconciliationNote = `Category mismatch: ${mismatches.join("; ")}`;
+        log.warn({ mismatches }, "Category reconciliation failed");
+      }
+    }
+    const costCents = Math.ceil(tokensInput * 0.00025 + tokensOutput * 0.001);
+    return {
+      data: {
+        ...parsed,
+        needsReview: finalNeedReview,
+        reconciliationNote: finalReconciliationNote,
+        reconciles,
+      },
+      tokensInput,
+      tokensOutput,
+      costCents,
+      model: env.OPENAI_VISION_MODEL,
+    };
+  }
+  // ── End text-extraction path ─────────────────────────────────────────────
 
   if (params.buffer && params.buffer.length > MAX_BYTES) {
     throw new Error(

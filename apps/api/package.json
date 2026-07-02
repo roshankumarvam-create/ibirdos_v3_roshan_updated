@@ -38,6 +38,7 @@
     "helmet": "^8.0.0",
     "ioredis": "^5.4.1",
     "openai": "^4.73.0",
+    "pdf-parse": "^1.1.1",
     "pdf-to-png-converter": "^4.1.1",
     "prom-client": "^15.1.3",
     "reflect-metadata": "^0.2.2",
@@ -52,6 +53,7 @@
     "@nestjs/cli": "^10.4.7",
     "@nestjs/schematics": "^10.2.3",
     "@types/cookie-parser": "^1.4.7",
+    "@types/pdf-parse": "^1.1.4",
     "@types/express": "^5.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
