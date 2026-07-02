@@ -73,7 +73,7 @@ export const IngredientSchema = z.object({
 });
 
 export const RecipeExtractionSchema = z.object({
-  recipeName:       z.string().min(1),
+  recipeName:       z.string().nullish().transform(v => (v && v.trim()) ? v : "Untitled Recipe"),
   yieldServings:    z.number().nullish().transform(v => v ?? 1),
   prepTimeMinutes:  z.number().nullish(),
   cookTimeMinutes:  z.number().nullish(),

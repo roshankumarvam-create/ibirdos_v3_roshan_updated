@@ -79,10 +79,23 @@ const worker = new Worker<JobData>(
       );
 
       // Detect PDF by MIME type, filename extension, or magic bytes (%PDF header).
+      const magicBytes = buffer.slice(0, 4).toString("ascii");
       const isPdf =
         uploadMimeType === "application/pdf" ||
         uploadKey.toLowerCase().endsWith(".pdf") ||
-        buffer.slice(0, 4).toString("ascii") === "%PDF";
+        magicBytes === "%PDF";
+      log.info(
+        {
+          uploadMimeType,
+          uploadKey,
+          magicBytes,
+          isPdf,
+          mimeMatch: uploadMimeType === "application/pdf",
+          extMatch: uploadKey.toLowerCase().endsWith(".pdf"),
+          magicMatch: magicBytes === "%PDF",
+        },
+        "isPdf detection",
+      );
 
       let result!: ExtractResult;
       if (isPdf) {
