@@ -31,6 +31,9 @@ const CreateManualInvoiceSchema = z.object({
   vendorId: z.string().optional(),
   invoiceNumber: z.string().max(80).optional(),
   invoiceDate: z.string().optional(),
+  subtotalCents: z.number().int().nullish(),
+  taxCents: z.number().int().nullish(),
+  totalCents: z.number().int().nullish(),
 });
 
 const UpdateLineSchema = z.object({

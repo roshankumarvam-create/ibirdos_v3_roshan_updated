@@ -125,6 +125,9 @@ export default function NewInvoicePage() {
         vendorId: matchedVendorId || undefined,
         invoiceNumber: extracted.invoiceNumber || undefined,
         invoiceDate: extracted.invoiceDate || undefined,
+        subtotalCents: extracted.subtotalCents ?? undefined,
+        taxCents: extracted.taxCents ?? undefined,
+        totalCents: extracted.totalCents ?? undefined,
       });
       if (createRes.error) { setErrorBanner(createRes.error.message); return; }
       const invoiceId = createRes.data!.id;

@@ -57,7 +57,10 @@ export class InvoicesService {
 
   async createManual(
     ctx: TenantContext,
-    input: { vendorId?: string; invoiceNumber?: string; invoiceDate?: string },
+    input: {
+      vendorId?: string; invoiceNumber?: string; invoiceDate?: string;
+      subtotalCents?: number | null; taxCents?: number | null; totalCents?: number | null;
+    },
   ) {
     const invoice = await prisma.invoice.create({
       data: {
@@ -66,6 +69,9 @@ export class InvoicesService {
         vendorId: input.vendorId ?? null,
         invoiceNumber: input.invoiceNumber ?? null,
         invoiceDate: input.invoiceDate ? new Date(input.invoiceDate) : null,
+        subtotalCents: input.subtotalCents ?? null,
+        taxCents: input.taxCents ?? null,
+        totalCents: input.totalCents ?? null,
         // Sentinel values — no PDF was uploaded
         uploadKey: `workspaces/${ctx.workspaceId}/invoice/__manual__`,
         uploadMimeType: "application/x-manual",
