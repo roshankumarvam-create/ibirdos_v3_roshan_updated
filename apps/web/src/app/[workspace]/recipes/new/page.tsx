@@ -144,7 +144,7 @@ export default function NewRecipePage() {
   };
 
   // --- Extract / import state ---
-  const [extractFile, setExtractFile] = useState<File | null>(null);
+  const [extractFiles, setExtractFiles] = useState<File[]>([]);
   const [extracting, setExtracting] = useState(false);
   const [extractBanner, setExtractBanner] = useState<string | null>(null);
 
@@ -237,12 +237,16 @@ export default function NewRecipePage() {
 
   // --- Extract / auto-fill ---
   const handleExtract = async () => {
-    if (!extractFile) return;
+    if (extractFiles.length === 0) return;
+    if (extractFiles.some(f => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"))) {
+      setExtractBanner("Please upload PNG or JPEG images instead.");
+      return;
+    }
     setExtracting(true);
     setExtractBanner(null);
     try {
       const fd = new FormData();
-      fd.append("file", extractFile);
+      extractFiles.forEach(f => fd.append("file", f));
 
       // CSRF token (same pattern as api.ts ensureCsrfToken)
       const csrfMatch = document.cookie.match(/(?:^|;\s*)ibirdos\.csrf=([^;]+)/);
@@ -270,8 +274,8 @@ export default function NewRecipePage() {
         setName(d.name);                    // CSV/spreadsheet path
       } else if (d.recipeName && !name) {
         setName(d.recipeName);              // Vision/OCR path (field name differs)
-      } else if (!d.name && !d.recipeName && !name && extractFile) {
-        const stem = extractFile.name
+      } else if (!d.name && !d.recipeName && !name && extractFiles.length > 0) {
+        const stem = extractFiles[0]!.name
           .replace(/\.[^.]+$/, "")
           .replace(/[-_]+/g, " ")
           .replace(/\s+/g, " ")
@@ -326,7 +330,7 @@ export default function NewRecipePage() {
 
       const fieldsFound = json.data?.fieldsFound ?? 0;
       setExtractBanner(`✓ Extracted ${fieldsFound} field${fieldsFound !== 1 ? "s" : ""}. Review and edit anything wrong, then click Save recipe.`);
-      setExtractFile(null);
+      setExtractFiles([]);
     } catch (err: any) {
       setExtractBanner(err?.message ?? "Extraction failed.");
     } finally {
@@ -432,18 +436,19 @@ export default function NewRecipePage() {
           <CardTitle>Import from file <span className="text-text-tertiary font-normal text-xs ml-1">(optional)</span></CardTitle>
         </CardHeader>
         <CardBody className="space-y-3">
-          <p className="text-xs text-text-tertiary">Upload a recipe sheet to auto-fill below. Supports JPEG, PNG, XLSX, XLS, CSV. You can edit anything after.</p>
+          <p className="text-xs text-text-tertiary">Upload one or more images (JPEG, PNG) of a recipe to auto-fill below — or a single XLSX/XLS/CSV. You can edit anything after.</p>
           <div className="flex items-center gap-3 flex-wrap">
             <input
               type="file"
-              accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.webp"
+              multiple
+              accept=".png,.jpg,.jpeg,.webp,.xlsx,.xls,.csv"
               className="text-xs text-text-secondary file:mr-2 file:text-xs file:rounded file:border file:border-bg-border file:bg-bg-elevated file:px-2 file:py-1 file:text-text-primary"
-              onChange={e => { setExtractFile(e.target.files?.[0] ?? null); setExtractBanner(null); }}
+              onChange={e => { setExtractFiles(Array.from(e.target.files ?? [])); setExtractBanner(null); }}
             />
             <Button
               variant="secondary"
               size="sm"
-              disabled={!extractFile || extracting}
+              disabled={extractFiles.length === 0 || extracting}
               loading={extracting}
               onClick={handleExtract}
             >

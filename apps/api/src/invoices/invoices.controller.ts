@@ -1,12 +1,24 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import {
+  Body, Controller, Delete, Get, Param, Patch, Post, Query,
+  UploadedFiles, UseInterceptors, BadRequestException, ServiceUnavailableException,
+} from "@nestjs/common";
+import { FilesInterceptor } from "@nestjs/platform-express";
 import { z } from "zod";
 import { ok } from "@ibirdos/types";
 import type { TenantContext } from "@ibirdos/db";
+import { extractInvoice } from "@ibirdos/ai";
+import { env } from "@ibirdos/config";
+import { moduleLogger } from "@ibirdos/logger";
 
 import { CurrentCtx } from "../common/decorators/current-ctx.decorator";
 import { RequirePermission } from "../common/decorators/require-permission.decorator";
 import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 import { InvoicesService } from "./invoices.service";
+
+const log = moduleLogger("InvoicesController");
+const IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const MAX_FILES = 10;
+type UploadedFileT = { buffer: Buffer; originalname: string; mimetype: string; size: number };
 
 const CreateInvoiceSchema = z.object({
   uploadKey: z.string().min(1),
@@ -88,6 +100,67 @@ export class InvoicesController {
     @Body(new ZodValidationPipe(CreateInvoiceSchema)) body: z.infer<typeof CreateInvoiceSchema>,
   ) {
     return ok(await this.svc.create(ctx, body));
+  }
+
+  @Post("extract")
+  @RequirePermission("invoice.upload")
+  @UseInterceptors(FilesInterceptor("file", MAX_FILES, { limits: { fileSize: 25 * 1024 * 1024 } }))
+  async extract(
+    @CurrentCtx() ctx: TenantContext,
+    @UploadedFiles() files: UploadedFileT[],
+  ) {
+    if (!files || files.length === 0) {
+      throw new BadRequestException({ code: "validation_failed", message: "No file provided" });
+    }
+    if (files.length > MAX_FILES) {
+      throw new BadRequestException({ code: "validation_failed", message: `Too many files. Max is ${MAX_FILES}.` });
+    }
+    const isPdf = (f: UploadedFileT) =>
+      f.mimetype === "application/pdf" || f.originalname.toLowerCase().endsWith(".pdf");
+    if (files.some(isPdf)) {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: "Please upload PNG or JPEG images instead.",
+      });
+    }
+    const isImage = (f: UploadedFileT) => {
+      const ext = (f.originalname.split(".").pop() ?? "").toLowerCase();
+      return IMAGE_MIMES.has(f.mimetype) || ["jpg", "jpeg", "png", "webp", "gif"].includes(ext);
+    };
+    if (!files.every(isImage)) {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: "Unsupported file type. Please upload PNG or JPEG images only.",
+      });
+    }
+    if (!env.OPENAI_API_KEY) {
+      throw new ServiceUnavailableException({
+        code: "service_unavailable",
+        message: "Invoice extraction requires OPENAI_API_KEY.",
+        hint: "Set OPENAI_API_KEY in your environment.",
+      });
+    }
+
+    log.info(
+      { workspaceId: ctx.workspaceId, filenames: files.map((f) => f.originalname), count: files.length },
+      "invoice extract request",
+    );
+
+    const imageDataUrls = files.map(
+      (f) => `data:${f.mimetype || "image/jpeg"};base64,${f.buffer.toString("base64")}`,
+    );
+
+    try {
+      const result = await extractInvoice({ imageDataUrls, filename: files[0]!.originalname });
+      return ok(result.data);
+    } catch (err: any) {
+      log.error({ err, filenames: files.map((f) => f.originalname) }, "invoice extraction failed");
+      const isDev = process.env.NODE_ENV !== "production";
+      throw new BadRequestException({
+        code: "extraction_failed",
+        message: isDev ? `Extraction error: ${err?.message ?? String(err)}` : "Extraction failed. Check server logs for details.",
+      });
+    }
   }
 
   @Post("manual")

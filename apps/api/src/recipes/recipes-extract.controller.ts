@@ -1,20 +1,18 @@
 import {
-  Controller, Post, UploadedFile, UseInterceptors,
+  Controller, Post, UploadedFiles, UseInterceptors,
   BadRequestException, ServiceUnavailableException,
 } from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
+import { FilesInterceptor } from "@nestjs/platform-express";
 import { ok } from "@ibirdos/types";
 import { prisma, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
 import {
-  extractRecipeFromImage,
   extractRecipeFromImages,
   parseRowsToRecipe,
   type RecipeVisionResult,
   type RecipeExtractResult,
   type ExtractedRecipe,
 } from "@ibirdos/ai";
-import { convertPdfToPngs } from "./pdf-converter";
 import { env } from "@ibirdos/config";
 import { CurrentCtx } from "../common/decorators/current-ctx.decorator";
 import { RequirePermission } from "../common/decorators/require-permission.decorator";
@@ -28,29 +26,49 @@ const EXCEL_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-excel",
 ]);
+const MAX_FILES = 10;
+
+type UploadedFileT = { buffer: Buffer; originalname: string; mimetype: string; size: number };
+
+function fileExt(f: UploadedFileT): string {
+  return (f.originalname.split(".").pop() ?? "").toLowerCase();
+}
 
 @Controller("recipes")
 export class RecipesExtractController {
   @Post("extract")
   @RequirePermission("recipe.create")
-  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 25 * 1024 * 1024 } }))
+  @UseInterceptors(FilesInterceptor("file", MAX_FILES, { limits: { fileSize: 25 * 1024 * 1024 } }))
   async extract(
     @CurrentCtx() ctx: TenantContext,
-    @UploadedFile() file: { buffer: Buffer; originalname: string; mimetype: string; size: number },
+    @UploadedFiles() files: UploadedFileT[],
   ) {
-    if (!file) throw new BadRequestException({ code: "validation_failed", message: "No file provided" });
+    if (!files || files.length === 0) {
+      throw new BadRequestException({ code: "validation_failed", message: "No file provided" });
+    }
+    if (files.length > MAX_FILES) {
+      throw new BadRequestException({ code: "validation_failed", message: `Too many files. Max is ${MAX_FILES}.` });
+    }
+    if (files.some((f) => f.mimetype === "application/pdf" || fileExt(f) === "pdf")) {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: "Please upload PNG or JPEG images instead.",
+      });
+    }
 
-    const mime = file.mimetype;
-    const ext = (file.originalname.split(".").pop() ?? "").toLowerCase();
-    const buf = file.buffer;
+    const isImage = (f: UploadedFileT) =>
+      IMAGE_MIMES.has(f.mimetype) || ["jpg", "jpeg", "png", "webp", "gif"].includes(fileExt(f));
 
-    log.info({ workspaceId: ctx.workspaceId, filename: file.originalname, mime, size: buf.length }, "recipe extract request");
+    log.info(
+      { workspaceId: ctx.workspaceId, filenames: files.map((f) => f.originalname), count: files.length },
+      "recipe extract request",
+    );
 
     let visionResult: RecipeVisionResult | undefined;
     let csvResult: RecipeExtractResult | undefined;
 
     try {
-      if (IMAGE_MIMES.has(mime) || ["jpg","jpeg","png","webp","gif"].includes(ext)) {
+      if (files.every(isImage)) {
         if (!env.OPENAI_API_KEY) {
           throw new ServiceUnavailableException({
             code: "service_unavailable",
@@ -58,40 +76,20 @@ export class RecipesExtractController {
             hint: "Set OPENAI_API_KEY in your environment, or upload an Excel/CSV file instead.",
           });
         }
-        const b64 = buf.toString("base64");
-        const dataUrl = `data:${mime || "image/jpeg"};base64,${b64}`;
-        visionResult = await extractRecipeFromImage({ imageUrl: dataUrl, filename: file.originalname });
-
-      } else if (mime === "application/pdf" || ext === "pdf") {
-        if (!env.OPENAI_API_KEY) {
-          throw new ServiceUnavailableException({
-            code: "service_unavailable",
-            message: "Image extraction requires OPENAI_API_KEY. Excel and CSV imports still work.",
-            hint: "Set OPENAI_API_KEY in your environment, or upload an Excel/CSV file instead.",
-          });
-        }
-        let pngBuffers: Buffer[];
-        try {
-          pngBuffers = await convertPdfToPngs(buf);
-        } catch (pdfErr: any) {
-          const pdfMsg: string = pdfErr?.message ?? "PDF conversion failed";
-          if (/password|encrypted|protect/i.test(pdfMsg)) {
-            throw new BadRequestException({ code: "validation_failed", message: pdfMsg });
-          }
-          if (/max is \d|pages —/i.test(pdfMsg)) {
-            throw new BadRequestException({ code: "validation_failed", message: pdfMsg });
-          }
-          throw new BadRequestException({
-            code: "validation_failed",
-            message: "Could not read PDF. The file may be corrupted. Try a different file.",
-          });
-        }
-        const imageUrls = pngBuffers.map(
-          (pageBuf) => `data:image/png;base64,${pageBuf.toString("base64")}`,
+        const imageUrls = files.map(
+          (f) => `data:${f.mimetype || "image/jpeg"};base64,${f.buffer.toString("base64")}`,
         );
-        visionResult = await extractRecipeFromImages({ imageUrls, filename: file.originalname });
+        visionResult = await extractRecipeFromImages({ imageUrls, filename: files[0]!.originalname });
 
-      } else if (EXCEL_MIMES.has(mime) || ["xlsx","xls"].includes(ext)) {
+      } else if (files.length > 1) {
+        throw new BadRequestException({
+          code: "validation_failed",
+          message: "Only one Excel/CSV file can be uploaded at a time. To combine multiple pages into one recipe, upload JPEG or PNG images instead.",
+        });
+
+      } else if (EXCEL_MIMES.has(files[0]!.mimetype) || ["xlsx", "xls"].includes(fileExt(files[0]!))) {
+        const file = files[0]!;
+        const buf = file.buffer;
         // Try deterministic parser first; fall back to legacy parseRowsToRecipe only if it produces nothing.
         const parsed = parseXLSX(buf);
         const adapted = parsedToExtractResult(parsed, "excel");
@@ -124,7 +122,9 @@ export class RecipesExtractController {
           csvResult = { ...parseRowsToRecipe(rows), source: "excel" as const };
         }
 
-      } else if (mime === "text/csv" || ext === "csv") {
+      } else if (files[0]!.mimetype === "text/csv" || fileExt(files[0]!) === "csv") {
+        const file = files[0]!;
+        const buf = file.buffer;
         // Try deterministic parser first; fall back to legacy parseRowsToRecipe only if it produces nothing.
         const parsed = parseCSV(buf);
         const adapted = parsedToExtractResult(parsed, "csv");
@@ -152,7 +152,7 @@ export class RecipesExtractController {
       } else {
         throw new BadRequestException({
           code: "validation_failed",
-          message: `Unsupported file type: ${mime || ext || "unknown"}.`,
+          message: `Unsupported file type: ${files[0]!.mimetype || fileExt(files[0]!) || "unknown"}.`,
           hint: "Supported formats: JPEG, PNG, XLSX, XLS, CSV.",
         });
       }
@@ -160,7 +160,7 @@ export class RecipesExtractController {
       // Re-throw NestJS HTTP exceptions as-is
       if (err?.status >= 400) throw err;
 
-      log.error({ err, filename: file.originalname, mime }, "unexpected extraction error");
+      log.error({ err, filenames: files.map((f) => f.originalname) }, "unexpected extraction error");
       const isDev = process.env.NODE_ENV !== "production";
       throw new BadRequestException({
         code: "extraction_failed",
@@ -174,7 +174,7 @@ export class RecipesExtractController {
       const ingredients = visionResult.data.ingredients;
 
       if (ingredients.length === 0 && visionResult.fieldsFound === 0) {
-        log.warn({ filename: file.originalname }, "vision extraction returned no data");
+        log.warn({ filenames: files.map((f) => f.originalname) }, "vision extraction returned no data");
         return ok({
           ...visionResult,
           warning: "No recipe data detected. Check that the image is a recipe page and try again.",
@@ -206,7 +206,7 @@ export class RecipesExtractController {
     // --- CSV / Excel path: legacy schema with ingredientLines[] ---
     if (csvResult) {
       if (csvResult.data.ingredientLines.length === 0 && csvResult.fieldsFound === 0) {
-        log.warn({ filename: file.originalname }, "extraction returned no data");
+        log.warn({ filenames: files.map((f) => f.originalname) }, "extraction returned no data");
         return ok({
           ...csvResult,
           warning: "Could not detect recipe columns. Check column headers: expected 'Ingredient' (or 'Item', 'Description'), 'Qty' (or 'Quantity'), 'Unit'. Review and fill in manually.",

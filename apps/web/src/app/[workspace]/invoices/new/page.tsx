@@ -11,17 +11,21 @@ interface VendorOption {
   name: string;
 }
 
-const ACCEPTED_MIME_TYPES = "image/jpeg,image/png,image/webp,application/pdf";
-const ACCEPTED_MIME_SET = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
+const ACCEPTED_MIME_TYPES = "image/jpeg,image/png,image/webp";
+const ACCEPTED_MIME_SET = new Set(["image/jpeg", "image/png", "image/webp"]);
 const ACCEPTED_SPREADSHEET_TYPES = ".xlsx,.xls,.csv";
 const ACCEPTED_SPREADSHEET_SET = new Set(["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "text/csv", "application/csv"]);
+const MAX_FILES = 10;
 
 type UploadMode = "file" | "camera" | "csv" | "manual";
 
-function getFileIcon(file: File) {
-  if (file.type.startsWith("image/")) return "🖼";
-  if (file.type === "application/pdf") return "📄";
-  return "📎";
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target?.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -47,11 +51,11 @@ export default function NewInvoicePage() {
   const [manualInvoiceNumber, setManualInvoiceNumber] = useState("");
   const [manualInvoiceDate, setManualInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
   const [manualSaving, setManualSaving] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [step, setStep] = useState<"idle" | "presigning" | "uploading" | "creating" | "parsing">("idle");
+  const [step, setStep] = useState<"idle" | "extracting" | "creating" | "parsing">("idle");
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   useEffect(() => {
@@ -60,57 +64,104 @@ export default function NewInvoicePage() {
     });
   }, []);
 
-  const handleFileChange = (f: File | null) => {
-    setFile(f);
-    setPreviewUrl(null);
+  const handleFilesChange = (newFiles: File[]) => {
     setErrorBanner(null);
-    if (!f) return;
-    if (!ACCEPTED_MIME_SET.has(f.type)) {
-      setErrorBanner(`File type "${f.type}" is not supported. Use PDF, JPEG, PNG, or WebP.`);
-      setFile(null);
+    if (newFiles.length === 0) { setFiles([]); setPreviewUrls([]); return; }
+    if (newFiles.some((f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"))) {
+      setErrorBanner("Please upload PNG or JPEG images instead.");
+      setFiles([]);
+      setPreviewUrls([]);
       return;
     }
-    if (f.type.startsWith("image/")) {
-      const reader = new FileReader();
-      reader.onload = (e) => setPreviewUrl(e.target?.result as string);
-      reader.readAsDataURL(f);
+    const invalid = newFiles.find((f) => !ACCEPTED_MIME_SET.has(f.type));
+    if (invalid) {
+      setErrorBanner(`File type "${invalid.type}" is not supported. Use JPEG, PNG, or WebP.`);
+      setFiles([]);
+      setPreviewUrls([]);
+      return;
     }
+    if (newFiles.length > MAX_FILES) {
+      setErrorBanner(`Too many files. Max is ${MAX_FILES}.`);
+      return;
+    }
+    setFiles(newFiles);
+    Promise.all(newFiles.map(readAsDataUrl)).then(setPreviewUrls);
   };
 
-  const handleUpload = async () => {
-    if (!file) return;
+  const removeFile = (idx: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== idx));
+    setPreviewUrls((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleExtractAndCreate = async () => {
+    if (files.length === 0) return;
     setUploading(true);
     setErrorBanner(null);
 
     try {
-      setStep("presigning");
-      const presignRes = await api.post<{ uploadUrl: string; key: string; expiresInSec: number }>(
-        "/uploads/presign",
-        { purpose: "invoice", filename: file.name, contentType: file.type, sizeBytes: file.size },
-      );
-      if (presignRes.error) { setErrorBanner(presignRes.error.message); return; }
-      const { uploadUrl, key } = presignRes.data;
+      setStep("extracting");
+      const fd = new FormData();
+      files.forEach((f) => fd.append("file", f));
 
-      setStep("uploading");
-      const putRes = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type },
-        body: file,
+      // CSRF token (same pattern as api.ts ensureCsrfToken)
+      const csrfMatch = document.cookie.match(/(?:^|;\s*)ibirdos\.csrf=([^;]+)/);
+      const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]!) : null;
+
+      const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001") + "/api/v1";
+      const res = await fetch(`${apiBase}/invoices/extract`, {
+        method: "POST",
+        credentials: "include",
+        headers: csrfToken ? { "X-Csrf-Token": csrfToken } : {},
+        body: fd,
       });
-      if (!putRes.ok) { setErrorBanner(`File upload to storage failed (${putRes.status}). Is R2/MinIO running?`); return; }
+      const json = await res.json() as any;
+      if (json.error) { setErrorBanner(json.error.message); return; }
+      const extracted = json.data;
+      if (!extracted) { setErrorBanner("No data returned from extraction."); return; }
 
       setStep("creating");
-      const createRes = await api.post<{ id: string }>("/invoices", {
-        uploadKey: key,
-        uploadMimeType: file.type,
-        uploadSizeBytes: file.size,
-        vendorId: vendorId || undefined,
+      const matchedVendorId = vendorId || vendors.find(
+        (v) => v.name.toLowerCase() === String(extracted.vendorName ?? "").toLowerCase(),
+      )?.id;
+
+      const createRes = await api.post<{ id: string }>("/invoices/manual", {
+        vendorId: matchedVendorId || undefined,
+        invoiceNumber: extracted.invoiceNumber || undefined,
+        invoiceDate: extracted.invoiceDate || undefined,
       });
       if (createRes.error) { setErrorBanner(createRes.error.message); return; }
+      const invoiceId = createRes.data!.id;
 
-      router.push(`/${workspaceSlug}/invoices/${createRes.data.id}` as Route);
+      const allLines: any[] = extracted.lines ?? [];
+      const usableLines = allLines.filter((l) => (l.quantity ?? 0) > 0);
+      const skipped = allLines.length - usableLines.length;
+      let failed = 0;
+      for (const line of usableLines) {
+        const lineRes = await api.post(`/invoices/${invoiceId}/lines`, {
+          descriptionRaw: line.descriptionRaw,
+          quantity: line.quantity,
+          unit: line.unit,
+          unitPriceCents: line.unitPriceCents,
+          extendedPriceCents: line.extendedPriceCents,
+          category: line.lineType === "misc_charge" ? "DELIVERY" : "FOOD_INGREDIENT",
+          packSize: line.packSize ?? undefined,
+          packUnit: line.packUnit ?? line.size ?? undefined,
+        });
+        if (lineRes.error) failed++;
+      }
+
+      if (skipped > 0 || failed > 0) {
+        setErrorBanner(
+          [
+            skipped > 0 ? `${skipped} out-of-stock line${skipped !== 1 ? "s" : ""} skipped.` : null,
+            failed > 0 ? `${failed} line${failed !== 1 ? "s" : ""} could not be added — add manually on the review page.` : null,
+          ].filter(Boolean).join(" "),
+        );
+      }
+
+      router.push(`/${workspaceSlug}/invoices/${invoiceId}` as Route);
     } catch (err: any) {
-      setErrorBanner(err?.message ?? "Upload failed. Please try again.");
+      setErrorBanner(err?.message ?? "Extraction failed. Please try again.");
     } finally {
       setUploading(false);
       setStep("idle");
@@ -158,14 +209,11 @@ export default function NewInvoicePage() {
     }
   };
 
-  const ocrEnabled = process.env.NEXT_PUBLIC_ENABLE_OCR === "true";
-
   const stepLabel =
-    step === "presigning" ? "Getting upload URL…" :
-    step === "uploading" ? "Uploading file…" :
+    step === "extracting" ? "Extracting…" :
     step === "creating" ? "Saving invoice…" :
     step === "parsing" ? "Parsing spreadsheet…" :
-    ocrEnabled ? "Upload & extract" : "Upload invoice";
+    "Upload & extract";
 
   return (
     <div className="space-y-6 pb-20 max-w-xl">
@@ -185,8 +233,8 @@ export default function NewInvoicePage() {
               Create invoice
             </Button>
           ) : mode !== "csv" ? (
-            <Button onClick={handleUpload} disabled={!file || uploading} loading={uploading}>
-              {uploading ? stepLabel : ocrEnabled ? "Upload & extract" : "Upload invoice"}
+            <Button onClick={handleExtractAndCreate} disabled={files.length === 0 || uploading} loading={uploading}>
+              {uploading ? stepLabel : "Upload & extract"}
             </Button>
           ) : (
             <Button onClick={handleCsvImport} disabled={!csvFile || uploading} loading={uploading}>
@@ -208,43 +256,47 @@ export default function NewInvoicePage() {
         {(["file", "camera", "csv", "manual"] as UploadMode[]).map((m) => (
           <button
             key={m}
-            onClick={() => { setMode(m); setFile(null); setCsvFile(null); setPreviewUrl(null); setErrorBanner(null); }}
+            onClick={() => { setMode(m); setFiles([]); setCsvFile(null); setPreviewUrls([]); setErrorBanner(null); }}
             className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${mode === m ? "bg-bg-base text-text-primary shadow-sm" : "text-text-tertiary hover:text-text-secondary"}`}
           >
-            {m === "file" ? "📄 PDF / Image" : m === "camera" ? "📷 Camera" : m === "csv" ? "📊 CSV / Excel" : "✏️ Manual"}
+            {m === "file" ? "🖼 Images" : m === "camera" ? "📷 Camera" : m === "csv" ? "📊 CSV / Excel" : "✏️ Manual"}
           </button>
         ))}
       </div>
 
-      {/* PDF / Image mode */}
+      {/* Image mode */}
       {mode === "file" && (
         <Card>
-          <CardHeader><CardTitle>Invoice file</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Invoice images</CardTitle></CardHeader>
           <CardBody className="space-y-4">
             <div>
-              <Label htmlFor="file">File *</Label>
+              <Label htmlFor="file">Files *</Label>
               <input
                 id="file"
                 type="file"
                 accept={ACCEPTED_MIME_TYPES}
-                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+                multiple
+                onChange={(e) => handleFilesChange(Array.from(e.target.files ?? []))}
                 className="mt-1 block w-full text-sm text-text-secondary file:mr-3 file:text-xs file:rounded file:border file:border-bg-border file:bg-bg-elevated file:px-3 file:py-1.5 file:text-text-primary hover:file:bg-bg-hover"
               />
-              <p className="mt-1 text-xs text-text-tertiary">PDF, JPEG, PNG, or WebP · max 25 MB</p>
+              <p className="mt-1 text-xs text-text-tertiary">JPEG, PNG, or WebP · up to {MAX_FILES} pages · max 25 MB each</p>
             </div>
-            {previewUrl && (
-              <div className="rounded border border-bg-border overflow-hidden">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={previewUrl} alt="Invoice preview" className="max-h-48 w-auto mx-auto" />
-              </div>
-            )}
-            {file && !previewUrl && (
-              <div className="flex items-center gap-2 rounded border border-bg-border bg-bg-inset px-3 py-2 text-sm">
-                <span className="text-xl">{getFileIcon(file)}</span>
-                <div>
-                  <div className="text-text-primary font-medium">{file.name}</div>
-                  <div className="text-xs text-text-tertiary">{(file.size / 1024).toFixed(0)} KB · {file.type}</div>
-                </div>
+            {previewUrls.length > 0 && (
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {previewUrls.map((url, idx) => (
+                  <div key={idx} className="relative rounded border border-bg-border overflow-hidden group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={url} alt={`Page ${idx + 1}`} className="h-24 w-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removeFile(idx)}
+                      className="absolute top-1 right-1 bg-bg-base/80 rounded-full h-5 w-5 text-xs text-text-secondary hover:text-danger"
+                      title="Remove"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </CardBody>
@@ -256,7 +308,7 @@ export default function NewInvoicePage() {
         <Card>
           <CardHeader><CardTitle>Camera capture</CardTitle></CardHeader>
           <CardBody className="space-y-4">
-            <p className="text-sm text-text-secondary">Point your camera at the invoice and take a photo. Supported on mobile devices.</p>
+            <p className="text-sm text-text-secondary">Point your camera at each page of the invoice and capture a photo. Supported on mobile devices. Take multiple photos for multi-page invoices.</p>
             <div>
               <Label htmlFor="camera-file">Capture photo *</Label>
               <input
@@ -264,28 +316,35 @@ export default function NewInvoicePage() {
                 type="file"
                 accept="image/*"
                 capture="environment"
-                onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  if (f) handleFilesChange([...files, f]);
+                  e.target.value = "";
+                }}
                 className="mt-1 block w-full text-sm text-text-secondary file:mr-3 file:text-xs file:rounded file:border file:border-bg-border file:bg-bg-elevated file:px-3 file:py-1.5 file:text-text-primary hover:file:bg-bg-hover"
               />
             </div>
-            {previewUrl && (
-              <div className="rounded border border-bg-border overflow-hidden">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={previewUrl} alt="Captured invoice" className="max-h-64 w-auto mx-auto" />
+            {previewUrls.length > 0 && (
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {previewUrls.map((url, idx) => (
+                  <div key={idx} className="relative rounded border border-bg-border overflow-hidden group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={url} alt={`Page ${idx + 1}`} className="h-24 w-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removeFile(idx)}
+                      className="absolute top-1 right-1 bg-bg-base/80 rounded-full h-5 w-5 text-xs text-text-secondary hover:text-danger"
+                      title="Remove"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
-            {file && !previewUrl && (
-              <div className="flex items-center gap-2 rounded border border-bg-border bg-bg-inset px-3 py-2 text-sm">
-                <span className="text-xl">📷</span>
-                <div>
-                  <div className="text-text-primary font-medium">{file.name}</div>
-                  <div className="text-xs text-text-tertiary">{(file.size / 1024).toFixed(0)} KB</div>
-                </div>
-              </div>
-            )}
-            {file && (
-              <Button onClick={handleUpload} disabled={uploading} loading={uploading} className="w-full">
-                {uploading ? stepLabel : ocrEnabled ? "Upload & extract" : "Upload photo"}
+            {files.length > 0 && (
+              <Button onClick={handleExtractAndCreate} disabled={uploading} loading={uploading} className="w-full">
+                {uploading ? stepLabel : `Upload & extract (${files.length} photo${files.length !== 1 ? "s" : ""})`}
               </Button>
             )}
           </CardBody>
@@ -393,8 +452,8 @@ export default function NewInvoicePage() {
 
       {/* Bottom action button */}
       {mode === "file" && (
-        <Button className="w-full" onClick={handleUpload} disabled={!file || uploading} loading={uploading}>
-          {uploading ? stepLabel : ocrEnabled ? "Upload & extract" : "Upload invoice + add lines manually"}
+        <Button className="w-full" onClick={handleExtractAndCreate} disabled={files.length === 0 || uploading} loading={uploading}>
+          {uploading ? stepLabel : "Upload & extract"}
         </Button>
       )}
       {mode === "csv" && (
