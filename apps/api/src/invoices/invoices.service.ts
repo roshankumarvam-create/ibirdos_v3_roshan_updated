@@ -803,7 +803,5 @@ function parseDollars(v: string): number {
 }
 
 function cleanIngredientName(raw: string): string {
-  // Strip leading all-caps SKU token (e.g. "BBRLIMP", "SYS", "IMP/MCC") followed by a space
-  const cleaned = raw.replace(/^[A-Z][A-Z0-9/_]{2,}\s+/, "").trim();
-  return (cleaned || raw.trim()).slice(0, 120);
+  return raw.trim().slice(0, 120);
 }
