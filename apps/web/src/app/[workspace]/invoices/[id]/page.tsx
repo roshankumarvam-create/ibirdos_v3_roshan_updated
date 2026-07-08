@@ -291,6 +291,10 @@ export default function InvoiceReviewPage({
         </Card>
       )}
 
+      {isEditable && invoice.lines.length > 0 && (
+        <ReconciliationPanel invoice={invoice} onAddMissingLine={() => setShowAddForm(true)} />
+      )}
+
       {error && (
         <Card className="border-danger/30 bg-danger/5">
           <CardBody><div className="text-sm text-danger">{error}</div></CardBody>
@@ -384,6 +388,105 @@ export default function InvoiceReviewPage({
         )}
       </Card>
     </div>
+  );
+}
+
+// ─── Reconciliation panel (client-side audit, informational only) ───────────
+
+const RECONCILE_TOLERANCE_CENTS = 1;
+
+function fmtDollars(cents: number): string {
+  return (cents / 100).toFixed(2);
+}
+
+function ReconciliationPanel({
+  invoice,
+  onAddMissingLine,
+}: {
+  invoice: InvoiceDTO;
+  onAddMissingLine: () => void;
+}) {
+  const activeLines = invoice.lines.filter((l) => !l.excluded);
+
+  // 1. Total check — sum of non-excluded lines vs invoice.totalCents
+  const lineSum = activeLines.reduce((s, l) => s + Number(l.extendedPriceCents), 0);
+  const totalCents = Number(invoice.totalCents ?? 0);
+  const hasTotal = totalCents > 0;
+  const totalDiff = lineSum - totalCents;
+  const totalsMismatch = hasTotal && Math.abs(totalDiff) > RECONCILE_TOLERANCE_CENTS;
+
+  // 2. Math-inconsistent lines — independent client-side check, does not read/write needsReview
+  const mathIssues = activeLines
+    .map((l) => {
+      const qty = Number(l.quantity);
+      const unitPriceCents = Number(l.unitPriceCents);
+      const stated = Number(l.extendedPriceCents);
+      const expected = Math.round(qty * unitPriceCents);
+      return { line: l, expected, stated, diff: stated - expected };
+    })
+    .filter((x) => Math.abs(x.diff) > RECONCILE_TOLERANCE_CENTS);
+
+  return (
+    <Card className="border-accent-500/20">
+      <CardHeader>
+        <CardTitle>Reconciliation check</CardTitle>
+        <CardDescription>Automatic checks, for your review — does not block saving.</CardDescription>
+      </CardHeader>
+      <CardBody className="space-y-4">
+
+        {/* 1. Total check */}
+        <div className="text-sm">
+          {!hasTotal ? (
+            <span className="text-text-tertiary">No invoice total to check against.</span>
+          ) : totalsMismatch ? (
+            <div className="text-warning">
+              <span className="font-medium">⚠ Totals don&apos;t match</span>
+              <span className="text-text-secondary">
+                {" "}— Invoice total: ${fmtDollars(totalCents)}, Extracted lines: ${fmtDollars(lineSum)},
+                Difference: ${fmtDollars(Math.abs(totalDiff))}. Likely cause: missing or misread lines.
+              </span>
+            </div>
+          ) : (
+            <span className="text-success font-medium">✓ Totals match</span>
+          )}
+        </div>
+
+        {/* 2. Math-inconsistent lines */}
+        <div className="text-sm">
+          {mathIssues.length === 0 ? (
+            <span className="text-success font-medium">✓ All line math checks out.</span>
+          ) : (
+            <div className="space-y-1.5">
+              <span className="text-warning font-medium">
+                ⚠ {mathIssues.length} line{mathIssues.length === 1 ? "" : "s"} don&apos;t add up
+              </span>
+              <ul className="space-y-1 pl-4 list-disc text-text-secondary">
+                {mathIssues.map(({ line, expected, stated }) => (
+                  <li key={line.id}>
+                    <span className="text-text-primary">{line.descriptionRaw}</span>
+                    {" — "}{line.quantity} × ${(Number(line.unitPriceCents) / 100).toFixed(4)} = ${fmtDollars(expected)},
+                    {" "}but line shows ${fmtDollars(stated)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* 3. Missing products */}
+        <div className="flex items-center justify-between gap-4 pt-1 border-t border-bg-border">
+          <p className="text-xs text-text-tertiary">
+            {totalsMismatch
+              ? "The total gap suggests some products may be missing — add them here."
+              : "Notice a product the AI missed? Add it manually."}
+          </p>
+          <Button variant="secondary" size="sm" onClick={onAddMissingLine}>
+            + Add missing product
+          </Button>
+        </div>
+
+      </CardBody>
+    </Card>
   );
 }
 
