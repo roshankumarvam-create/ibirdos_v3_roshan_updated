@@ -508,7 +508,7 @@ export async function extractInvoice(params: ExtractParams): Promise<ExtractResu
       content: [
         {
           type: "text",
-          text: `${USER_PROMPT}\n\nFilename: ${params.filename ?? "unknown"}${imageBlocks.length > 1 ? ` (${imageBlocks.length} pages)` : ""}`,
+          text: `${USER_PROMPT}\n\nFilename: ${params.filename ?? "unknown"}${imageBlocks.length > 1 ? ` — this invoice spans ${imageBlocks.length} pages/photos, ALL part of the SAME invoice (not separate invoices). Extract line items from EVERY one of the ${imageBlocks.length} images provided and combine them into ONE "lines" array covering all pages. Only set isPartial=true if the invoice still continues beyond the LAST image provided.` : ""}`,
         },
         ...imageBlocks,
       ],
