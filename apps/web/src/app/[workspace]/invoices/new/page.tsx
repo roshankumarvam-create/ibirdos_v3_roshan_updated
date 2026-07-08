@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label } from "@ibirdos/ui";
-import { api } from "@/lib/api";
+import { api, ensureCsrfToken } from "@/lib/api";
 import type { Route } from "next";
 
 interface VendorOption {
@@ -103,10 +103,7 @@ export default function NewInvoicePage() {
       const fd = new FormData();
       files.forEach((f) => fd.append("file", f));
 
-      // CSRF token (same pattern as api.ts ensureCsrfToken)
-      const csrfMatch = document.cookie.match(/(?:^|;\s*)ibirdos\.csrf=([^;]+)/);
-      const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]!) : null;
-
+      const csrfToken = await ensureCsrfToken();
       const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001") + "/api/v1";
       const res = await fetch(`${apiBase}/invoices/extract`, {
         method: "POST",

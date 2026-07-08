@@ -54,7 +54,7 @@ function readCsrfCookie(): string | null {
 let _csrfToken: string | null = null;
 let _csrfInFlight: Promise<void> | null = null;
 
-async function ensureCsrfToken(): Promise<string | null> {
+export async function ensureCsrfToken(): Promise<string | null> {
   if (typeof window === "undefined") return null; // SSR — guard bypasses server-side calls
   if (_csrfToken) return _csrfToken;
 

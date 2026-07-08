@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label, Textarea, Select, Switch } from "@ibirdos/ui";
 import { toCanonical } from "@ibirdos/types";
-import { api } from "@/lib/api";
+import { api, ensureCsrfToken } from "@/lib/api";
 import { normalizeUnit, dimensionFromNativeUnit } from "@/lib/recipe-import-helpers";
 import type { Route } from "next";
 
@@ -248,10 +248,7 @@ export default function NewRecipePage() {
       const fd = new FormData();
       extractFiles.forEach(f => fd.append("file", f));
 
-      // CSRF token (same pattern as api.ts ensureCsrfToken)
-      const csrfMatch = document.cookie.match(/(?:^|;\s*)ibirdos\.csrf=([^;]+)/);
-      const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]!) : null;
-
+      const csrfToken = await ensureCsrfToken();
       const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001") + "/api/v1";
       const res = await fetch(`${apiBase}/recipes/extract`, {
         method: "POST",
