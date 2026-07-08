@@ -290,7 +290,11 @@ export default function NewRecipePage() {
       if (d.portionVolumeFloz && !portionVolumeFloz) setPortionVolumeFloz(String(d.portionVolumeFloz));
       if (d.prepTimeMinutes != null && !prepTimeMinutes) setPrepTimeMinutes(String(d.prepTimeMinutes));
       if (d.cookTimeMinutes != null && !cookTimeMinutes) setCookTimeMinutes(String(d.cookTimeMinutes));
-      if (d.procedure   && !procedure)      setProcedure(d.procedure);
+      if (d.procedure && !procedure) {
+        setProcedure(d.procedure);
+      } else if (!procedure && Array.isArray(d.procedureSteps) && d.procedureSteps.length > 0) {
+        setProcedure(d.procedureSteps.join("\n"));
+      }
       if (d.goalFoodCostPct != null && !goalFoodCostPct) setGoalFoodCostPct(String(d.goalFoodCostPct));
       if (d.actualSellPriceCents != null && !actualSellPriceDollar)
         setActualSellPriceDollar((d.actualSellPriceCents / 100).toFixed(2));
