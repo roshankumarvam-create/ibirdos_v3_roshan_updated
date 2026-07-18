@@ -273,7 +273,9 @@ export class InvoicesService {
 
       if (!ingredientId) {
         const name = cleanIngredientName(line.descriptionRaw);
-        const { dimension, canonicalUnit, preferredDisplayUnit } = inferDimension(line.packUnit ?? line.unit);
+        const { dimension, canonicalUnit, preferredDisplayUnit } = inferDimension(
+          line.packSize ? (line.packUnit ?? line.unit) : line.unit,
+        );
 
         // Try fuzzy match via the match() service first (confidence >= 0.85 threshold)
         let autoCreatedUnmatched = false;
