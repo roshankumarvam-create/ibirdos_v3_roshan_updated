@@ -1042,13 +1042,13 @@ function LineRow({
         )}
         {patchError && <div className="text-[10px] text-danger mt-0.5">{patchError}</div>}
       </td>
-      {/* Qty — editable, min 64px wide */}
+      {/* Qty — editable, min 96px wide */}
       <td className="px-4 py-2 text-right tabular-nums">
         {disabled ? (
           <span className="text-text-secondary">{line.quantity}</span>
         ) : (
           <input
-            className={`${inputCls} text-right min-w-[64px]`}
+            className={`${inputCls} text-right min-w-[96px]`}
             type="number" min="0" step="any"
             value={qty}
             onChange={(e) => handleQtyChange(e.target.value)}
@@ -1087,7 +1087,7 @@ function LineRow({
           <div className="relative">
             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary text-xs pointer-events-none">$</span>
             <input
-              className={`${inputCls} pl-4 text-right w-24`}
+              className={`${inputCls} pl-4 text-right min-w-[104px]`}
               type="number" min="0" step="0.0001"
               value={unitPrice}
               onChange={(e) => handleUnitPriceChange(e.target.value)}
@@ -1109,7 +1109,7 @@ function LineRow({
           <div className="relative">
             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary text-xs pointer-events-none">$</span>
             <input
-              className={`${inputCls} pl-4 text-right w-24`}
+              className={`${inputCls} pl-4 text-right min-w-[104px]`}
               type="number" min="0" step="0.01"
               value={extPrice}
               onChange={(e) => setExtPrice(e.target.value)}
