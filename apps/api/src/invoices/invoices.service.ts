@@ -215,6 +215,7 @@ export class InvoicesService {
       category?: "FOOD_INGREDIENT" | "PACKAGING" | "LABOR" | "DELIVERY" | "TAX" | "DISCOUNT" | "IGNORED";
       committedIngredientId?: string | null;
       vendorItemCode?: string | null;
+      reorderThreshold?: number | null;
       needsReview?: boolean;
       excluded?: boolean;
       notes?: string;
@@ -355,7 +356,7 @@ export class InvoicesService {
       // Without this, we'd store cents-per-case instead of cents-per-gram.
       const ingMeta = await prisma.ingredient.findUnique({
         where: { id: ingredientId },
-        select: { dimension: true, densityGPerMl: true, currentCostMicrocents: true, name: true, vendorItemCode: true },
+        select: { dimension: true, densityGPerMl: true, currentCostMicrocents: true, name: true, vendorItemCode: true, reorderThresholdCanonical: true },
       }).catch(() => null);
 
       // Opportunistic backfill: ingredients matched via alias/fuzzy (not just-created) may
@@ -382,6 +383,25 @@ export class InvoicesService {
           });
         } catch {
           // unknown unit — canonicalQty stays as totalUnitQty (count fallback)
+        }
+      }
+
+      // Opportunistic reorder-threshold set: reviewer-entered value on the invoice line
+      // (in the line's unit), converted to the ingredient's canonical unit. Fill-only-if-null
+      // -- never overwrite a threshold already set here or on the ingredient page. No blanket
+      // default is ever applied; a blank line leaves the ingredient with no threshold, same as today.
+      if (ingMeta && ingMeta.reorderThresholdCanonical == null && line.reorderThreshold != null) {
+        try {
+          const thresholdCanonical = toCanonical(Number(line.reorderThreshold), resolvedUnit, {
+            dimension: ingMeta.dimension,
+            densityGPerMl: ingMeta.densityGPerMl != null ? Number(ingMeta.densityGPerMl) : null,
+          });
+          await prisma.ingredient.update({
+            where: { id: ingredientId },
+            data: { reorderThresholdCanonical: thresholdCanonical },
+          });
+        } catch (err: any) {
+          log.warn({ ingredientId, err: err.message }, "reorder threshold conversion/backfill failed");
         }
       }
 

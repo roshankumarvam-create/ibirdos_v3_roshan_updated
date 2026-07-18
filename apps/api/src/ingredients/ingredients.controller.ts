@@ -55,6 +55,12 @@ export class IngredientsController {
     return ok(await this.svc.create(ctx, body));
   }
 
+  @Get("missing-threshold-count")
+  @RequirePermission("ingredient.read")
+  async missingThresholdCount(@CurrentCtx() ctx: TenantContext) {
+    return ok({ count: await this.svc.countMissingThreshold(ctx) });
+  }
+
   @Get(":id")
   @RequirePermission("ingredient.read")
   async get(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {

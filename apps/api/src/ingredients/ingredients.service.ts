@@ -118,6 +118,13 @@ export class IngredientsService implements OnApplicationBootstrap {
     return this.toDTO(ing);
   }
 
+  /** Count of active ingredients with no reorder threshold -- alerts never fire for these. */
+  async countMissingThreshold(ctx: TenantContext): Promise<number> {
+    return prisma.ingredient.count({
+      where: { workspaceId: ctx.workspaceId, deletedAt: null, reorderThresholdCanonical: null },
+    });
+  }
+
   async list(ctx: TenantContext, opts: { search?: string; category?: string; limit?: number; cursor?: string }) {
     const limit = Math.min(opts.limit ?? 50, 100);
     const repo = tenantScoped(prisma.ingredient, ctx);

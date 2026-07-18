@@ -48,6 +48,9 @@ const UpdateLineSchema = z.object({
   category: z.enum(["FOOD_INGREDIENT", "PACKAGING", "LABOR", "DELIVERY", "TAX", "DISCOUNT", "IGNORED"]).optional(),
   committedIngredientId: z.string().nullable().optional(),
   vendorItemCode: z.string().nullable().optional(),
+  // Optional reorder threshold in this line's unit. Blank/null means no threshold
+  // set (same as today) -- never auto-filled, only what the reviewer types.
+  reorderThreshold: z.number().nonnegative().nullable().optional(),
   needsReview: z.boolean().optional(),
   excluded: z.boolean().optional(),
   notes: z.string().max(500).optional(),

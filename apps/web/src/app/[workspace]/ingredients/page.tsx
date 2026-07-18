@@ -34,6 +34,12 @@ export default async function IngredientsPage({
   );
   const items = res.data?.items ?? [];
 
+  const missingThresholdRes = await api.get<{ count: number }>(
+    "/ingredients/missing-threshold-count",
+    { cookies: c },
+  );
+  const missingThresholdCount = missingThresholdRes.data?.count ?? 0;
+
   const canCreate = user.role === "OWNER" || user.role === "MANAGER";
 
   return (
@@ -51,6 +57,13 @@ export default async function IngredientsPage({
           </Link>
         )}
       </header>
+
+      {missingThresholdCount > 0 && (
+        <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-2.5 text-sm text-text-secondary">
+          <span className="font-medium text-warning">{missingThresholdCount}</span>{" "}
+          ingredient{missingThresholdCount === 1 ? "" : "s"} have no reorder threshold set — alerts won&apos;t fire for them. Open an ingredient below to set one.
+        </div>
+      )}
 
       <form className="flex gap-2">
         <input

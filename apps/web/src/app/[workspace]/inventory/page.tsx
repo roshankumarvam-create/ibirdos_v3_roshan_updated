@@ -59,6 +59,7 @@ function InventoryContent() {
   const [ingredients, setIngredients] = useState<IngredientStock[]>([]);
   const [loading, setLoading] = useState(true);
   const [reversing, setReversing] = useState<string | null>(null);
+  const [missingThresholdCount, setMissingThresholdCount] = useState(0);
 
   // Auto-switch to stock tab when filter is active
   useEffect(() => {
@@ -70,11 +71,13 @@ function InventoryContent() {
       api.get<{ items: Alert[] }>("/inventory/alerts/low-stock?status=OPEN"),
       api.get<{ items: Tx[] }>("/inventory/transactions?limit=50"),
       api.get<{ items: IngredientStock[] }>("/ingredients?limit=100"),
-    ]).then(([alertsRes, txRes, ingRes]) => {
+      api.get<{ count: number }>("/ingredients/missing-threshold-count"),
+    ]).then(([alertsRes, txRes, ingRes, missingRes]) => {
       if (ingRes.error) console.error("[inventory] ingredients fetch failed:", ingRes.error);
       setAlerts(alertsRes.data?.items ?? []);
       setTxs(txRes.data?.items ?? []);
       setIngredients(ingRes.data?.items ?? []);
+      setMissingThresholdCount(missingRes.data?.count ?? 0);
       setLoading(false);
     });
   }, []);
@@ -138,6 +141,18 @@ function InventoryContent() {
           </Link>
         </div>
       </header>
+
+      {missingThresholdCount > 0 && (
+        <div className="flex items-center justify-between gap-4 rounded-md border border-warning/30 bg-warning/5 px-4 py-2.5 text-sm">
+          <span className="text-text-secondary">
+            <span className="font-medium text-warning">{missingThresholdCount}</span>{" "}
+            ingredient{missingThresholdCount === 1 ? "" : "s"} have no reorder threshold set — alerts won&apos;t fire for them.
+          </span>
+          <Link href={`/${workspace}/ingredients` as any} className="shrink-0 text-accent-500 hover:underline">
+            Set thresholds
+          </Link>
+        </div>
+      )}
 
       {/* Low-stock alerts */}
       {alerts.length > 0 && (

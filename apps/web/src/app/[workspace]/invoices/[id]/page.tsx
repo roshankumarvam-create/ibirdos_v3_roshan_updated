@@ -37,6 +37,7 @@ interface InvoiceLineDTO {
   lineStatus: "in_stock" | "out_of_stock" | null;
   packSize: number | string | null;
   packUnit: string | null;
+  reorderThreshold: number | string | null;
   excluded: boolean;
 }
 
@@ -946,6 +947,7 @@ function LineRow({
   const [desc, setDesc] = useState(line.descriptionRaw);
   const [sku, setSku] = useState(line.vendorItemCode ?? "");
   const [packUnit, setPackUnit] = useState(line.packUnit ?? "");
+  const [reorderThreshold, setReorderThreshold] = useState(line.reorderThreshold != null ? String(line.reorderThreshold) : "");
   const [unit, setUnit] = useState(line.unit);
   const [qty, setQty] = useState(String(line.quantity));
   const [unitPrice, setUnitPrice] = useState((effectiveUnitPriceCents(line) / 100).toFixed(4));
@@ -1057,6 +1059,26 @@ function LineRow({
             onChange={(e) => setPackUnit(e.target.value)}
             onBlur={() => patch({ packUnit: packUnit.trim() || null } as any)}
             placeholder="Pack/size (e.g. 4/10 LB)"
+          />
+        )}
+        {/* Reorder threshold — optional, in this line's unit. Blank = no threshold (no change). */}
+        {disabled ? (
+          line.reorderThreshold != null && (
+            <div className="text-[10px] text-text-tertiary mt-0.5">
+              Reorder below {line.reorderThreshold} {line.unit}
+            </div>
+          )
+        ) : (
+          <input
+            type="number" min="0" step="any"
+            className={`${inputCls} mt-1`}
+            value={reorderThreshold}
+            onChange={(e) => setReorderThreshold(e.target.value)}
+            onBlur={() => {
+              const n = parseFloat(reorderThreshold);
+              patch({ reorderThreshold: reorderThreshold.trim() && !isNaN(n) && n >= 0 ? n : null } as any);
+            }}
+            placeholder={`Reorder threshold (optional, in ${line.unit})`}
           />
         )}
         {patchError && <div className="text-[10px] text-danger mt-0.5">{patchError}</div>}

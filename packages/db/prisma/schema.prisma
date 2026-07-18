@@ -276,6 +276,10 @@ model InvoiceLine {
   lineStatus            String?             @map("line_status")
   packSize              Decimal?            @map("pack_size") @db.Decimal(14, 4)
   packUnit              String?             @map("pack_unit")
+  /// Reviewer-entered reorder threshold, in this line's unit (not canonical).
+  /// Optional -- converted to the ingredient's canonical unit and applied
+  /// (fill-only-if-null) at confirm time.
+  reorderThreshold      Decimal?            @map("reorder_threshold") @db.Decimal(14, 4)
   needsReview           Boolean             @default(false) @map("needs_review")
   excluded              Boolean             @default(false)
   notes                 String?
