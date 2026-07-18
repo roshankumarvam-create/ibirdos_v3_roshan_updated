@@ -132,9 +132,7 @@ function InventoryContent() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Link href={`/${workspace}/inventory/import` as any}>
-            <Button variant="secondary">Import CSV/Excel</Button>
-          </Link>
+          <Button variant="secondary" disabled>Import CSV/Excel</Button>
           <Link href={`/${workspace}/inventory/adjust` as any}>
             <Button>+ Manual adjustment</Button>
           </Link>
