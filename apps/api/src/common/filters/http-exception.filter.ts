@@ -88,12 +88,39 @@ export class HttpExceptionFilter implements ExceptionFilter {
         status = HttpStatus.NOT_FOUND;
         code = ErrorCodes.NOT_FOUND;
         message = "Resource not found";
+      } else if (exception.code === "P2022") {
+        // Schema drift: the Prisma client expects a column that doesn't exist in
+        // this database (e.g. a field added to schema.prisma whose manual ALTER
+        // was never run against this environment). Distinct message so this class
+        // of bug is diagnosable from the response alone, not just server logs.
+        code = ErrorCodes.INTERNAL_ERROR;
+        message = "A database configuration issue is preventing this request. Our team has been notified.";
+        log.error(
+          { code: exception.code, meta: exception.meta, message: exception.message },
+          "prisma schema mismatch (P2022) — likely an un-applied column/migration",
+        );
       } else {
+        code = ErrorCodes.INTERNAL_ERROR;
+        message = "A database error occurred. Our team has been notified.";
         log.error(
           { code: exception.code, meta: exception.meta, message: exception.message },
           "unhandled prisma error",
         );
       }
+    }
+    // ---- Prisma errors that aren't "known request" errors (malformed query
+    // shape, connection failure) — still clearly a DB-layer problem, so give the
+    // same distinct message rather than falling through to "Something went wrong" ----
+    else if (
+      exception instanceof Prisma.PrismaClientValidationError ||
+      exception instanceof Prisma.PrismaClientInitializationError
+    ) {
+      code = ErrorCodes.INTERNAL_ERROR;
+      message = "A database error occurred. Our team has been notified.";
+      log.error(
+        { err: exception.message, name: exception.constructor.name, url: req.url },
+        "unhandled prisma client error",
+      );
     }
     // ---- Truly unknown ----
     else {
