@@ -265,6 +265,7 @@ model InvoiceLine {
   quantity              Decimal             @db.Decimal(14, 4)
   unit                  String
   unitPriceCents        Int                 @map("unit_price_cents")
+  unitPriceExact        Decimal?            @map("unit_price_exact") @db.Decimal(14, 5)
   extendedPriceCents    Int                 @map("extended_price_cents")
   category              InvoiceLineCategory @default(FOOD_INGREDIENT)
   proposedIngredientId  String?             @map("proposed_ingredient_id")

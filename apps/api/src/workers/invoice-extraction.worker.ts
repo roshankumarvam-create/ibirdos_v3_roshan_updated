@@ -208,6 +208,7 @@ const worker = new Worker<JobData>(
               quantity: line.quantity,
               unit: line.unit,
               unitPriceCents: Math.round(line.unitPriceCents),
+              unitPriceExact: line.unitPrice ?? null,
               extendedPriceCents: Math.round(line.extendedPriceCents),
               category: category as any,
               vendorItemCode: line.vendorItemCode ?? null,

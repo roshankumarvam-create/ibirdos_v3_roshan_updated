@@ -41,6 +41,9 @@ const UpdateLineSchema = z.object({
   quantity: z.number().positive().optional(),
   unit: z.string().optional(),
   unitPriceCents: z.number().int().optional(),
+  // Nullable: manual unit-price edits pass null here to clear the stale extracted
+  // full-precision value so display/math fall back to the freshly-edited cents.
+  unitPriceExact: z.number().nullable().optional(),
   extendedPriceCents: z.number().int().optional(),
   category: z.enum(["FOOD_INGREDIENT", "PACKAGING", "LABOR", "DELIVERY", "TAX", "DISCOUNT", "IGNORED"]).optional(),
   committedIngredientId: z.string().nullable().optional(),

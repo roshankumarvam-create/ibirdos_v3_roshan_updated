@@ -26,6 +26,7 @@ interface InvoiceLineDTO {
   quantity: number | string;
   unit: string;
   unitPriceCents: number;
+  unitPriceExact: number | string | null;
   extendedPriceCents: number;
   category: "FOOD_INGREDIENT" | "PACKAGING" | "LABOR" | "DELIVERY" | "TAX" | "DISCOUNT" | "IGNORED";
   proposedIngredientId: string | null;
@@ -399,6 +400,20 @@ function fmtDollars(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+// Unit-price read-preference: full-precision extracted value, else the legacy cents
+// field, else (when neither is reliable) derive it from ext/qty.
+function effectiveUnitPriceCents(l: {
+  unitPriceExact: number | string | null;
+  unitPriceCents: number;
+  extendedPriceCents: number;
+  quantity: number | string;
+}): number {
+  if (l.unitPriceExact != null) return Number(l.unitPriceExact) * 100;
+  if (l.unitPriceCents) return Number(l.unitPriceCents);
+  const qty = Number(l.quantity);
+  return qty > 0 ? Number(l.extendedPriceCents) / qty : Number(l.extendedPriceCents);
+}
+
 function ReconciliationPanel({
   invoice,
   onAddMissingLine,
@@ -422,7 +437,7 @@ function ReconciliationPanel({
   const mathIssues = activeLines
     .map((l) => {
       const qty = Number(l.quantity);
-      const unitPriceCents = Number(l.unitPriceCents);
+      const unitPriceCents = effectiveUnitPriceCents(l);
       const stated = Number(l.extendedPriceCents);
       const expected = Math.round(qty * unitPriceCents);
       const tolCents = Math.max(2, qty * 0.5 + 1); // dollars: max(0.02, qty*0.005+0.01)
@@ -468,7 +483,7 @@ function ReconciliationPanel({
                 {mathIssues.map(({ line, expected, stated }) => (
                   <li key={line.id}>
                     <span className="text-text-primary">{line.descriptionRaw}</span>
-                    {" — "}{line.quantity} × ${(Number(line.unitPriceCents) / 100).toFixed(4)} = ${fmtDollars(expected)},
+                    {" — "}{line.quantity} × ${(effectiveUnitPriceCents(line) / 100).toFixed(4)} = ${fmtDollars(expected)},
                     {" "}but line shows ${fmtDollars(stated)}
                   </li>
                 ))}
@@ -933,7 +948,7 @@ function LineRow({
   const [packUnit, setPackUnit] = useState(line.packUnit ?? "");
   const [unit, setUnit] = useState(line.unit);
   const [qty, setQty] = useState(String(line.quantity));
-  const [unitPrice, setUnitPrice] = useState((Number(line.unitPriceCents) / 100).toFixed(4));
+  const [unitPrice, setUnitPrice] = useState((effectiveUnitPriceCents(line) / 100).toFixed(4));
   const [extPrice, setExtPrice] = useState((Number(line.extendedPriceCents) / 100).toFixed(2));
 
   async function patch(updates: Partial<InvoiceLineDTO>) {
@@ -1086,7 +1101,7 @@ function LineRow({
       {/* Unit price — editable, auto-computes ext price */}
       <td className="px-4 py-2 text-right tabular-nums">
         {disabled ? (
-          <span className="text-text-secondary">${(Number(line.unitPriceCents) / 100).toFixed(4).replace(/\.?0+$/, "")}</span>
+          <span className="text-text-secondary">${(effectiveUnitPriceCents(line) / 100).toFixed(4).replace(/\.?0+$/, "")}</span>
         ) : (
           <div className="relative">
             <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary text-xs pointer-events-none">$</span>
@@ -1098,7 +1113,9 @@ function LineRow({
               onBlur={() => {
                 const cents = Math.round((parseFloat(unitPrice) || 0) * 100);
                 const ext = computeExt(qty, unitPrice);
-                patch({ unitPriceCents: cents, extendedPriceCents: ext });
+                // Manual override — clear the extracted full-precision value so display/math
+                // read the freshly-edited cents instead of the now-stale exact price.
+                patch({ unitPriceCents: cents, unitPriceExact: null, extendedPriceCents: ext });
                 setExtPrice((ext / 100).toFixed(2));
               }}
             />

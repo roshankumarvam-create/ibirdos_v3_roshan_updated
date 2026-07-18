@@ -34,6 +34,9 @@ const InvoiceLineSchema = z.object({
   vendorItemCode:     z.string().nullish(),
   gtin:               z.string().nullish(),
   unitPriceCents:     z.number().nullish().transform(v => v ?? 0),
+  // Full-precision printed unit price in dollars (e.g. 11.369), uncapped by cents rounding.
+  // Null when the model couldn't isolate a clean decimal — callers fall back to unitPriceCents.
+  unitPrice:          z.number().nullish(),
   extendedPriceCents: z.number().nullish().transform(v => v ?? 0),
   lineType:           z.enum(["inventory", "misc_charge"]).nullish().transform(v => v ?? "inventory"),
   lineStatus:         z.enum(["in_stock", "out_of_stock"]).nullish().transform(v => v ?? "in_stock"),
@@ -120,7 +123,8 @@ LINE ITEMS — extract one object per actual product row. For each line:
 - descriptionRaw: clean product name. DO NOT confabulate. Expand abbreviations only when 100% certain.
 - vendorItemCode: ONLY the numeric ITEM CODE / SKU column (e.g. 7-digit Sysco codes like 1234567). Do NOT use GTIN/UPC barcodes. Return null if unclear — do NOT guess.
 - gtin: barcode/UPC/GTIN if separately printed near barcode (12-14 digit number). null otherwise.
-- unitPriceCents: integer cents (e.g. $4.331/lb → 433 cents, rounded)
+- unitPrice: the printed unit price as a plain decimal number, at FULL printed precision — do NOT round to 2 decimals (e.g. 11.369, not 11.37). This matters most for catch-weight/mill pricing (3+ decimals).
+- unitPriceCents: integer cents (e.g. $4.331/lb → 433 cents, rounded — legacy field, derive as round(unitPrice*100))
 - extendedPriceCents: integer cents. Use the PRINTED value from the invoice line — trust the printed total over arithmetic. If qty × unitPriceCents differs from printed by more than $0.01 (or $0.05 for catch-weight items), set needsReview=true.
 - lineType: 'inventory' for products going into stock; 'misc_charge' for fuel surcharge, delivery fee, service charge, environmental fee, etc.
 - lineStatus: 'out_of_stock' if QTY shows "OUT", else 'in_stock' (or omit — defaults to 'in_stock')
@@ -129,6 +133,7 @@ LINE ITEMS — extract one object per actual product row. For each line:
 
 CATCH-WEIGHT RULE: If the line shows a weight (e.g. 40.00) next to a per-lb price (e.g. $4.331/lb):
 - quantity = the weight (40.00), unit = 'LB'
+- unitPrice = the full-precision per-lb price as printed (4.331) — preserve every printed decimal
 - unitPriceCents = per-lb price in cents (433, rounded)
 - extendedPriceCents = use the PRINTED extended value on the invoice line
 - If quantity × unitPriceCents differs from printed extended by more than $0.05, set needsReview=true
@@ -142,6 +147,7 @@ MISC CHARGES (fuel surcharge, delivery, service charges):
 - Set lineType='misc_charge'
 - vendorItemCode=null, gtin=null, storageClass=null, size=null
 - descriptionRaw = the charge name (e.g. 'Fuel Surcharge')
+- unitPrice = the charge amount as a decimal dollar figure (qty = 1)
 - unitPriceCents = extendedPriceCents (qty = 1)
 - unit = 'EA'
 
@@ -190,6 +196,7 @@ Return JSON. Use null (not undefined, not omitted) for missing fields. Example s
       "descriptionRaw": "Beef Ground",
       "vendorItemCode": "6666667",
       "gtin": null,
+      "unitPrice": 4.331,
       "unitPriceCents": 433,
       "extendedPriceCents": 17324,
       "lineType": "inventory",
@@ -250,6 +257,8 @@ ORDERED vs INVOICED — CRITICAL: each block shows Quantity / Price / Total TWIC
 QUANTITY / UNIT / PRICE — always return the INVOICED (billed) values only.
 unit_price and line_total MUST be a single plain decimal number (e.g. 29.10).
 NO "$", NO commas, NO ranges, NO lists, NO slash-separated pairs.
+Preserve unit_price at FULL printed precision — do NOT round to 2 decimals. Catch-weight/mill
+pricing is often printed with 3+ decimals (e.g. 11.369, 4.446); return it exactly as printed.
 
 - Simple case: "Quantity: 1 CA  Price: $25.25  Total: $25.25"
   → quantity=1, unit="CS" (CA = case = CS), unit_price=25.25, line_total=25.25.
@@ -318,6 +327,7 @@ function normalizeLine(raw: any): Record<string, unknown> {
     unit: raw.unit ?? raw.uom ?? null,
     size: raw.size ?? raw.pack_size ?? raw.packType ?? raw.pack ?? null,
     unitPriceCents: toCents(raw.unitPriceCents ?? raw.unit_price ?? raw.price),
+    unitPrice: toNum(raw.unitPrice ?? raw.unit_price ?? raw.price),
     extendedPriceCents: toCents(
       raw.extendedPriceCents ?? raw.line_total ?? raw.total ?? raw.extended
     ),

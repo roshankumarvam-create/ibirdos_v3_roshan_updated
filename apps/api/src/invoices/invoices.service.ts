@@ -210,6 +210,7 @@ export class InvoicesService {
       quantity?: number;
       unit?: string;
       unitPriceCents?: number;
+      unitPriceExact?: number | null;
       extendedPriceCents?: number;
       category?: "FOOD_INGREDIENT" | "PACKAGING" | "LABOR" | "DELIVERY" | "TAX" | "DISCOUNT" | "IGNORED";
       committedIngredientId?: string | null;
