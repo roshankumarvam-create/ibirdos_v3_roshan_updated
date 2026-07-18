@@ -121,8 +121,13 @@ LINE ITEMS — extract one object per actual product row. For each line:
 - unit: the unit being PURCHASED — 'CS' (case), 'SP' (split), 'EA' (each), 'LB' (pound), 'BG' (bag), etc.
 - size: pack size text exactly as printed — e.g. '4/10 LB' or '12/3 LB' (preserve exactly)
 - descriptionRaw: clean product name. DO NOT confabulate. Expand abbreviations only when 100% certain.
-- vendorItemCode: ONLY the numeric ITEM CODE / SKU column (e.g. 7-digit Sysco codes like 1234567). Do NOT use GTIN/UPC barcodes. Return null if unclear — do NOT guess.
-- gtin: barcode/UPC/GTIN if separately printed near barcode (12-14 digit number). null otherwise.
+- vendorItemCode: the VENDOR'S OWN item/product number for this line — the number a buyer would use to reorder this exact product from this vendor. Extraction rules, in priority order:
+  1. The code in a column literally labeled "ITEM CODE", "Item Number", "Item #", "Product #", "SKU", or "Dist #".
+  2. Sysco-style invoices often print TWO codes near the description: a shorter product/grade code (often starting with a letter, e.g. "D4826AH") AND a longer 6-8 digit ITEM CODE in the ITEM CODE column just left of UNIT PRICE. Return the 6-8 digit ITEM CODE (e.g. "3317211") — NOT the letter-prefixed product/grade code.
+  3. It is NOT the GTIN/UPC barcode (12-14 digits, often space-separated like "6 65393 22298 1") — that goes in gtin instead. If both an item number and a UPC are printed on the same line, return the item number here and the UPC in gtin.
+  4. It is NOT the pack size, NOT the SIZE column, NOT the storage class letter (C/F), NOT the account/customer number.
+  5. Return it as a plain string exactly as printed (digits/letters, no added spaces). Return null ONLY if no item/product number column exists on the invoice at all.
+- gtin: barcode/UPC/GTIN if separately printed near a barcode symbol (12-14 digit number, often space-separated — strip spaces). null otherwise. See vendorItemCode above for telling these apart when a line prints both.
 - unitPrice: the printed unit price as a plain decimal number, at FULL printed precision — do NOT round to 2 decimals (e.g. 11.369, not 11.37). This matters most for catch-weight/mill pricing (3+ decimals).
 - unitPriceCents: integer cents (e.g. $4.331/lb → 433 cents, rounded — legacy field, derive as round(unitPrice*100))
 - extendedPriceCents: integer cents. Use the PRINTED value from the invoice line — trust the printed total over arithmetic. If qty × unitPriceCents differs from printed by more than $0.01 (or $0.05 for catch-weight items), set needsReview=true.
@@ -156,6 +161,10 @@ SELF-CHECK before returning:
 2. If a printed INVOICE TOTAL / GRAND TOTAL exists on this page (isPartial=false, totalCents>0), compare total line sum (excluding out_of_stock) to it.
 3. If isPartial=true, skip the invoice total check — only validate against groupTotals.
 4. Re-read any low-confidence digits before giving up.
+
+TWO WORKED EXAMPLES for vendorItemCode (see the "lines" array below for the full JSON):
+- Sysco meat line prints "D4826AH" (product/grade code) AND "3317211" (ITEM CODE column) near "Beef Sirloin Tri Tip Pld Ch" — return vendorItemCode "3317211", NOT "4826AH".
+- A different vendor's line prints Item Number "SAL03034" and UPC "6 65393 22298 1" near a salad product — return vendorItemCode "SAL03034", gtin "665393222981" (UPC with spaces stripped).
 
 Return JSON. Use null (not undefined, not omitted) for missing fields. Example structure:
 {
@@ -202,6 +211,38 @@ Return JSON. Use null (not undefined, not omitted) for missing fields. Example s
       "lineType": "inventory",
       "lineStatus": "in_stock",
       "category": "MEATS",
+      "needsReview": false
+    },
+    {
+      "storageClass": "C",
+      "quantity": 78.5,
+      "unit": "LB",
+      "size": "RANDOM WT",
+      "descriptionRaw": "Beef Sirloin Tri Tip Pld Ch",
+      "vendorItemCode": "3317211",
+      "gtin": null,
+      "unitPrice": 11.369,
+      "unitPriceCents": 1137,
+      "extendedPriceCents": 89247,
+      "lineType": "inventory",
+      "lineStatus": "in_stock",
+      "category": "MEATS",
+      "needsReview": false
+    },
+    {
+      "storageClass": "C",
+      "quantity": 1,
+      "unit": "CS",
+      "size": "4/5 LB",
+      "descriptionRaw": "Salad Mix Spring",
+      "vendorItemCode": "SAL03034",
+      "gtin": "665393222981",
+      "unitPrice": 32.5,
+      "unitPriceCents": 3250,
+      "extendedPriceCents": 3250,
+      "lineType": "inventory",
+      "lineStatus": "in_stock",
+      "category": "PRODUCE",
       "needsReview": false
     },
     {
