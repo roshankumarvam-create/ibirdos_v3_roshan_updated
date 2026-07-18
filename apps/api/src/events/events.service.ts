@@ -633,6 +633,17 @@ export class EventsService {
       });
     }
 
+    // Freeze revenue alongside cost, first payment only. Fill-only-if-null: never
+    // overwrite an explicit quotedTotalOverrideCents or a previously-set
+    // quotedPriceCents -- this only backfills events that had neither, which is
+    // exactly the case where the KPI row was showing "Set quote first"/"No quote
+    // yet" despite a computed total being visible in the menu builder.
+    const needsRevenueFreeze =
+      !event.frozenAt && event.quotedTotalOverrideCents == null && event.quotedPriceCents == null;
+    const liveQuoteTotalCents = needsRevenueFreeze
+      ? computeLiveQuoteTotalCents(event.menuItems as any, event.markupPct)
+      : 0;
+
     // --- Persist: set paymentStatus=PAID, freeze, store shortages ---
     const updatedEvent = await prisma.event.update({
       where: { id: eventId },
@@ -643,6 +654,7 @@ export class EventsService {
           frozenRecipeCostsCents: recipeSnap,
           frozenIngredientPricesCents: ingredientSnap,
         }),
+        ...(needsRevenueFreeze && liveQuoteTotalCents > 0 ? { quotedPriceCents: liveQuoteTotalCents } : {}),
         inventoryCheckedAt: new Date(),
         inventoryShortages: shortages as any,
       } as any,
@@ -1112,6 +1124,29 @@ ${event.notes ? `<p style="font-size:13px;color:#666;margin-top:24px"><strong>No
     log.info({ eventId }, "event soft-deleted");
     return { deleted: true };
   }
+}
+
+/**
+ * Live computed quote total (menu subtotal + markup%) -- matches MenuSection's
+ * "Total quote" display exactly. Does NOT include labor: labor is a separate
+ * cost line subtracted in the profit calc, not part of revenue. Extracted for
+ * reuse (markAsPaid revenue freeze, public quote page) and unit testing.
+ */
+export function computeLiveQuoteTotalCents(
+  menuItems: Array<{
+    portions: number;
+    unitPriceCentsOverride: number | null;
+    unitPriceCentsAtAdd: number | null;
+    recipe: { salePriceCents: number | null };
+  }>,
+  markupPct: number | Decimal | null | undefined,
+): number {
+  const subtotalCents = menuItems.reduce((sum, mi) => {
+    const unitPrice = mi.unitPriceCentsOverride ?? mi.unitPriceCentsAtAdd ?? mi.recipe.salePriceCents ?? 0;
+    return sum + unitPrice * mi.portions;
+  }, 0);
+  const markupAmount = Math.round(subtotalCents * (Number(markupPct ?? 0) / 100));
+  return subtotalCents + markupAmount;
 }
 
 /** Pure margin computation — extracted for unit testing. */
