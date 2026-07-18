@@ -303,6 +303,7 @@ export class InvoicesService {
               canonicalUnit,
               preferredDisplayUnit,
               vendorId: invoice.vendorId ?? undefined,
+              vendorItemCode: line.vendorItemCode,
             });
             ingredientId = ing.id;
             autoCreatedUnmatched = true;
@@ -354,8 +355,18 @@ export class InvoicesService {
       // Without this, we'd store cents-per-case instead of cents-per-gram.
       const ingMeta = await prisma.ingredient.findUnique({
         where: { id: ingredientId },
-        select: { dimension: true, densityGPerMl: true, currentCostMicrocents: true, name: true },
+        select: { dimension: true, densityGPerMl: true, currentCostMicrocents: true, name: true, vendorItemCode: true },
       }).catch(() => null);
+
+      // Opportunistic backfill: ingredients matched via alias/fuzzy (not just-created) may
+      // predate SKU persistence, or were created before this line ever carried a vendorItemCode.
+      // Fill-only-if-null -- never overwrite a SKU that's already recorded.
+      if (ingMeta && !ingMeta.vendorItemCode && line.vendorItemCode) {
+        await prisma.ingredient.update({
+          where: { id: ingredientId },
+          data: { vendorItemCode: line.vendorItemCode },
+        }).catch((err: any) => log.warn({ ingredientId, err: err.message }, "vendorItemCode backfill failed"));
+      }
 
       const totalUnitQty = line.packSize
         ? Number(line.quantity) * Number(line.packSize)

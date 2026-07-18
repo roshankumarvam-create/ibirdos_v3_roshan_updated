@@ -28,6 +28,7 @@ export const CreateIngredientSchema = z.object({
   defaultYieldPct: z.number().min(0).max(100).optional(),
   initialCostPerCanonicalCents: z.number().nonnegative().optional(),
   vendorId: z.string().optional(),
+  vendorItemCode: z.string().max(80).nullable().optional(),
   notes: z.string().max(2000).optional(),
 });
 export type CreateIngredientInput = z.infer<typeof CreateIngredientSchema>;

@@ -73,6 +73,7 @@ export class IngredientsService implements OnApplicationBootstrap {
         reorderThresholdCanonical: input.reorderThresholdCanonical ?? null,
         defaultYieldPct: input.defaultYieldPct ?? 100,
         currentVendorId: input.vendorId ?? null,
+        vendorItemCode: input.vendorItemCode ?? null,
         notes: input.notes ?? null,
         currentCostMicrocents:
           input.initialCostPerCanonicalCents != null
