@@ -148,16 +148,27 @@ export default async function EventDetailPage({
   }, 0);
   const foodCostCents = event.computedFoodCostCents ?? liveFoodCostCents;
 
-  // Effective revenue: prefer the menu-builder override, then static quoted price.
-  // quotedTotalOverrideCents is set by the quote builder; quotedPriceCents is set
-  // at event creation. Both serve as the "agreed price" so we merge them here.
+  // Effective revenue: prefer the menu-builder override, then static/frozen quoted
+  // price. Kept strict (persisted values only) -- the Revenue KPI stays "—"/"No quote
+  // yet" until an actual quote is saved or the event is paid (markAsPaid freezes it).
   const effectiveQuoteCents = event.quotedTotalOverrideCents ?? event.quotedPriceCents;
-  // Keep revenue as null when not set so Profit/Margin KPIs show "—" rather than a
-  // meaningless negative number computed against $0 revenue
   const revenueCents = effectiveQuoteCents ?? null;
-  const profitCents = revenueCents != null ? revenueCents - foodCostCents - totalLaborCents : null;
-  const marginPct = revenueCents != null && revenueCents > 0
-    ? (profitCents! / revenueCents) * 100
+
+  // Live computed quote total (menu subtotal + markup%) -- same formula as
+  // MenuSection's "Total quote" display and the backend's computeLiveQuoteTotalCents().
+  // Profit/Margin use this as a further fallback beyond revenueCents: they should
+  // populate as soon as ANY quote total exists, even one that's only been computed
+  // live and never explicitly saved -- unlike Revenue, which stays persisted-only.
+  const quoteSubtotalCents = event.menuItems.reduce((sum, mi) => {
+    const unitPrice = mi.unitPriceCentsOverride ?? mi.unitPriceCentsAtAdd ?? mi.recipe.salePriceCents ?? 0;
+    return sum + unitPrice * mi.portions;
+  }, 0);
+  const liveQuoteTotalCents = quoteSubtotalCents + Math.round(quoteSubtotalCents * (Number(event.markupPct ?? 0) / 100));
+
+  const profitBaseCents = revenueCents ?? (liveQuoteTotalCents > 0 ? liveQuoteTotalCents : null);
+  const profitCents = profitBaseCents != null ? profitBaseCents - foodCostCents - totalLaborCents : null;
+  const marginPct = profitBaseCents != null && profitBaseCents > 0
+    ? (profitCents! / profitBaseCents) * 100
     : null;
 
   const prepTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "PREP");
@@ -253,8 +264,8 @@ export default async function EventDetailPage({
         <KpiCard
           label="Profit"
           value={profitCents != null ? formatCents(profitCents) : "—"}
-          tone={profitCents != null && revenueCents != null
-            ? (profitCents < 0 ? "danger" : profitCents < revenueCents * 0.2 ? "warning" : "default")
+          tone={profitCents != null && profitBaseCents != null
+            ? (profitCents < 0 ? "danger" : profitCents < profitBaseCents * 0.2 ? "warning" : "default")
             : "default"}
           {...(profitCents == null ? { sub: "Set quote first" } : {})}
         />
