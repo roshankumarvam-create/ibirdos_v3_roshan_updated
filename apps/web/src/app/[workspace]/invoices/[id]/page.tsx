@@ -415,16 +415,20 @@ function ReconciliationPanel({
   const totalDiff = lineSum - totalCents;
   const totalsMismatch = hasTotal && Math.abs(totalDiff) > RECONCILE_TOLERANCE_CENTS;
 
-  // 2. Math-inconsistent lines — independent client-side check, does not read/write needsReview
+  // 2. Math-inconsistent lines — independent client-side check, does not read/write needsReview.
+  // Extended price is the source of truth (that's what gets paid), so the tolerance scales with
+  // qty to absorb vendor half-cent-per-unit rounding on catch-weight lines (e.g. 78.5 lb -> ~40c
+  // band) while still catching real OCR errors (wrong qty, transposed price).
   const mathIssues = activeLines
     .map((l) => {
       const qty = Number(l.quantity);
       const unitPriceCents = Number(l.unitPriceCents);
       const stated = Number(l.extendedPriceCents);
       const expected = Math.round(qty * unitPriceCents);
-      return { line: l, expected, stated, diff: stated - expected };
+      const tolCents = Math.max(2, qty * 0.5 + 1); // dollars: max(0.02, qty*0.005+0.01)
+      return { line: l, expected, stated, diff: stated - expected, tolCents };
     })
-    .filter((x) => Math.abs(x.diff) > RECONCILE_TOLERANCE_CENTS);
+    .filter((x) => Math.abs(x.diff) > x.tolCents);
 
   return (
     <Card className="border-accent-500/20">
