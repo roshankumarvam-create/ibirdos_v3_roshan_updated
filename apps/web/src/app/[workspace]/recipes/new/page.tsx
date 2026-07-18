@@ -627,16 +627,16 @@ export default function NewRecipePage() {
                               className={`w-full rounded bg-bg-inset border px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent-500/60 ${line.needsReview && !line.ingredientId ? "border-warning/60" : "border-bg-border"}`}
                             />
                             {line.showDropdown && line.searchResults.length > 0 && (
-                              <div className="absolute z-50 left-3 top-full mt-1 w-72 rounded-md border border-bg-border bg-bg-surface shadow-lg">
+                              <div className="absolute z-50 left-3 top-full mt-1 w-full min-w-[320px] max-h-80 overflow-y-auto rounded-md border border-bg-border bg-bg-surface shadow-lg">
                                 {line.searchResults.map(ing => (
                                   <button
                                     key={ing.id}
                                     type="button"
                                     onMouseDown={() => selectIngredient(line.key, ing)}
-                                    className="w-full text-left px-3 py-2 hover:bg-bg-hover text-xs flex justify-between items-center"
+                                    className="w-full text-left px-4 py-3 hover:bg-bg-hover text-sm flex justify-between items-center"
                                   >
                                     <span className="font-medium text-text-primary">{ing.name}</span>
-                                    <span className="text-text-tertiary ml-2 shrink-0">
+                                    <span className="text-text-tertiary ml-3 shrink-0">
                                       {ing.currentCostCents != null
                                         ? fmtCents(ing.currentCostCents) + "/" + ing.canonicalUnit
                                         : "no price"}
