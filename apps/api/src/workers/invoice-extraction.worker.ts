@@ -336,14 +336,49 @@ async function matchIngredient(workspaceId: string, text: string): Promise<Match
     }];
   }
 
-  // Pass 2: trigram fuzzy match
+  // Pass 1b: exact ingredient name match (case-insensitive) — catches ingredients that
+  // exist but have no alias yet. Mirrors ingredients.service.ts match()'s Pass 1b.
+  const exactName = await prisma.ingredient.findFirst({
+    where: {
+      workspaceId,
+      name: { equals: normalized, mode: "insensitive" },
+      deletedAt: null,
+    },
+    select: { id: true, name: true },
+  });
+  if (exactName) {
+    return [{
+      ingredientId: exactName.id,
+      ingredientName: exactName.name,
+      matchType: "exact",
+      confidence: 1.0,
+    }];
+  }
+
+  // Pass 2: trigram fuzzy match — checks aliases too now, same as ingredients.service.ts
+  // match(), so a reworded description can still surface a near-miss suggestion.
   try {
     const fuzzy = await prisma.$queryRaw<Array<{ id: string; name: string; sim: number }>>`
-      SELECT i.id, i.name, similarity(LOWER(i.name), ${normalized}) AS sim
+      SELECT i.id, i.name,
+             GREATEST(
+               similarity(LOWER(i.name), ${normalized}),
+               COALESCE((
+                 SELECT MAX(similarity(a.text, ${normalized}))
+                 FROM ingredient_aliases a
+                 WHERE a.ingredient_id = i.id
+               ), 0)
+             ) AS sim
       FROM ingredients i
       WHERE i.workspace_id = ${workspaceId}
         AND i.deleted_at IS NULL
-        AND LOWER(i.name) % ${normalized}
+        AND (
+          LOWER(i.name) % ${normalized}
+          OR EXISTS (
+            SELECT 1 FROM ingredient_aliases a
+            WHERE a.ingredient_id = i.id
+              AND a.text % ${normalized}
+          )
+        )
       ORDER BY sim DESC
       LIMIT 3
     `;
