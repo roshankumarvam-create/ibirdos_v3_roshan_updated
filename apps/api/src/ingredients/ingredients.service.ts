@@ -251,9 +251,24 @@ export class IngredientsService implements OnApplicationBootstrap {
 
     const oldMicrocents = ing.currentCostMicrocents;
     const newMicrocents = BigInt(Math.round(params.pricePerCanonicalCents * 1000)); // 1 cent = 1000 microcents
+    const priceChanged = oldMicrocents !== newMicrocents;
+    const vendorChanged = params.vendorId != null && params.vendorId !== ing.currentVendorId;
 
-    // Skip no-op writes (price unchanged)
-    if (oldMicrocents === newMicrocents) return this.toDTO(ing);
+    // Nothing to do at all
+    if (!priceChanged && !vendorChanged) return this.toDTO(ing);
+
+    // Price unchanged but the confirming invoice belongs to a different vendor than the
+    // ingredient's current tag -- re-point currentVendorId without touching price history,
+    // audit log, or the recost event (those are specifically about a price movement, which
+    // didn't happen here). Without this branch, re-confirming the same invoice/vendor pair
+    // never gets a chance to correct a stale vendor tag, since price is unchanged every time.
+    if (!priceChanged) {
+      const updated = await prisma.ingredient.update({
+        where: { id: ingredientId },
+        data: { currentVendorId: params.vendorId },
+      });
+      return this.toDTO(updated);
+    }
 
     await prisma.$transaction([
       prisma.ingredient.update({
