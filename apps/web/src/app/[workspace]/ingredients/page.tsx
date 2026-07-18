@@ -18,15 +18,17 @@ interface ListResponse {
 export default async function IngredientsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ search?: string; category?: string }>;
+  searchParams: Promise<{ search?: string; category?: string; missingThreshold?: string }>;
 }) {
   const user = await requireSession();
   const sp = await searchParams;
   const c = await cookies();
+  const filteringMissingThreshold = sp.missingThreshold === "1";
 
   const qs = new URLSearchParams();
   if (sp.search) qs.set("search", sp.search);
   if (sp.category) qs.set("category", sp.category);
+  if (filteringMissingThreshold) qs.set("missingThreshold", "1");
 
   const res = await api.get<ListResponse>(
     `/ingredients?${qs.toString()}`,
@@ -58,10 +60,23 @@ export default async function IngredientsPage({
         )}
       </header>
 
-      {missingThresholdCount > 0 && (
-        <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-2.5 text-sm text-text-secondary">
-          <span className="font-medium text-warning">{missingThresholdCount}</span>{" "}
-          ingredient{missingThresholdCount === 1 ? "" : "s"} have no reorder threshold set — alerts won&apos;t fire for them. Open an ingredient below to set one.
+      {missingThresholdCount > 0 && !filteringMissingThreshold && (
+        <div className="flex items-center justify-between gap-4 rounded-md border border-warning/30 bg-warning/5 px-4 py-2.5 text-sm text-text-secondary">
+          <span>
+            <span className="font-medium text-warning">{missingThresholdCount}</span>{" "}
+            ingredient{missingThresholdCount === 1 ? "" : "s"} have no reorder threshold set — alerts won&apos;t fire for them.
+          </span>
+          <Link href={`/${user.workspaceSlug}/ingredients?missingThreshold=1` as any} className="shrink-0 text-accent-500 hover:underline">
+            Show these
+          </Link>
+        </div>
+      )}
+      {filteringMissingThreshold && (
+        <div className="flex items-center justify-between gap-4 rounded-md border border-warning/30 bg-warning/5 px-4 py-2.5 text-sm text-text-secondary">
+          <span>Showing only ingredients with no reorder threshold set.</span>
+          <Link href={`/${user.workspaceSlug}/ingredients` as any} className="shrink-0 text-accent-500 hover:underline">
+            Clear filter
+          </Link>
         </div>
       )}
 

@@ -26,6 +26,9 @@ const UpdatePriceSchema = z.object({
 const ListQuerySchema = z.object({
   search: z.string().optional(),
   category: z.string().optional(),
+  // z.coerce.boolean() would treat "0"/"false" as truthy (any non-empty string
+  // coerces to true) -- match explicitly instead.
+  missingThreshold: z.string().optional().transform((v) => v === "1" || v === "true"),
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(50),
 });

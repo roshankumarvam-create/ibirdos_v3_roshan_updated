@@ -147,7 +147,7 @@ function InventoryContent() {
             <span className="font-medium text-warning">{missingThresholdCount}</span>{" "}
             ingredient{missingThresholdCount === 1 ? "" : "s"} have no reorder threshold set — alerts won&apos;t fire for them.
           </span>
-          <Link href={`/${workspace}/ingredients` as any} className="shrink-0 text-accent-500 hover:underline">
+          <Link href={`/${workspace}/ingredients?missingThreshold=1` as any} className="shrink-0 text-accent-500 hover:underline">
             Set thresholds
           </Link>
         </div>

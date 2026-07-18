@@ -125,11 +125,12 @@ export class IngredientsService implements OnApplicationBootstrap {
     });
   }
 
-  async list(ctx: TenantContext, opts: { search?: string; category?: string; limit?: number; cursor?: string }) {
+  async list(ctx: TenantContext, opts: { search?: string; category?: string; missingThreshold?: boolean; limit?: number; cursor?: string }) {
     const limit = Math.min(opts.limit ?? 50, 100);
     const repo = tenantScoped(prisma.ingredient, ctx);
     const where: any = {};
     if (opts.category) where.category = opts.category;
+    if (opts.missingThreshold) where.reorderThresholdCanonical = null;
     if (opts.search) {
       where.OR = [
         { name: { contains: opts.search, mode: "insensitive" } },
