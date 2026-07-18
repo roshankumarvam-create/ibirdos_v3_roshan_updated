@@ -36,6 +36,7 @@ import { env } from "@ibirdos/config";
 import { moduleLogger } from "@ibirdos/logger";
 
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
+import { IS_PLATFORM_ROUTE_KEY } from "../decorators/platform-route.decorator";
 
 const log = moduleLogger("TenantGuard");
 
@@ -59,6 +60,17 @@ export class TenantGuard implements CanActivate {
       context.getClass(),
     ]);
     if (isPublic) return true;
+
+    // ---- @PlatformRoute() bypass — platform admin/developer portal routes are
+    // authenticated by PlatformAuthGuard against platform_users/platform_sessions,
+    // a completely separate system from tenant Session/Membership. This guard has
+    // nothing to check for them. Unlike @Public(), CsrfGuard does NOT bypass on
+    // this decorator, so mutating platform routes stay CSRF-protected. ----
+    const isPlatformRoute = this.reflector.getAllAndOverride<boolean>(IS_PLATFORM_ROUTE_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPlatformRoute) return true;
 
     const req = context.switchToHttp().getRequest<Request>();
     const token = req.cookies?.[env.AUTH_COOKIE_NAME];

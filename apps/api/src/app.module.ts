@@ -48,6 +48,7 @@ import { NotificationsModule } from "./notifications/notifications.module";
 import { ObservabilityModule } from "./observability/observability.module";
 import { DailySalesModule } from "./daily-sales/daily-sales.module";
 import { ReportsModule } from "./reports/reports.module";
+import { PlatformModule } from "./platform/platform.module";
 
 export { REDIS_CLIENT };
 
@@ -60,7 +61,7 @@ export { REDIS_CLIENT };
       signOptions: { algorithm: "HS256" },
     }),
     AuthModule, WorkspacesModule, UsersModule, HealthModule, UploadsModule,
-    IngredientsModule, VendorsModule, InvoicesModule, RecipesModule, InventoryModule, EventsModule, KitchenModule, YieldWasteModule, AnalyticsModule, CustomerOrderingModule, RealtimeModule, VendorIntegrationsModule, BillingModule, InsightsModule, NotificationsModule, ObservabilityModule, DailySalesModule, ReportsModule,
+    IngredientsModule, VendorsModule, InvoicesModule, RecipesModule, InventoryModule, EventsModule, KitchenModule, YieldWasteModule, AnalyticsModule, CustomerOrderingModule, RealtimeModule, VendorIntegrationsModule, BillingModule, InsightsModule, NotificationsModule, ObservabilityModule, DailySalesModule, ReportsModule, PlatformModule,
   ],
   providers: [
     PasswordService, SessionService,
