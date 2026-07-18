@@ -545,6 +545,9 @@ export class InvoicesService {
       committedIngredientId?: string | null;
       packSize?: number | null;
       packUnit?: string | null;
+      vendorItemCode?: string | null;
+      unitPriceExact?: number | null;
+      gtin?: string | null;
       notes?: string;
     },
   ) {
@@ -577,6 +580,9 @@ export class InvoicesService {
         committedIngredientId: data.committedIngredientId ?? null,
         packSize: data.packSize ?? null,
         packUnit: data.packUnit ?? null,
+        vendorItemCode: data.vendorItemCode ?? null,
+        unitPriceExact: data.unitPriceExact ?? null,
+        gtin: data.gtin ?? null,
         notes: data.notes ?? null,
       },
     });

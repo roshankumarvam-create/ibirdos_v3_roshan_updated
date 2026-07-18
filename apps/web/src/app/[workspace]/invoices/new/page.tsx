@@ -146,6 +146,9 @@ export default function NewInvoicePage() {
           category: line.lineType === "misc_charge" ? "DELIVERY" : "FOOD_INGREDIENT",
           packSize: line.packSize ?? undefined,
           packUnit: line.packUnit ?? line.size ?? undefined,
+          vendorItemCode: line.vendorItemCode ?? undefined,
+          unitPriceExact: line.unitPrice ?? undefined,
+          gtin: line.gtin ?? undefined,
         });
         if (lineRes.error) failed++;
       }

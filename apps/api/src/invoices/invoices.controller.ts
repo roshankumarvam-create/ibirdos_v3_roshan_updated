@@ -63,6 +63,9 @@ const CreateLineSchema = z.object({
   committedIngredientId: z.string().nullable().optional(),
   packSize: z.number().positive().nullable().optional(),
   packUnit: z.string().nullable().optional(),
+  vendorItemCode: z.string().nullable().optional(),
+  unitPriceExact: z.number().nullable().optional(),
+  gtin: z.string().nullable().optional(),
   notes: z.string().max(500).optional(),
 });
 
