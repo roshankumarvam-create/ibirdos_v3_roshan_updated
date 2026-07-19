@@ -152,3 +152,45 @@ Separately, while tracing this I found the existing **client-side-only** reconci
 - No test exercises the full `confirm()` flow end-to-end (heavy dependency graph: ingredient matching, price updates, inventory receive, recost queue — mocking all of it risked more test-authoring bugs than it caught) — **needs live verification**: (a) create a manual invoice, add lines, confirm WITHOUT touching the Subtotal/Total fields — total should auto-fill and confirm should succeed with the correct total, not $0; (b) create an invoice, manually type a Total that's clearly wrong (e.g. off by $100 from the line sum), attempt to confirm — should be blocked with a clear error, not silently accepted; (c) confirm the reconciliation banner now shows up for a blank-total invoice with real lines on it, before the reviewer even clicks Confirm.
 
 ---
+
+## P0-4: Financial flow wiring (Paid Event → Dashboard/Daily Sales/Reports)
+
+**Status:** PARTIAL — Dashboard-side bug fixed. Daily Sales / most Reports are structurally disconnected from Events entirely (no pipe exists, not a filter bug) — reported to `NEEDS_ROSHAN.md` for a product decision rather than guessed at.
+
+### Investigation — where each surface actually reads revenue from
+
+- **Dashboard** (`/analytics/summary`, `AnalyticsService.summary()` → `eventStats()`) — reads `Event.quotedPriceCents`/`computedFoodCostCents`/`computedLaborCostCents` **directly**. This surface IS wired to events, in principle.
+- **Reports: `low-margin-events`, `catering-vs-events`** (`ReportsService.getLowMarginEvents`, `getCateringVsEventProfit`) — also read `Event.quotedPriceCents`/computed fields directly, with **no status filter** at all beyond the date range.
+- **Reports: `food-cost-vs-sales`, `labor-cost-vs-sales`, `rent-vs-sales`, `prime-cost`, `sales-by-period`** (5 of 8 report methods) — read **exclusively** from the `daily_sales` table, which is populated **only** by a human manually entering a day's POS numbers on the Daily Sales page (`DailySalesService.create`). No code anywhere creates or updates a `DailySales` row from Event/payment data.
+- **Daily Sales page itself** — same table, same story: entirely manual, zero Event awareness.
+
+### Root cause #1 (fixed): Dashboard revenue gated on kitchen-lifecycle status, not payment
+
+`AnalyticsService.eventStats()` filtered events by `status: { in: ["COMPLETED", "IN_SERVICE"] }`. `EventsService.markAsPaid()` sets `paymentStatus: "PAID"` and freezes `quotedPriceCents` but does **not** touch `status` — that's a separate kitchen-lifecycle field (`DRAFT → CONFIRMED → PREP_IN_PROGRESS → IN_SERVICE → COMPLETED`) advanced manually/separately. So a paid event sitting at e.g. `CONFIRMED` (very normal — payment often happens well before the event date) was invisible to the Dashboard's revenue tile even though its revenue was already real and frozen. This inconsistency was visible in-repo: the two Event-reading report methods (`getLowMarginEvents`, `getCateringVsEventProfit`) never filtered by status at all — only `eventStats()` did, and only for revenue. This matches the reported symptom exactly (a paid $312.50 event showing $0 on the Dashboard).
+
+**Fix:** `eventStats()` now filters `paymentStatus: "PAID"` and `status: { not: "CANCELLED" }` (a cancelled event's frozen revenue shouldn't count as delivered regardless of payment) instead of the lifecycle-status list.
+
+### Root cause #2 (fixed): `markAsPaid()` didn't recompute margin after freezing revenue
+
+`EventsService.rollupCosts()` computes `computedLaborCostCents`/`computedFoodCostCents`/`computedMarginPct` from the event's current `quotedPriceCents`. `markAsPaid()` freezes `quotedPriceCents` (fill-only-if-null, first payment only) but never called `rollupCosts()` afterward — so an event with no quote set before payment would get `paymentStatus: PAID` and a real `quotedPriceCents`, but `computedMarginPct` would still reflect the pre-freeze (null) revenue until something else happened to trigger a recompute (e.g. a menu item edit). Dashboard and the two Event-reading reports read `computedMarginPct`/`computedLaborCostCents` directly, not derived-on-the-fly, so this was a real staleness bug.
+
+**Fix:** `markAsPaid()` now calls `this.rollupCosts(ctx, eventId)` immediately after the revenue-freeze update, whenever a freeze happened.
+
+### Root cause #3 (NOT fixed — flagged for a decision): Daily Sales / 5 of 8 Reports have no Event pipe at all
+
+This isn't a filter bug to fix — there is no code path that has ever written event revenue into `DailySales`. `DailySales` is a POS-reconciliation feature (gross/net sales, tax, discounts, voids, refunds, a `tenders` breakdown, and a `variance` check comparing tenders to `netSales`) that's semantically different from "an event got paid." Auto-injecting event revenue into it risks corrupting that variance check for any workspace that also runs a real POS. Three options (auto-inject / explicit event-link column / sum both sources at the report layer instead of the data layer) are written up in `NEEDS_ROSHAN.md` with a recommendation (option 3, lowest risk to the existing feature) — not implemented pending your call.
+
+**Files changed:**
+- `apps/api/src/analytics/analytics.service.ts` (`eventStats()` filter)
+- `apps/api/src/analytics/analytics.service.spec.ts` (new — 3 tests)
+- `apps/api/src/events/events.service.ts` (`markAsPaid()` now calls `rollupCosts()`)
+
+**Commit:** `99ef0b3` — fix(P0-4): count paid-event revenue on Dashboard regardless of kitchen status
+
+**Verification:**
+- `pnpm typecheck` (all 9 packages) — clean.
+- New `analytics.service.spec.ts` (3 tests) — pass: confirms the query filters on `paymentStatus: "PAID"` / `status: { not: "CANCELLED" }` and explicitly asserts the old `status: { in: [...] }` shape is gone; confirms a PAID-but-early-status event's revenue is counted.
+- Full `vitest run` — 285/288 pass; the same 3 pre-existing failures noted in P0-1/P0-2/P0-3 (unrelated to this change).
+- **Needs live verification**: mark a test event PAID while it's still at status `CONFIRMED` (not yet `COMPLETED`/`IN_SERVICE`) and confirm its revenue now appears in the Dashboard's Revenue/Margin tiles within the 30-day window; confirm the SAME event's revenue still does **not** appear on the Daily Sales page or the food-cost/labor-cost/prime-cost/sales-by-period reports (expected, per root cause #3 — not yet built).
+
+---

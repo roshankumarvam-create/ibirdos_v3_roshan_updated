@@ -104,3 +104,25 @@ Options, roughly in order of how much they'd change:
 Let me know which you want and I'll implement it — didn't want to guess at a change that touches how real vendor invoice totals get computed.
 
 ---
+
+## P0-4 — Daily Sales and most Reports are structurally disconnected from Events (not a filter bug — there's no pipe at all)
+
+Per your instructions I'm reporting this disconnect before building anything, since fixing it means picking a data model, not just fixing a query.
+
+**What I already fixed (mechanical, low-risk, done — see FIX_LOG.md P0-4):**
+- `AnalyticsService.eventStats()` (feeds the Dashboard's Revenue/Food-cost/Margin tiles) was filtering events by kitchen-lifecycle `status: { in: ["COMPLETED", "IN_SERVICE"] } `instead of `paymentStatus: "PAID"`. A paid event sitting at any earlier status (e.g. `CONFIRMED`, waiting on its event date) was invisible to the Dashboard even though `markAsPaid()` had already frozen its revenue. Changed the filter to `paymentStatus: "PAID"` (excluding `CANCELLED` regardless of payment status). This is very likely the direct cause of the $312.50 event you saw not showing up.
+- `markAsPaid()` also wasn't calling `rollupCosts()` after freezing revenue, so `computedMarginPct`/`computedLaborCostCents` (read directly by the Dashboard and by the `low-margin-events`/`catering-vs-events` reports) could still reflect stale/null revenue right after payment. Now recomputed in the same call.
+
+**What I did NOT touch, because it's a bigger decision:**
+
+`GET /reports/food-cost-vs-sales`, `/reports/labor-cost-vs-sales`, `/reports/prime-cost`, and `/reports/sales-by-period` — plus the entire `/daily-sales` page — read **exclusively** from the `daily_sales` table (`ReportsService`, every method: `prisma.dailySales.findMany(...)`). That table is populated by ONE thing: a human manually typing in a day's POS numbers (gross/net sales, tax, tender breakdown) on the Daily Sales page. **There is no code anywhere that creates or updates a `DailySales` row from an Event.** So even after my fix above, a paid catering event's revenue will show up on the **Dashboard** (reads `Event.quotedPriceCents` directly) and on the **`low-margin-events`/`catering-vs-events` reports** (same), but will still show **$0 on the Daily Sales page and on food-cost/labor-cost/prime-cost/sales-by-period reports**, because those were never wired to Events at all — not a bug, a feature that was never built.
+
+Wiring this needs a decision, because `DailySales` isn't just a number — it's a POS-reconciliation record with its own semantics (gross vs net, tax, discounts, voids, refunds, a `tenders` breakdown, and a `variance` check comparing `netSales` against the sum of tenders). Options:
+
+1. **Auto-inject event revenue into that date's `DailySales` row** (create one if it doesn't exist, add to it via the existing merge/"add" logic if it does — `DailySalesService.create(..., mode: "add")` already supports this). Simplest to wire, but: mixes two different revenue sources into one row with no way to tell them apart later, and would silently corrupt the `variance` check (a manually-entered day's tenders would no longer sum to `netSales` once event revenue is added on top with no matching tender entry) for any workspace that also runs a POS.
+2. **Give `DailySales` (or a new lightweight join table) an explicit link back to the source event(s)** contributing to that date, so event-sourced and POS-sourced revenue are both visible on the same day but distinguishable and the variance check can be corrected to exclude event revenue. More correct, more work — touches the `DailySales` schema (additive column/table, fine under your migration rule) and the variance calc.
+3. **Keep them as genuinely separate revenue streams and change the *reports* (not the data) to sum both `dailySales.netSales` and `event.quotedPriceCents` for the period**, rather than merging at the data layer. No schema change, no risk to the existing Daily Sales / variance feature, but every report that currently reads only `dailySales` needs a second query added (`getFoodCostVsSales`, `getLaborCostVsSales`, `getRentVsSales`, `getPrimeCost`, `getSalesByPeriod` — 5 methods) — mechanical but not small, and "sales by period" would need per-day/week/month event bucketing to match the existing granularity logic.
+
+I'd lean toward option 3 (least risk to the live POS-reconciliation feature, most explicit), but that's a real product call — does this workspace even use the Daily Sales / POS feature for anything besides catering, or is `cafe-71` catering-only, in which case option 1 or 2 might be exactly right and simpler. Let me know which direction and I'll build it.
+
+---
