@@ -266,4 +266,6 @@ This isn't a filter bug to fix — there is no code path that has ever written e
 - Full `vitest run` — 285/288 pass; the same 3 pre-existing failures noted in P0-1/P0-2/P0-3 (unrelated to this change).
 - **Needs live verification**: mark a test event PAID while it's still at status `CONFIRMED` (not yet `COMPLETED`/`IN_SERVICE`) and confirm its revenue now appears in the Dashboard's Revenue/Margin tiles within the 30-day window; confirm the SAME event's revenue still does **not** appear on the Daily Sales page or the food-cost/labor-cost/prime-cost/sales-by-period reports (expected, per root cause #3 — not yet built).
 
+**Re-verified (already fixed, no new work needed):** re-checked `eventStats()`'s filter and `markAsPaid()`'s `rollupCosts()` call are both still present and correct. Re-confirmed no other query anywhere filters events by the old `status: {in: [COMPLETED, IN_SERVICE]}` shape (the only other `paymentStatus`/status-filter hits in the codebase are `Invoice.paymentStatus` on the unrelated vendor-aging report, and `markAsPaid()`'s own guard against double-paying). Root cause #3 (Daily Sales / 5 of 8 Reports have no Event pipe at all) remains an open decision in `NEEDS_ROSHAN.md`, unchanged — still correctly not guessed at.
+
 ---
