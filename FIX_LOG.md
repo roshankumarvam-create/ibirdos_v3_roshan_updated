@@ -4,6 +4,41 @@ Format per issue: Root cause → Fix → Files changed → Commit → Verificati
 
 ---
 
+## DEPLOY-1: Why is production stale? (steps 1–2 of the deploy investigation)
+
+**Status:** Step 1 DONE — root cause found, and it is NOT what was reported to me. Step 2 DONE for the two commit hashes as given (they don't check out) and for today's P0-1..P0-4 work; a full 100-commit line-by-line P0/P1 mapping was not built because the premise (large-scale API staleness) didn't hold — see below for what a corrected, narrower step 2 actually shows.
+
+### The two cited hashes, checked against ground truth
+
+- **`8bf3335`** — does not exist. Checked: every local branch, `origin/master`, `origin/main`, `origin/staging` (after `git fetch origin`), `git log --all`, Railway deployment IDs (project-wide), and GitHub's commit-status API. No match anywhere. Possibly a typo, a hash from a different local clone, or a truncated/mis-copied value from a dashboard. Flagging rather than guessing at what it was meant to be.
+- **`09b9bb5c`** — this one **is real**, but it is not stale: `09b9bb5c-1100-41c7-8970-5027dcb6a671` is a **Railway deployment ID** (not a git commit hash) for the `ibirdos_v3_roshan_updated` (API) service. It is the **current, active, successfully-serving** deployment — built from commit `f1b3822` (the tip of `origin/master`), deployed 2026-07-18 22:33 UTC. Confirmed three independent ways: (a) `railway deployment list --service <API service id>` shows it as the latest SUCCESS entry with a timestamp matching `f1b3822`'s commit time to the second; (b) `railway logs 09b9bb5c... --deployment` shows it actively processing real production traffic through today, including `rbac permission denied` log lines for a CHEF-role user hitting `/invoices`, `/reports/vendor-aging`, and `analytics.read` routes — i.e. exactly the endpoint-level guards P0-1 confirmed were already correct; (c) **GitHub's own commit-status API** (`gh api .../commits/f1b3822/status`) shows Railway posted `"Success - api.ibirdos.com"` against deployment `09b9bb5c` directly, and Vercel posted `"Deployment has completed"` for the same commit, both at 2026-07-18 22:33 UTC.
+
+**Conclusion: the API service and the Vercel web app are NOT stale.** Both are current as of `f1b3822`, the exact commit this session's `git rev-parse HEAD` showed at the very start of today's work (before any of my P0-1..P0-4 commits). Auto-deploy is connected and working correctly for both.
+
+### What IS actually stale, and why
+
+The `ibirdos_workers` Railway service (background jobs: invoice-extraction worker, recipe-recost worker, notifications) has not redeployed since **2026-07-08 13:33 IST**, commit `ad07aee4` (`fix(bug-4): wrap xlsx.read in try-catch in recipe importCsv`) — confirmed via `railway deployment list --service <workers-id>` (no successful deploy since) and cross-checked against the same commit's GitHub status.
+
+**Root cause, pinned precisely:** `ad07aee4` itself DID get a `"exquisite-enthusiasm - ibirdos_workers"` GitHub commit-status ("Success"), same as the API service always gets. But checking every commit since — `55cb074`, `abcfcb8`, `82b4e7c`, `97b458f`, and every other commit through `f1b3822` — **none of them carry a workers status at all**, while every single one carries a successful API + Vercel status. The workers-service GitHub integration didn't fail; it stopped being consulted/triggered entirely, starting immediately after `ad07aee4`. There's also a `chore: trigger ibirdos_workers rebuild on 55cb074` commit (`c37a48b`, 2026-07-01) — an empty/marker commit someone made specifically to try to force a workers rebuild — whose status shows only Vercel+API, no workers context either. That confirms this isn't new: **someone already noticed the workers service wasn't auto-deploying, over two weeks ago, and a manual trigger attempt didn't restore it either.**
+
+This means: **any bug fix that lives in `apps/api/src/workers/*` (invoice-extraction, recipe-recost) or in code paths only the workers process, not the API process, executes has not been live since July 8**, regardless of what's in the repo. I can't fix the Railway-side trigger config from the CLI — `railway deployment list`/`logs`/`status --json` are read-only for this. **This needs a manual check in the Railway dashboard**: `ibirdos_workers` service → Settings → Source — confirm it's still linked to `roshankumarvam-create/ibirdos_v3_roshan_updated` on branch `master` with "Deploy on push" (or equivalent auto-deploy toggle) enabled. If it shows disconnected/disabled, re-enabling it there is the actual fix — a manual `railway deployment redeploy` or `up` only re-runs the *old* July 8 build, it wouldn't rebuild from the current commit unless the trigger itself is also fixed.
+
+### Corrected step 2 — what deploying actually resolves
+
+Given the above, "deploy and most bugs disappear" doesn't hold the way it was framed:
+
+- **None of today's P0-1 through P0-4 fixes exist anywhere in already-deployed history.** I investigated and fixed all four fresh against `f1b3822` — the exact commit that's already live. There was nothing to "discover was already fixed." All four are new, currently sitting only in this session's local unpushed commits (`a325efd`..`09c1e9d`, 8 commits, not yet pushed to `origin/master`).
+- **The Chef-financial-data issue (P0-1) specifically: NOT already fixed in later history.** Live production logs (captured above) show the endpoint-level guards already worked pre-session (CHEF correctly getting 403 on `/invoices`, `/reports/vendor-aging`, `analytics.read`) — but that's the SAME state I found and documented at session start; the field-level leak (recipes/ingredients/events/inventory payloads carrying cost/price/margin to CHEF/STAFF) was real and unfixed until today's `a325efd`/`77612e6` commits. Nothing in the 100-commit range between `ad07aee4` and `f1b3822` touches this.
+- **~100 commits sit undeployed for `ibirdos_workers` specifically**, including several that look P1-relevant and worth checking once workers' auto-deploy is restored: `97b458f` (worker ingredient-matcher fallback), `492ea54` (full-precision unit price on invoice lines — possibly related to the "shortage cost math wrong" P1 item), `55cb074`/`abcfcb8`/`82b4e7c` (Sysco/PDF invoice extraction robustness). I have not individually verified whether any specific P1 item is fully resolved by these — flagging as candidates to re-check after the workers deploy is restored and re-verified live, not asserting they're closed.
+- Two commits already live and directly relevant to P0 work I did today: `bb6ba58`/`a7aa04d` (2026-07-08, added the non-blocking client-side invoice reconciliation panel P0-3 built on top of) and `31645aa` (2026-07-19, `markAsPaid` revenue freeze — the pattern P0-4's `rollupCosts()` call follows). Both already deployed; today's fixes extend rather than duplicate them.
+
+**Not yet done:** a full line-by-line audit of all ~100 commits against every remaining P1 item — given the premise (large API-side staleness) didn't hold, that exhaustive pass isn't the highest-value next step. Recommend: fix the workers auto-deploy trigger first, then re-verify each P1 item live (most P1 items — shortage cost math, categories, price history, timezone, recipe quantities/cost drift, labor cost, food-cost%, PO generation, kitchen tasks, waste/yield, reorder thresholds — are API-side, not worker-side, so they're either already live or still genuinely open; only the invoice-extraction-adjacent ones are worker-side and need the redeploy first to test accurately).
+
+**Files changed:** none (investigation only).
+**Commit:** none yet — this section is being committed as a docs-only update.
+
+---
+
 ## P0-1: Chef/Staff server-side authorization
 
 **Status:** IN PROGRESS — investigation phase.
