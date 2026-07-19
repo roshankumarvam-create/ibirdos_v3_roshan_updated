@@ -106,11 +106,49 @@ No schema change needed — used the **existing** `inventory_transactions` table
 - `apps/api/src/kitchen/kitchen.service.ts` (guard + eventId param + notes)
 - `apps/api/src/events/events.service.spec.ts` (updated mock constructor arg count)
 
-**Commit:** (pending — see below)
+**Commits:**
+- `9364698` — fix(P0-2): make event/kitchen-task inventory consumption idempotent
+- `d65e945` — docs: log P0-1/P0-2 investigation, fixes, and verification status
 
 **Verification:**
 - `pnpm typecheck` (all 9 packages) — clean.
 - `events.service.spec.ts` (8 tests) + `inventory.service.spec.ts` (5 tests) — pass. No existing test exercises `consumeInventoryForCompletedEvent` or `KitchenService.consumeIngredients` directly (no mocked-Prisma coverage for either) — **needs live verification**: (a) complete all kitchen tasks for a test event, then mark the event COMPLETED, confirm inventory is deducted once per ingredient, not twice — check `/inventory/transactions` for exactly one `CONSUME` row per ingredient per event; (b) mark a kitchen task DONE, revert it, mark DONE again — confirm only one `CONSUME` row for that task; (c) confirm an event with NO kitchen tasks used still gets the full bulk consume on COMPLETED (fallback path unchanged).
 - SQL correction for existing duplicate test-data transactions: written to `NEEDS_ROSHAN.md` as a template (Step 1 SELECT to find candidates, Step 2 offsetting `ADJUST` insert to reverse) — **not run**, no live DB access from this session to identify or verify the actual duplicate rows.
+
+---
+
+## P0-3: Invoice totals / reconciliation
+
+**Status:** DONE (code fix + tests). Live verification of the full confirm() flow still needed.
+
+### Root cause
+
+`InvoicesService.addLine()` / `updateLine()` / `deleteLine()` never touched `invoice.subtotalCents` or `invoice.totalCents` — those fields only ever changed if a reviewer manually typed into the Subtotal/Tax/Total fields on the invoice detail page (`apps/web/.../invoices/[id]/page.tsx`) and blurred out, or clicked the client-side-only "(recalc)" link next to Subtotal. `InvoicesService.confirm()` never checked or recalculated totals either — it validated line count and moved straight to ingredient/inventory processing regardless of what `totalCents` held. So a manually-created invoice, or one where the reviewer added/edited lines without ever touching the totals fields, would confirm successfully with `totalCents` still `null`/stale, and every downstream consumer (Dashboard, Daily Sales, Reports — see P0-4) would show $0 revenue for real money.
+
+Separately, while tracing this I found the existing **client-side-only** reconciliation banner (`apps/web/.../invoices/[id]/page.tsx`) had the same class of bug in miniature: `reconciles = totalCents === 0 || ...` treated a **stored** total of exactly $0 as "nothing to warn about" — but a $0 stored total next to real line items *is* the bug, not a pass condition. The exception should key off the *computed* total from the lines (is there really nothing on this invoice?), not the stored field.
+
+### Fix
+
+- `InvoicesService` now exports two pure functions (`sumInvoiceLineCents`, `reconcileInvoiceTotal`) so the reconciliation math is unit-testable without mocking Prisma/Redis/BullMQ:
+  - `sumInvoiceLineCents(lines)` — sum of non-excluded lines' `extendedPriceCents`. Matches the sum already used by the page's (pre-existing) reconciliation banner, not the invoice-header card's separate `computedSubtotal` (which doesn't filter `excluded` — left that one alone; it only feeds its own local recalc button, out of scope here).
+  - `reconcileInvoiceTotal(totalCents, subtotalCents, taxCents)` → `"fill"` (total was never set — return subtotal+tax as the value to use), `"block"` (total is set but off by more than 1 cent from subtotal+tax, and the real computed total isn't zero), or `"ok"`. The 1-cent tolerance matches the pre-existing client-side check exactly, so server enforcement never disagrees with what the reviewer already sees.
+- `addLine()` / `updateLine()` (when price or excluded flag changes) / `deleteLine()` now call `recalcInvoiceTotals()`, which recomputes and persists `subtotalCents` unconditionally, and fills `totalCents` only if it was never set (so a deliberately-entered/extracted total isn't silently overwritten mid-review — it becomes the reconciliation target instead).
+- `confirm()` now recomputes the subtotal fresh from current lines and runs `reconcileInvoiceTotal()` before doing any ingredient/price/inventory work: fills a blank total automatically (no manual click required — this is the direct fix for "$0.00 total despite having lines"), **blocks** with a 400 and a message showing both figures if the stored total doesn't reconcile, and otherwise keeps `subtotalCents` in sync.
+- Fixed the same "genuinely zero" inversion in the frontend's dismissible reconciliation banner (`lineSum === 0`, not `totalCents === 0`), and widened its trigger condition from `totalCents > 0` to `lineSum > 0` so it now also surfaces the blank-total case proactively (previously it could never show for a blank total at all, since `totalCents ?? 0` made the gate false). This is the "missing-field/line warning" surfacing called for — the unmatched-ingredient-lines warning and per-line `needsReview` highlighting already existed and needed no change.
+
+**Explicitly not attempted / flagged as a separate question, not guessed:** the task description says "total = lines + tax + fees − credits," implying `DISCOUNT`-category lines should subtract from the total. The `InvoiceLineCategory` enum has `DISCOUNT` and `TAX` values, but nothing in the codebase (confirm(), the pre-existing reconciliation banner UI, or the zod schemas) treats them specially — `extendedPriceCents` is enforced **non-negative** everywhere (`CreateLineSchema`), so a stored "discount" line currently only Increases whatever sum touches it. Deciding whether discount lines should be entered as negative amounts, auto-negated by category, or something else is a real product decision with no existing precedent to follow — implemented `sumInvoiceLineCents` as a flat sum (all non-excluded lines add, matching the one existing convention that existed pre-fix) rather than guess at category-aware signs.
+
+**Files changed:**
+- `apps/api/src/invoices/invoices.service.ts` (exported `sumInvoiceLineCents`/`reconcileInvoiceTotal`, `recalcInvoiceTotals` helper, wired into addLine/updateLine/deleteLine/confirm)
+- `apps/api/src/invoices/invoices.service.spec.ts` (new — 10 tests on the pure reconciliation functions)
+- `apps/web/src/app/[workspace]/invoices/[id]/page.tsx` (fixed the zero-check inversion + widened the reconciliation banner's trigger condition)
+
+**Commit:** `531d75b` — fix(P0-3): auto-recalc invoice subtotal/total, block confirm on mismatch
+
+**Verification:**
+- `pnpm typecheck` (all 9 packages) — clean.
+- `apps/api/src/invoices/invoices.service.spec.ts` — new, 10/10 pass. Covers: sum with/without excluded lines, blank-total fill, exact match, 1-cent tolerance, block on mismatch (including the literal reported-bug shape: stored total $0, lines sum to real money), and the genuinely-zero-invoice carve-out.
+- Full `vitest run` — 279/282 pass; the 3 failures (`recipes.service.spec.ts` × 2, `http-exception.filter.spec.ts` × 1) are **pre-existing on master**, confirmed via `git stash` + rerun before making any P0-3 changes — unrelated to this fix, not touched by it.
+- No test exercises the full `confirm()` flow end-to-end (heavy dependency graph: ingredient matching, price updates, inventory receive, recost queue — mocking all of it risked more test-authoring bugs than it caught) — **needs live verification**: (a) create a manual invoice, add lines, confirm WITHOUT touching the Subtotal/Total fields — total should auto-fill and confirm should succeed with the correct total, not $0; (b) create an invoice, manually type a Total that's clearly wrong (e.g. off by $100 from the line sum), attempt to confirm — should be blocked with a clear error, not silently accepted; (c) confirm the reconciliation banner now shows up for a blank-total invoice with real lines on it, before the reviewer even clicks Confirm.
 
 ---

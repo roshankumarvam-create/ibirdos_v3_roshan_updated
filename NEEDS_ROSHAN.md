@@ -88,3 +88,19 @@ COMMIT;
 I'm intentionally not filling in the real IDs/quantities — I don't have a connection to the live prod database from this session, so I can't identify or verify the actual duplicate rows. Please run Step 1 yourself, confirm each pair really is the double-deduction (matching quantities, same event, close timestamps), then run Step 2 per row.
 
 ---
+
+## P0-3 — Should DISCOUNT-category invoice lines subtract from the total?
+
+Your bug description says the invoice total should be "lines + tax + fees − credits." I implemented the auto-recalc and reconciliation-blocking (see FIX_LOG.md P0-3) using a flat sum of all non-excluded lines — which is the **one convention that already existed** in the code before my fix (the reconciliation banner on the invoice detail page summed lines the same way). I did not make `DISCOUNT`-category lines subtract, because:
+
+- `InvoiceLineCategory` already has a `DISCOUNT` value, but nothing anywhere in the app — not `confirm()`, not the existing reconciliation UI, not the zod validation schemas — treats it specially today.
+- `extendedPriceCents` is enforced **non-negative** on every line (`CreateLineSchema`), so there's no existing way to enter a discount as a negative amount. A $15 discount line, if you flip its sign in the total math, would need to be entered as "$15" but subtracted — which is a UX/validation decision, not just a math one.
+
+Options, roughly in order of how much they'd change:
+1. **Leave as-is** (current state after my fix): all lines add, including anything marked DISCOUNT. Reviewer has to manually adjust the Total field to account for a discount, and the reconciliation check will then correctly hold them to that manually-entered number.
+2. **Auto-subtract DISCOUNT lines**: change `sumInvoiceLineCents` to subtract lines where `category === "DISCOUNT"` instead of adding them. Low-risk, but changes what the computed subtotal means for anyone who's already using DISCOUNT lines today (if anyone is — I didn't find evidence either way).
+3. **Allow negative `extendedPriceCents` for DISCOUNT lines specifically**: bigger schema/UX change, touches the AI extraction path too (what does the extractor emit for a discount line today?).
+
+Let me know which you want and I'll implement it — didn't want to guess at a change that touches how real vendor invoice totals get computed.
+
+---
