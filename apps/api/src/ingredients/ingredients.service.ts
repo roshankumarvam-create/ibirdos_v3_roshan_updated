@@ -27,6 +27,7 @@ import {
 } from "@ibirdos/types";
 import { moduleLogger } from "@ibirdos/logger";
 import { Redis } from "ioredis";
+import { canViewFinancials, type Role } from "@ibirdos/permissions";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
 
@@ -155,7 +156,7 @@ export class IngredientsService implements OnApplicationBootstrap {
     const hasNext = items.length > limit;
     const slice = hasNext ? items.slice(0, limit) : items;
     return {
-      items: slice.map((i: any) => this.toDTO(i)),
+      items: slice.map((i: any) => this.toDTO(i, ctx.role)),
       nextCursor: hasNext ? (slice[slice.length - 1]?.id ?? null) : null,
     };
   }
@@ -174,17 +175,25 @@ export class IngredientsService implements OnApplicationBootstrap {
       },
     });
     if (!ing) throw new NotFoundException({ code: "not_found", message: "Ingredient not found" });
+    const canSeeCost = canViewFinancials(ctx.role);
     return {
       ...ing,
-      currentCostMicrocents: ing.currentCostMicrocents != null ? Number(ing.currentCostMicrocents) : null,
       densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
       currentStockCanonical: Number(ing.currentStockCanonical),
       reorderThresholdCanonical: ing.reorderThresholdCanonical != null ? Number(ing.reorderThresholdCanonical) : null,
       defaultYieldPct: Number(ing.defaultYieldPct),
-      priceHistory: (ing as any).priceHistory?.map((ph: any) => ({
-        ...ph,
-        pricePerCanonicalMicrocents: Number(ph.pricePerCanonicalMicrocents),
-      })),
+      // Cost/vendor/price-history — OWNER/MANAGER only. CHEF/STAFF hold
+      // ingredient.read for legitimate operational reasons (see the name,
+      // check stock) but must never see cost, vendor, or price history.
+      currentCostMicrocents: canSeeCost && ing.currentCostMicrocents != null ? Number(ing.currentCostMicrocents) : null,
+      currentVendorId: canSeeCost ? ing.currentVendorId : null,
+      vendor: canSeeCost ? ing.vendor : undefined,
+      priceHistory: canSeeCost
+        ? (ing as any).priceHistory?.map((ph: any) => ({
+            ...ph,
+            pricePerCanonicalMicrocents: Number(ph.pricePerCanonicalMicrocents),
+          }))
+        : undefined,
     };
   }
 
@@ -567,7 +576,8 @@ export class IngredientsService implements OnApplicationBootstrap {
     return { updated: result };
   }
 
-  private toDTO(ing: any): IngredientDTO {
+  private toDTO(ing: any, role?: Role): IngredientDTO {
+    const canSeeCost = role === undefined || canViewFinancials(role);
     // Diagnostic: log stored microcents so we can verify unit-conversion math.
     // Shows in API server logs when /ingredients is queried.
     if (ing.currentCostMicrocents != null) {
@@ -588,10 +598,10 @@ export class IngredientsService implements OnApplicationBootstrap {
       canonicalUnit: ing.canonicalUnit,
       densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
       currentCostCents:
-        ing.currentCostMicrocents != null
+        canSeeCost && ing.currentCostMicrocents != null
           ? Number(ing.currentCostMicrocents) / 1000
           : null,
-      currentVendorId: ing.currentVendorId,
+      currentVendorId: canSeeCost ? ing.currentVendorId : null,
       currentStockCanonical: Number(ing.currentStockCanonical ?? 0),
       reorderThresholdCanonical:
         ing.reorderThresholdCanonical != null ? Number(ing.reorderThresholdCanonical) : null,

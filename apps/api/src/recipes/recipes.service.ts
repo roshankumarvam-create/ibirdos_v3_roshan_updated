@@ -33,6 +33,7 @@ import {
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { computeLiveRecipeCost } from "./recipe-cost.helper";
 import { parseXLSX } from "./recipe-spreadsheet-parser";
+import { canViewFinancials, type Role } from "@ibirdos/permissions";
 
 const log = moduleLogger("RecipesService");
 
@@ -288,7 +289,7 @@ export class RecipesService {
     });
     const hasNext = items.length > limit;
     return {
-      items: (hasNext ? items.slice(0, limit) : items).map(this.toListDTO),
+      items: (hasNext ? items.slice(0, limit) : items).map((r) => this.toListDTO(r, ctx.role)),
       nextCursor: hasNext ? items[limit - 1]?.id ?? null : null,
     };
   }
@@ -315,24 +316,66 @@ export class RecipesService {
     });
     if (!r) throw new NotFoundException({ code: "not_found", message: "Recipe not found" });
 
-    // Compute live cost from current ingredient prices (source of truth)
+    // Compute live cost from current ingredient prices (source of truth).
+    // Computed BEFORE redaction — cost math always needs the real ingredient
+    // prices; only the outbound response is stripped for non-financial roles.
     const live = computeLiveRecipeCost(r);
+    const canSeeCost = canViewFinancials(ctx.role);
     return {
       ...r,
-      ingredients: r.ingredients.map(row => ({
-        ...row,
-        percentUtilized: row.yieldPctOverride != null ? Number(row.yieldPctOverride) : null,
-        prepNote: row.prepNote ?? row.notes ?? null,
-      })),
-      liveCostCents: live.totalCostCents,
-      livePerPortionCostCents: live.perPortionCostCents,
-      liveFoodCostPct: live.foodCostPct,
-      liveMarginPct: live.marginPct,
-      liveStaleness: live.staleness,
-      liveBreakdown: live.breakdown,
-      // Keep cached values for comparison / staleness display
-      cachedCostCents: r.cachedCostMicrocents != null ? Number(r.cachedCostMicrocents) / 1000 : null,
-      cachedCostUpdatedAt: r.cachedCostUpdatedAt,
+      ingredients: r.ingredients.map(row => {
+        const mapped: any = {
+          ...row,
+          percentUtilized: row.yieldPctOverride != null ? Number(row.yieldPctOverride) : null,
+          prepNote: row.prepNote ?? row.notes ?? null,
+        };
+        if (!canSeeCost && mapped.ingredient) {
+          const { currentCostMicrocents, ...restIngredient } = mapped.ingredient;
+          mapped.ingredient = restIngredient;
+        }
+        return mapped;
+      }),
+      ...(canSeeCost
+        ? {
+            liveCostCents: live.totalCostCents,
+            livePerPortionCostCents: live.perPortionCostCents,
+            liveFoodCostPct: live.foodCostPct,
+            liveMarginPct: live.marginPct,
+            liveStaleness: live.staleness,
+            liveBreakdown: live.breakdown,
+            // Keep cached values for comparison / staleness display
+            cachedCostCents: r.cachedCostMicrocents != null ? Number(r.cachedCostMicrocents) / 1000 : null,
+            cachedCostUpdatedAt: r.cachedCostUpdatedAt,
+          }
+        : this.stripFinancialFields()),
+    };
+  }
+
+  /**
+   * Field names to omit from `get()`'s raw-spread response for roles
+   * without financial visibility (CHEF/STAFF). Set to `undefined` rather
+   * than deleted — JSON.stringify drops undefined keys the same way, and
+   * this reads cleanly as an object-spread override.
+   */
+  private stripFinancialFields() {
+    return {
+      salePriceCents: undefined,
+      actualSellPriceCents: undefined,
+      goalFoodCostPct: undefined,
+      targetMarginPct: undefined,
+      paperCostCents: undefined,
+      cachedCostMicrocents: undefined,
+      cachedMarginPct: undefined,
+      cachedCostUpdatedAt: undefined,
+      costStaleness: undefined,
+      costComputeError: undefined,
+      costHistory: undefined,
+      liveCostCents: undefined,
+      livePerPortionCostCents: undefined,
+      liveFoodCostPct: undefined,
+      liveMarginPct: undefined,
+      liveStaleness: undefined,
+      liveBreakdown: undefined,
     };
   }
 
@@ -1002,15 +1045,25 @@ export class RecipesService {
   // Helpers
   // -----------------------------------------------------------------
 
-  private toListDTO = (r: any) => {
-    // Compute live cost from included ingredient relations
+  private toListDTO = (r: any, role: Role) => {
+    // Compute live cost from included ingredient relations (needed even for
+    // non-financial roles, since downstream staleness/count logic may use it —
+    // but the cost figures themselves are stripped below before returning).
     const live = computeLiveRecipeCost(r);
-    return {
+    const base = {
       id: r.id,
       name: r.name,
       category: r.category,
       status: r.status,
       portionsYielded: r.portionsYielded,
+      ingredientCount: r._count?.ingredients ?? 0,
+      autoReprice: r.autoReprice,
+      photoUrl: r.photoUrl,
+      updatedAt: r.updatedAt,
+    };
+    if (!canViewFinancials(role)) return base;
+    return {
+      ...base,
       salePriceCents: r.salePriceCents,
       // Live cost — always reflects current ingredient prices (source of truth)
       liveCostCents: live.totalCostCents,
@@ -1023,10 +1076,6 @@ export class RecipesService {
       cachedMarginPct: r.cachedMarginPct != null ? Number(r.cachedMarginPct) : null,
       cachedCostUpdatedAt: r.cachedCostUpdatedAt,
       costStaleness: r.costStaleness,
-      ingredientCount: r._count?.ingredients ?? 0,
-      autoReprice: r.autoReprice,
-      photoUrl: r.photoUrl,
-      updatedAt: r.updatedAt,
     };
   };
 }

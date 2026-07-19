@@ -11,6 +11,7 @@ import { toCanonical, formatCanonical } from "@ibirdos/types";
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { RecipesService } from "../recipes/recipes.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { canViewFinancials } from "@ibirdos/permissions";
 
 const log = moduleLogger("EventsService");
 
@@ -292,12 +293,16 @@ export class EventsService {
       include: { _count: { select: { menuItems: true, staff: true } } },
     });
     const page = items.length > limit ? items.slice(0, limit) : items;
+    const canSeeFinancials = canViewFinancials(ctx.role);
     return {
-      items: page.map((e: any) => ({
-        ...e,
-        portionMultiplier: e.portionMultiplier != null ? Number(e.portionMultiplier) : null,
-        computedMarginPct: e.computedMarginPct != null ? Number(e.computedMarginPct) : null,
-      })),
+      items: page.map((e: any) => {
+        const shaped = {
+          ...e,
+          portionMultiplier: e.portionMultiplier != null ? Number(e.portionMultiplier) : null,
+          computedMarginPct: e.computedMarginPct != null ? Number(e.computedMarginPct) : null,
+        };
+        return canSeeFinancials ? shaped : this.redactEventFinancials(shaped);
+      }),
       nextCursor: items.length > limit ? items[limit - 1]?.id ?? null : null,
     };
   }
@@ -330,7 +335,48 @@ export class EventsService {
       orderBy: [{ taskType: "asc" }, { displayOrder: "asc" }],
     });
 
-    return { ...e, kitchenTasks };
+    const shaped = { ...e, kitchenTasks };
+    return canViewFinancials(ctx.role) ? shaped : this.redactEventFinancials(shaped);
+  }
+
+  /**
+   * Strips revenue/cost/margin/labor fields from an event payload for
+   * roles without financial visibility (CHEF/STAFF). They hold event.read
+   * for legitimate operational reasons (schedule, menu, guest count) but
+   * must never see quoted price, computed food/labor cost, or margin —
+   * including the same figures nested in menuItems[].recipe and
+   * kitchenPacket.
+   */
+  private redactEventFinancials(e: any): any {
+    const {
+      quotedPriceCents, computedFoodCostCents, computedLaborCostCents, computedMarginPct,
+      markupPct, laborTotalCents, laborRateCentsPerHour, laborHoursEstimate,
+      frozenRecipeCostsCents, frozenIngredientPricesCents, quotedTotalOverrideCents,
+      ...rest
+    } = e;
+    const result: any = rest;
+
+    if (Array.isArray(result.menuItems)) {
+      result.menuItems = result.menuItems.map((mi: any) => {
+        if (!mi.recipe) return mi;
+        const { cachedCostMicrocents, salePriceCents, ...restRecipe } = mi.recipe;
+        return { ...mi, recipe: restRecipe };
+      });
+    }
+
+    if (result.kitchenPacket) {
+      const { totalFoodCostMicrocents, ...restPacket } = result.kitchenPacket;
+      if (Array.isArray(restPacket.ingredientsJson)) {
+        restPacket.ingredientsJson = restPacket.ingredientsJson.map((row: any) => {
+          if (!row || typeof row !== "object") return row;
+          const { costCents, ...restRow } = row;
+          return restRow;
+        });
+      }
+      result.kitchenPacket = restPacket;
+    }
+
+    return result;
   }
 
   async addMenuItem(

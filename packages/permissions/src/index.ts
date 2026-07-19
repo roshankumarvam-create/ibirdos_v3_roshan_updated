@@ -232,6 +232,20 @@ export function rolesWith(permission: Permission): Role[] {
   );
 }
 
+/**
+ * Whether this role may see cost/price/margin/revenue FIELDS embedded in
+ * otherwise-shared operational read endpoints (recipes, ingredients,
+ * events, inventory transactions). CHEF and STAFF legitimately hold
+ * recipe.read / ingredient.read / event.read / inventory.read for
+ * operational reasons (they need recipe steps, ingredient names, event
+ * schedules, stock levels) — but those same payloads must not carry
+ * financial figures. Reuses analytics.read, which is already
+ * OWNER/MANAGER-only, as the signal for "may see financial data."
+ */
+export function canViewFinancials(role: Role): boolean {
+  return can(role, "analytics.read");
+}
+
 // ---------------------------------------------------------------------
 // Spec invariants — enforced at compile time + runtime
 // ---------------------------------------------------------------------

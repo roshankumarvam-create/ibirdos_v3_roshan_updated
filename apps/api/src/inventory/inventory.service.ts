@@ -14,6 +14,7 @@ import { toCanonical } from "@ibirdos/types";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { isHierarchicalCsv, convertHierarchicalToFlat } from "./hierarchical-csv-parser";
+import { canViewFinancials } from "@ibirdos/permissions";
 
 const log = moduleLogger("InventoryService");
 
@@ -137,12 +138,15 @@ export class InventoryService {
       orderBy: { createdAt: "desc" },
       include: { ingredient: { select: { id: true, name: true, canonicalUnit: true, preferredDisplayUnit: true } } },
     });
+    const canSeeCost = canViewFinancials(ctx.role);
     return {
       items: (items.length > limit ? items.slice(0, limit) : items).map((t) => ({
         ...t,
         quantityCanonical: Number(t.quantityCanonical),
         balanceAfterCanonical: Number(t.balanceAfterCanonical),
-        costMicrocents: t.costMicrocents?.toString() ?? null,
+        // Total transaction cost is financial data — CHEF/STAFF hold
+        // inventory.read for stock levels only, never dollar amounts.
+        costMicrocents: canSeeCost ? (t.costMicrocents?.toString() ?? null) : null,
       })),
       nextCursor: items.length > limit ? items[limit - 1]?.id ?? null : null,
     };
