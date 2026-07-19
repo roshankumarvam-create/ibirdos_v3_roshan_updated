@@ -61,11 +61,20 @@ export class AnalyticsService {
   }
 
   async eventStats(ctx: TenantContext, range: Range) {
+    // Revenue counts once an event is PAID -- that's the financial trigger
+    // (matches EventsService.markAsPaid, which freezes quotedPriceCents at
+    // payment time), not the kitchen-lifecycle status. The previous
+    // status-based filter (COMPLETED/IN_SERVICE only) meant a paid event
+    // sitting at any earlier status (e.g. CONFIRMED, waiting on its event
+    // date) never counted toward revenue here, even though its revenue was
+    // already frozen and real. CANCELLED is excluded regardless of payment
+    // status -- a cancelled event isn't delivered revenue.
     const evs = await prisma.event.findMany({
       where: {
         workspaceId: ctx.workspaceId, deletedAt: null,
         startsAt: { gte: range.from, lte: range.to },
-        status: { in: ["COMPLETED", "IN_SERVICE"] },
+        paymentStatus: "PAID",
+        status: { not: "CANCELLED" },
       },
       select: { quotedPriceCents: true, computedFoodCostCents: true, computedLaborCostCents: true },
     });

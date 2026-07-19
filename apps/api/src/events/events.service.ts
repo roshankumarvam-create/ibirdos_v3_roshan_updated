@@ -750,6 +750,18 @@ export class EventsService {
       } as any,
     });
 
+    // Recompute computedFoodCostCents/computedLaborCostCents/computedMarginPct
+    // now that revenue may have just been frozen above (needsRevenueFreeze) --
+    // rollupCosts() reads quotedPriceCents fresh, so without this call an
+    // event with no prior quote would confirm as PAID but still carry a
+    // stale/null margin computed against the pre-freeze (null) revenue.
+    // Dashboard/Reports read these computed fields directly.
+    if (needsRevenueFreeze && liveQuoteTotalCents > 0) {
+      await this.rollupCosts(ctx, eventId).catch((err: any) =>
+        log.warn({ eventId, err: err.message }, "rollupCosts after markAsPaid failed"),
+      );
+    }
+
     // --- Notifications ---
     const chefMembers = await prisma.membership.findMany({
       where: { workspaceId: ctx.workspaceId, role: { in: ["CHEF", "MANAGER", "OWNER"] as any }, status: "ACTIVE" as any },
