@@ -173,6 +173,8 @@ No schema change needed — used the **existing** `inventory_transactions` table
 - `events.service.spec.ts` (8 tests) + `inventory.service.spec.ts` (5 tests) — pass. No existing test exercises `consumeInventoryForCompletedEvent` or `KitchenService.consumeIngredients` directly (no mocked-Prisma coverage for either) — **needs live verification**: (a) complete all kitchen tasks for a test event, then mark the event COMPLETED, confirm inventory is deducted once per ingredient, not twice — check `/inventory/transactions` for exactly one `CONSUME` row per ingredient per event; (b) mark a kitchen task DONE, revert it, mark DONE again — confirm only one `CONSUME` row for that task; (c) confirm an event with NO kitchen tasks used still gets the full bulk consume on COMPLETED (fallback path unchanged).
 - SQL correction for existing duplicate test-data transactions: written to `NEEDS_ROSHAN.md` as a template (Step 1 SELECT to find candidates, Step 2 offsetting `ADJUST` insert to reverse) — **not run**, no live DB access from this session to identify or verify the actual duplicate rows.
 
+**Re-verified (already fixed, no new work needed):** re-checked per instruction to confirm rather than assume. Searched the whole `apps/api/src` tree for every site that creates a `CONSUME` inventory transaction (`kind: "CONSUME"` literal, plus every `InventoryService.recordTransaction(...)` call) — confirmed exactly two creation sites exist (`EventsService.consumeInventoryForCompletedEvent`, `KitchenService.consumeIngredients`), both still guarded as described above, no third trigger path was missed.
+
 ---
 
 ## P0-3: Invoice totals / reconciliation
@@ -208,6 +210,19 @@ Separately, while tracing this I found the existing **client-side-only** reconci
 - `apps/api/src/invoices/invoices.service.spec.ts` — new, 10/10 pass. Covers: sum with/without excluded lines, blank-total fill, exact match, 1-cent tolerance, block on mismatch (including the literal reported-bug shape: stored total $0, lines sum to real money), and the genuinely-zero-invoice carve-out.
 - Full `vitest run` — 279/282 pass; the 3 failures (`recipes.service.spec.ts` × 2, `http-exception.filter.spec.ts` × 1) are **pre-existing on master**, confirmed via `git stash` + rerun before making any P0-3 changes — unrelated to this fix, not touched by it.
 - No test exercises the full `confirm()` flow end-to-end (heavy dependency graph: ingredient matching, price updates, inventory receive, recost queue — mocking all of it risked more test-authoring bugs than it caught) — **needs live verification**: (a) create a manual invoice, add lines, confirm WITHOUT touching the Subtotal/Total fields — total should auto-fill and confirm should succeed with the correct total, not $0; (b) create an invoice, manually type a Total that's clearly wrong (e.g. off by $100 from the line sum), attempt to confirm — should be blocked with a clear error, not silently accepted; (c) confirm the reconciliation banner now shows up for a blank-total invoice with real lines on it, before the reviewer even clicks Confirm.
+
+### Step: Re-audit — two more line-creation paths bypassed the recalc entirely
+
+Re-checked (per instruction to verify rather than assume the first pass was complete) every place that creates `InvoiceLine` rows, not just the four `InvoicesService` methods already covered. Found two bulk-insert paths that bypass `addLine()`/`recalcInvoiceTotals()` completely:
+
+- **`InvoicesService.importCsv()`** — uses `tx.invoiceLine.createMany(...)`, never recalculated the invoice's `subtotalCents`/`totalCents` afterward.
+- **`apps/api/src/workers/invoice-extraction.worker.ts`** — the AI vision-extraction path, almost certainly the *most common* way invoices actually enter this system (photo/PDF upload → OpenAI Vision → this worker persists the result). It wrote `result.data.subtotalCents`/`totalCents` straight from the AI's own extracted output, with **zero cross-check** against the lines being inserted in the same transaction. If the AI misreads or omits the total — very plausible for real vendor invoices with unusual layouts — the invoice was saved with a stale/blank/wrong total and stayed that way until a human noticed on the review page. This is very likely the literal mechanism behind the reported "$0.00 total despite having lines" bug, more so than the manual/CSV paths.
+
+**Fix:** both now compute the real subtotal from the lines actually being inserted, via the already-exported `sumInvoiceLineCents`. The worker specifically never overwrites an AI-provided `totalCents` (fills it only if the AI returned none) — a genuine AI-vs-lines mismatch is exactly what the reconciliation banner and `confirm()`'s hard block exist to catch; silently overwriting it at extraction time would hide a real extraction error instead of surfacing it. Confirmed via `grep` for every `invoiceLine.create`/`createMany` call site in `apps/api/src` that these were the only two gaps — no third path creates invoice lines.
+
+**Files changed:** `apps/api/src/invoices/invoices.service.ts`, `apps/api/src/workers/invoice-extraction.worker.ts`
+**Commit:** `94dec54` — fix(P0-3): recalc subtotal on CSV-imported and AI-extracted invoices too
+**Verification:** `pnpm typecheck` clean; `invoices.service.spec.ts` 10/10 pass (unchanged, still covers the pure functions this reuses). **Needs live verification**: upload a real invoice photo/PDF through the extract flow and confirm the resulting invoice's Subtotal on the review page matches the sum of the extracted lines, not whatever raw value the AI happened to output — including the case where the AI extraction is imperfect (mismatched total should now surface via the reconciliation banner, not silently persist).
 
 ---
 
