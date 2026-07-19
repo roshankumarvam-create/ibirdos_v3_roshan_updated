@@ -106,6 +106,29 @@ Given the above, "deploy and most bugs disappear" doesn't hold the way it was fr
 - No existing integration/e2e test exercises the service methods themselves (recipes/ingredients/events/inventory `.list()`/`.get()`) or the new page layouts against a running server — **needs live verification**: log in as Chef and confirm (a) `/invoices` and every `/reports/*` URL redirect to `/403` even when typed directly, (b) `GET /recipes`, `/recipes/:id`, `/ingredients`, `/ingredients/:id`, `/events`, `/events/:id`, `/inventory/transactions` return 200 with cost/price/margin/vendor/revenue fields absent (not just hidden in the UI — check the raw JSON, e.g. via browser devtools Network tab) while non-financial fields (names, schedules, stock counts) still render normally for Chef.
 - Endpoint-level guards on `/invoices/*` and `/reports/*` (Step 2 audit) were already correct pre-fix and unchanged by this commit — confirmed by direct read of both controllers.
 
+**Status: CONFIRMED PARTIALLY INCOMPLETE on the first pass** — re-audited per instruction to check "already fixed?" before assuming so, rather than re-stating the P0-1 status as simply done. The `list()`/`get()` redaction above was real and correct, but it wasn't the *whole* surface. Went through every route CHEF/STAFF can reach (not just the two obvious read endpoints per resource) and found three more leaks:
+
+### Step 5 — Re-audit: three more leaks found and fixed
+
+- **`POST /recipes/:id/recost`** — gated only by `recipe.read` (CHEF holds it), returns `totalCents`/`perPortionCents`/`marginPct`/per-line costs directly in the controller response, completely bypassing the service-layer redaction (which only covered `list()`/`get()`). Fixed in the controller: non-financial roles now get `{staleness, error}` only; the underlying recompute+persist is unchanged (it's cache-freshness bookkeeping, not a cost commit, same as `ingredient_change`-triggered recosts that already happen automatically).
+- **`GET /events/:id/ingredient-requirements`** — gated only by `event.read` (CHEF/STAFF hold it), returned `lastUnitPriceCents` and `vendorId` per ingredient sourced from the most recent matching invoice line. Quantities/gaps (legitimate kitchen-prep info) stay visible; price/vendor now stripped for non-financial roles.
+- **`PATCH /recipes/:id`** — the biggest one. Returns the full post-update Recipe row from `prisma.recipe.update()` regardless of which fields were actually in the request body. CHEF holds `recipe.update` (intentionally — they edit steps/ingredients) but not `recipe.update_cost`. Before this fix, a CHEF renaming a recipe (or editing any non-financial field) got back the recipe's full pre-existing `cachedCostMicrocents`, `salePriceCents`, `goalFoodCostPct`, `targetMarginPct`, `paperCostCents` in the same response — a bigger leak than the read-only endpoints since it's triggered by an action CHEF performs constantly. Now reuses the same `stripFinancialFields()` helper `get()` already applies.
+
+**Also audited and confirmed already safe (no leak, no change made):** `recipe.create()` and `addIngredient()`/`removeIngredient()` (return only self-submitted input or non-financial fields, never pre-existing others' data); `previewImport()`/`importCsv()` (ingredient matching only selects `id, name`); `ingredients.match()` (name/confidence only, no cost); every `ingredients.controller.ts` and `events.controller.ts` *write* endpoint other than the two above (all gated by permissions CHEF/STAFF don't hold — `ingredient.update`, `event.update`, `event.assign_staff`, `event.delete` — so they 403 before any response body is built, making response-shape irrelevant); all `inventory.controller.ts` write endpoints (`inventory.adjust`, not held by CHEF/STAFF).
+
+**Files changed (this pass):**
+- `apps/api/src/recipes/recipes.controller.ts`
+- `apps/api/src/recipes/recipes.service.ts`
+- `apps/api/src/events/events.service.ts`
+
+**Commit:** `5800f1c` — fix(P0-1): close three more financial-field leaks found on re-audit
+
+**Verification:**
+- `pnpm typecheck` (all 9 packages) — clean.
+- Full `vitest run` — 285/288 pass, same 3 pre-existing-on-master failures noted throughout this log (unrelated).
+- No automated test covers these three response shapes specifically (would need controller-level e2e, not present in this repo for any resource) — **needs live verification**: as CHEF, (a) `POST /recipes/:id/recost` on any recipe → response has no `totalCents`/`marginPct`/line costs; (b) `GET /events/:id/ingredient-requirements` on a paid event with a shortage → response shows quantities/gaps but `lastUnitPriceCents`/`vendorId`/`vendorSku` are `null`; (c) `PATCH /recipes/:id` with just `{name: "..."}` on a recipe that has a real `salePriceCents` set → response's `salePriceCents`/`cachedCostMicrocents`/etc. are all `undefined`, not the real values.
+- This re-audit is not a formal guarantee no fourth gap exists elsewhere in the app (e.g. any future new endpoint sharing a financial-role-gated permission needs the same check) — but every current route reachable by CHEF/STAFF across recipes/ingredients/events/inventory has now been read line-by-line, not just the two most obvious per resource.
+
 ---
 
 ## P0-2: Duplicate inventory consumption
