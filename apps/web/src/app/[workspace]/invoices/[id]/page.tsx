@@ -155,12 +155,16 @@ export default function InvoiceReviewPage({
     (l) => !l.excluded && l.category === "FOOD_INGREDIENT" && !l.committedIngredientId,
   );
 
-  // Client-side reconciliation: sum non-excluded lines vs invoice total
+  // Client-side reconciliation: sum non-excluded lines vs invoice total.
+  // The "genuinely zero" exception is keyed off lineSum (the REAL total,
+  // computed from what's actually on the invoice), not totalCents — a
+  // stored total of $0 while lines clearly add up to real money is exactly
+  // the bug this check exists to surface, not a case to wave through.
   const lineSum = invoice.lines
     .filter((l) => !l.excluded)
     .reduce((s, l) => s + Number(l.extendedPriceCents), 0);
   const totalCents = invoice.totalCents ?? 0;
-  const reconciles = totalCents === 0 || Math.abs(lineSum - totalCents) <= 1;
+  const reconciles = lineSum === 0 || Math.abs(lineSum - totalCents) <= 1;
 
   return (
     <div className="space-y-6 max-w-[1200px]">
@@ -216,15 +220,22 @@ export default function InvoiceReviewPage({
         </div>
       </div>
 
-      {/* Part 7 — Reconciliation banner */}
-      {!reconciles && !reconciliationDismissed && totalCents > 0 && (
+      {/* Part 7 — Reconciliation banner. Gated on lineSum (not totalCents) so a
+          blank total with real lines on it still warns — that combination is
+          exactly the "$0.00 total despite having lines" bug; the server
+          blocks confirm on it too (see InvoicesService.confirm), this banner
+          just surfaces it before the reviewer clicks Confirm. */}
+      {!reconciles && !reconciliationDismissed && lineSum > 0 && (
         <Card className="border-warning/40 bg-warning/5">
           <CardBody>
             <div className="flex items-center justify-between gap-4">
               <div className="text-sm">
-                <span className="text-warning font-medium">⚠ Lines don't match invoice total</span>
+                <span className="text-warning font-medium">
+                  {invoice.totalCents == null ? "⚠ Invoice total is blank" : "⚠ Lines don't match invoice total"}
+                </span>
                 <span className="text-text-secondary">
-                  {" "}(${(lineSum / 100).toFixed(2)} vs ${(totalCents / 100).toFixed(2)}) — review highlighted lines.
+                  {" "}(lines total ${(lineSum / 100).toFixed(2)}
+                  {invoice.totalCents != null && ` vs invoice total $${(totalCents / 100).toFixed(2)}`}) — it will be auto-filled, or fix the mismatch, before you can confirm.
                 </span>
               </div>
               <button

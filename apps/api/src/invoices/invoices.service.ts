@@ -20,6 +20,47 @@ const log = moduleLogger("InvoicesService");
 export const INVOICE_EXTRACTION_QUEUE = "invoice-extraction";
 export const RECIPE_RECOST_QUEUE = "recipe-recost";
 
+/**
+ * Reconciliation tolerance for invoice-total validation. Matches the
+ * client-side check already shown in the invoice review UI
+ * (apps/web .../invoices/[id]/page.tsx: `reconciles = ... <= 1`) — kept
+ * identical so the enforced server check never disagrees with what the
+ * reviewer already sees on screen.
+ */
+export const INVOICE_RECONCILE_TOLERANCE_CENTS = 1;
+
+/** Sum of non-excluded lines' extendedPriceCents — the invoice's derived subtotal. */
+export function sumInvoiceLineCents(lines: { extendedPriceCents: number | string; excluded: boolean }[]): number {
+  return lines
+    .filter((l) => !l.excluded)
+    .reduce((s, l) => s + Number(l.extendedPriceCents), 0);
+}
+
+/**
+ * Decide what to do with an invoice's stored total given a freshly computed
+ * subtotal: fill it in if it was never set, block confirmation if it's set
+ * but doesn't match lines + tax beyond the tolerance above, or pass if it's
+ * already correct.
+ *
+ * The "genuinely zero" exception (never block) applies to the REAL total —
+ * i.e. the value computed from the lines themselves (candidateTotalCents) —
+ * not the stored totalCents. A stored total of $0 while lines clearly sum to
+ * real money is exactly the bug this function exists to catch, not a case to
+ * wave through.
+ */
+export function reconcileInvoiceTotal(
+  totalCents: number | null,
+  subtotalCents: number,
+  taxCents: number | null,
+): { action: "fill" | "block" | "ok"; candidateTotalCents: number } {
+  const candidateTotalCents = subtotalCents + (taxCents ?? 0);
+  if (totalCents == null) return { action: "fill", candidateTotalCents };
+  if (candidateTotalCents !== 0 && Math.abs(candidateTotalCents - totalCents) > INVOICE_RECONCILE_TOLERANCE_CENTS) {
+    return { action: "block", candidateTotalCents };
+  }
+  return { action: "ok", candidateTotalCents };
+}
+
 @Injectable()
 export class InvoicesService {
   private readonly queue: Queue;
@@ -201,6 +242,29 @@ export class InvoicesService {
   // Line edits (review UI)
   // -----------------------------------------------------------------
 
+  /**
+   * Recompute subtotalCents from current (non-excluded) lines and persist it —
+   * the invoice's subtotal is a pure derived value, never something a reviewer
+   * should need to manually recalc. If totalCents has never been set, also
+   * fill it with subtotal + tax as a sane default so a fresh invoice never
+   * sits at a blank/$0.00 total just because nobody touched the Total field.
+   * Called after every line add/update/delete, and again at confirm() time.
+   */
+  private async recalcInvoiceTotals(ctx: TenantContext, invoiceId: string): Promise<void> {
+    const invoice = await prisma.invoice.findFirst({
+      where: { id: invoiceId, workspaceId: ctx.workspaceId },
+      select: { id: true, taxCents: true, totalCents: true, lines: { select: { extendedPriceCents: true, excluded: true } } },
+    });
+    if (!invoice) return;
+
+    const subtotalCents = sumInvoiceLineCents(invoice.lines);
+    const data: any = { subtotalCents };
+    if (invoice.totalCents == null) {
+      data.totalCents = subtotalCents + (invoice.taxCents ?? 0);
+    }
+    await prisma.invoice.update({ where: { id: invoiceId }, data });
+  }
+
   async updateLine(
     ctx: TenantContext,
     invoiceId: string,
@@ -227,10 +291,16 @@ export class InvoicesService {
     });
     if (!line) throw new NotFoundException({ code: "not_found", message: "Invoice line not found" });
 
-    return prisma.invoiceLine.update({
+    const updated = await prisma.invoiceLine.update({
       where: { id: lineId },
       data: { ...patch as any },
     });
+
+    if (patch.extendedPriceCents !== undefined || patch.excluded !== undefined) {
+      await this.recalcInvoiceTotals(ctx, invoiceId);
+    }
+
+    return updated;
   }
 
   // -----------------------------------------------------------------
@@ -261,6 +331,30 @@ export class InvoicesService {
         code: "validation_failed",
         message: "Cannot confirm an invoice with no lines. Add at least one line.",
       });
+    }
+
+    // Recalc subtotal fresh from current lines (never trust a stale cached value at
+    // the moment of commit) and reconcile against the invoice total before doing any
+    // of the ingredient/inventory work below. A blank total is auto-filled rather than
+    // blocked -- the goal is that a reviewer never HAS to type a total by hand, only
+    // that a wrong one gets caught. A total that doesn't reconcile IS blocked: that's
+    // the "$0.00 total despite having lines" class of bug this fixes, and letting it
+    // through would silently corrupt every downstream revenue/reporting surface.
+    const freshSubtotalCents = sumInvoiceLineCents(invoice.lines);
+    const reconciliation = reconcileInvoiceTotal(invoice.totalCents, freshSubtotalCents, invoice.taxCents);
+    if (reconciliation.action === "fill") {
+      await prisma.invoice.update({
+        where: { id: invoiceId },
+        data: { subtotalCents: freshSubtotalCents, totalCents: reconciliation.candidateTotalCents },
+      });
+      invoice.totalCents = reconciliation.candidateTotalCents;
+    } else if (reconciliation.action === "block") {
+      throw new BadRequestException({
+        code: "validation_failed",
+        message: `Invoice total ($${(invoice.totalCents! / 100).toFixed(2)}) doesn't match the sum of lines + tax ($${(reconciliation.candidateTotalCents / 100).toFixed(2)}). Fix the line items or update the total before confirming.`,
+      });
+    } else if (freshSubtotalCents !== invoice.subtotalCents) {
+      await prisma.invoice.update({ where: { id: invoiceId }, data: { subtotalCents: freshSubtotalCents } });
     }
 
     let matched = 0;
@@ -615,6 +709,8 @@ export class InvoicesService {
       });
     }
 
+    await this.recalcInvoiceTotals(ctx, invoiceId);
+
     return line;
   }
 
@@ -624,6 +720,7 @@ export class InvoicesService {
     });
     if (!line) throw new NotFoundException({ code: "not_found", message: "Invoice line not found" });
     await prisma.invoiceLine.delete({ where: { id: lineId } });
+    await this.recalcInvoiceTotals(ctx, invoiceId);
     return { deleted: true };
   }
 
