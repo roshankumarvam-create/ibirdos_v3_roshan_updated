@@ -6,6 +6,7 @@ import type { TenantContext } from "@ibirdos/db";
 import { CurrentCtx } from "../common/decorators/current-ctx.decorator";
 import { RequirePermission } from "../common/decorators/require-permission.decorator";
 import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
+import { canViewFinancials } from "@ibirdos/permissions";
 
 import { RecipesService } from "./recipes.service";
 
@@ -149,14 +150,23 @@ export class RecipesController {
 
   @Post(":id/recost") @RequirePermission("recipe.read")
   recost(@CurrentCtx() ctx: TenantContext, @Param("id") id: string) {
-    return this.svc.recost(ctx, id, "manual_recost").then((r) => ok({
-      totalCents: Number(r.totalMicrocents) / 1000,
-      perPortionCents: r.perPortionMicrocents != null ? Number(r.perPortionMicrocents) / 1000 : null,
-      marginPct: r.marginPct, staleness: r.staleness, error: r.computeError,
-      lines: r.lines.map((l) => ({
-        ...l,
-        lineCostMicrocents: l.lineCostMicrocents != null ? l.lineCostMicrocents.toString() : null,
-      })),
-    }));
+    // recipe.read is intentionally shared with CHEF/STAFF (they need recipe
+    // steps/ingredients), and triggering a recost is just cache-freshness
+    // bookkeeping, not a cost commit -- but the response itself must not
+    // hand back cost/margin figures to a role that can't otherwise see them.
+    return this.svc.recost(ctx, id, "manual_recost").then((r) => {
+      if (!canViewFinancials(ctx.role)) {
+        return ok({ staleness: r.staleness, error: r.computeError });
+      }
+      return ok({
+        totalCents: Number(r.totalMicrocents) / 1000,
+        perPortionCents: r.perPortionMicrocents != null ? Number(r.perPortionMicrocents) / 1000 : null,
+        marginPct: r.marginPct, staleness: r.staleness, error: r.computeError,
+        lines: r.lines.map((l) => ({
+          ...l,
+          lineCostMicrocents: l.lineCostMicrocents != null ? l.lineCostMicrocents.toString() : null,
+        })),
+      });
+    });
   }
 }

@@ -431,6 +431,14 @@ export class RecipesService {
     if (salePriceCents !== undefined || portionsYielded !== undefined) {
       await this.recost(ctx, id, "recipe_edit");
     }
+
+    // update() returns the FULL post-update row regardless of which fields
+    // were actually in the patch -- CHEF holds recipe.update (to edit steps/
+    // ingredients) but not recipe.update_cost, so e.g. renaming a recipe must
+    // not echo back its pre-existing cachedCostMicrocents/salePriceCents/etc.
+    if (!canViewFinancials(ctx.role)) {
+      return { ...updated, ...this.stripFinancialFields() };
+    }
     return updated;
   }
 

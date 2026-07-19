@@ -996,6 +996,12 @@ export class EventsService {
     });
   }
 
+  /**
+   * Ingredient shortage/requirements for an event -- gated only by event.read
+   * (CHEF/STAFF legitimately hold it, for kitchen prep visibility), but the
+   * last-purchase price and vendor are financial data and must be stripped
+   * for those roles. Quantities/gaps stay visible either way.
+   */
   async ingredientRequirements(ctx: TenantContext, eventId: string): Promise<any[]> {
     const event = await prisma.event.findFirst({
       where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
@@ -1089,6 +1095,7 @@ export class EventsService {
       },
     });
     const lineByIngredient = new Map(lastInvoiceLines.map((l) => [l.committedIngredientId!, l]));
+    const canSeeCost = canViewFinancials(ctx.role);
 
     return Array.from(agg.values()).map((entry) => {
       const gap = entry.requiredCanonical - entry.currentStockCanonical;
@@ -1110,9 +1117,9 @@ export class EventsService {
         gap: +gap.toFixed(4),
         gapDisplay: +(gap / displayFactor).toFixed(2),
         isShort: gap > 0,
-        lastUnitPriceCents: lastLine?.unitPriceCents ?? null,
-        vendorId: lastLine?.invoice?.vendorId ?? null,
-        vendorSku: lastLine?.descriptionRaw ?? null,
+        lastUnitPriceCents: canSeeCost ? (lastLine?.unitPriceCents ?? null) : null,
+        vendorId: canSeeCost ? (lastLine?.invoice?.vendorId ?? null) : null,
+        vendorSku: canSeeCost ? (lastLine?.descriptionRaw ?? null) : null,
       };
     }).sort((a, b) => (b.isShort ? 1 : 0) - (a.isShort ? 1 : 0));
   }
