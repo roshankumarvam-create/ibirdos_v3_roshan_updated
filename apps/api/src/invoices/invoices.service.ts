@@ -855,6 +855,11 @@ export class InvoicesService {
       return inv;
     });
 
+    // createMany() above bypasses addLine(), which is where subtotal/total
+    // auto-recalc normally happens -- without this call, a CSV-imported
+    // invoice would sit with a stale/blank subtotalCents until confirm().
+    await this.recalcInvoiceTotals(ctx, invoice.id);
+
     await writeAudit(ctx, {
       action: "invoice.csv_imported",
       entityType: "Invoice",

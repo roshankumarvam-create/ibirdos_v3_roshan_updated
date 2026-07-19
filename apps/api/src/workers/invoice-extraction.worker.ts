@@ -24,7 +24,7 @@ import { moduleLogger } from "@ibirdos/logger";
 import { extractInvoice, type ExtractResult } from "@ibirdos/ai";
 import pdfParse from "pdf-parse";
 
-import { INVOICE_EXTRACTION_QUEUE } from "../invoices/invoices.service";
+import { INVOICE_EXTRACTION_QUEUE, sumInvoiceLineCents, reconcileInvoiceTotal } from "../invoices/invoices.service";
 
 const s3 = new S3Client({
   region: "auto",
@@ -167,6 +167,19 @@ const worker = new Worker<JobData>(
         }),
       );
 
+      // Compute the real subtotal from the lines we're about to insert rather
+      // than trusting the AI's own subtotalCents blindly -- extraction can
+      // misread or omit totals, which otherwise leaves the invoice sitting at
+      // a stale/blank total until the reviewer notices. Never overwrite an
+      // AI-extracted totalCents here (only fill it if the AI didn't provide
+      // one) -- a real mismatch between the AI's total and the lines is
+      // exactly what the reconciliation banner (and InvoicesService.confirm's
+      // hard block) exist to catch; this worker shouldn't paper over it.
+      const extractedSubtotalCents = sumInvoiceLineCents(
+        lines.map(({ line }) => ({ extendedPriceCents: line.extendedPriceCents, excluded: false })),
+      );
+      const reconciliation = reconcileInvoiceTotal(result.data.totalCents, extractedSubtotalCents, result.data.taxCents);
+
       // Atomically: update invoice header, create lines, mark job done
       await prisma.$transaction(async (tx) => {
         await tx.invoice.update({
@@ -178,9 +191,9 @@ const worker = new Worker<JobData>(
             invoiceNumber: result.data.invoiceNumber,
             invoiceDate: result.data.invoiceDate ? new Date(result.data.invoiceDate) : null,
             dueDate: result.data.dueDate ? new Date(result.data.dueDate) : null,
-            subtotalCents: result.data.subtotalCents,
+            subtotalCents: extractedSubtotalCents,
             taxCents: result.data.taxCents,
-            totalCents: result.data.totalCents,
+            totalCents: reconciliation.action === "fill" ? reconciliation.candidateTotalCents : result.data.totalCents,
             currency: result.data.currency,
             aiModel: result.model,
             aiTokensInput: result.tokensInput,
