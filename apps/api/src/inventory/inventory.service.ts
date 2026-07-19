@@ -101,6 +101,26 @@ export class InventoryService {
     return tx;
   }
 
+  /**
+   * Idempotency check: has a transaction of this kind already been recorded
+   * for this (sourceKind, sourceRef) pair? Used to guard auto-consume
+   * triggers (event completion, kitchen task DONE) against firing twice for
+   * the same underlying event — e.g. a retried status transition, or two
+   * independent triggers both covering the same consumption.
+   */
+  async hasTransactionFor(
+    ctx: TenantContext,
+    sourceKind: string,
+    sourceRef: string,
+    kind: RecordTxParams["kind"] = "CONSUME",
+  ): Promise<boolean> {
+    const existing = await prisma.inventoryTransaction.findFirst({
+      where: { workspaceId: ctx.workspaceId, sourceKind, sourceRef, kind },
+      select: { id: true },
+    });
+    return existing != null;
+  }
+
   async checkLowStock(ctx: TenantContext, ingredientId: string, current: Decimal, threshold: Decimal | null) {
     if (!threshold || current.gte(threshold)) {
       // If stock is back above threshold, resolve any open alert

@@ -11,6 +11,7 @@ import { toCanonical, formatCanonical } from "@ibirdos/types";
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { RecipesService } from "../recipes/recipes.service";
 import { NotificationsService } from "../notifications/notifications.service";
+import { InventoryService } from "../inventory/inventory.service";
 import { canViewFinancials } from "@ibirdos/permissions";
 
 const log = moduleLogger("EventsService");
@@ -21,6 +22,7 @@ export class EventsService {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly recipes: RecipesService,
     private readonly notifications: NotificationsService,
+    private readonly inventory: InventoryService,
   ) {}
 
   // -----------------------------------------------------------------
@@ -96,6 +98,48 @@ export class EventsService {
   }
 
   private async consumeInventoryForCompletedEvent(ctx: TenantContext, eventId: string): Promise<void> {
+    // Idempotency guard 1: this event-level bulk consume already ran for this
+    // event (e.g. updateStatus("COMPLETED") retried, or status flapped back
+    // to COMPLETED again). Without this, every re-entry deducts the full
+    // recipe list from stock again.
+    if (await this.inventory.hasTransactionFor(ctx, "Event", eventId, "CONSUME")) {
+      log.info({ eventId }, "event inventory already consumed — skipping duplicate auto-consume");
+      return;
+    }
+
+    // Idempotency guard 2: kitchen tasks for this event already consumed
+    // ingredients at the per-task level (KitchenService.updateTask, on DONE).
+    // That is the more accurate record of what was actually prepped — if it
+    // already ran, do NOT also run the bulk recipe-based consume below, or
+    // every ingredient gets deducted twice (once per task, once again here
+    // for the whole event). The bulk consume remains the fallback for events
+    // that never used the kitchen-task board at all.
+    const eventTasks = await prisma.kitchenTask.findMany({
+      where: { workspaceId: ctx.workspaceId, eventId },
+      select: { id: true },
+    });
+    if (eventTasks.length > 0) {
+      const taskConsumed = await prisma.inventoryTransaction.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          sourceKind: "KitchenTask",
+          sourceRef: { in: eventTasks.map((t) => t.id) },
+          kind: "CONSUME",
+        },
+        select: { id: true },
+      });
+      if (taskConsumed) {
+        log.info({ eventId }, "kitchen tasks already consumed inventory for this event — skipping event-level bulk auto-consume");
+        await writeAudit(ctx, {
+          action: "event.inventory_consume_skipped",
+          entityType: "Event",
+          entityId: eventId,
+          metadata: { reason: "kitchen_task_consumption_already_occurred" },
+        });
+        return;
+      }
+    }
+
     const event = await prisma.event.findFirst({
       where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
       include: {
@@ -170,7 +214,7 @@ export class EventsService {
               balanceAfterCanonical: new Decimal(newBalance),
               sourceKind: "Event",
               sourceRef: eventId,
-              notes: "Auto-consume on event COMPLETED",
+              notes: `Auto-consume on event COMPLETED — "${event.name}"`,
               createdById: ctx.userId,
             },
           }),

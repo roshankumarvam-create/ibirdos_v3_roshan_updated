@@ -34,7 +34,7 @@ describe("EventsService.delete", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    svc = new EventsService({} as any, {} as any, {} as any);
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
   });
 
   it("soft-deletes an event by setting deletedAt", async () => {

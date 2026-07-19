@@ -113,7 +113,7 @@ export class KitchenService {
 
     // Auto-CONSUME inventory when transitioning to DONE
     if (patch.status === "DONE" && task.status !== "DONE" && task.recipeId && task.targetPortions) {
-      await this.consumeIngredients(ctx, task.recipeId, task.targetPortions, taskId).catch((err) =>
+      await this.consumeIngredients(ctx, task.recipeId, task.targetPortions, taskId, task.eventId).catch((err) =>
         log.warn({ err: err.message, taskId }, "inventory consume encountered errors — partial consume applied"),
       );
     }
@@ -132,7 +132,16 @@ export class KitchenService {
     recipeId: string,
     targetPortions: number,
     taskId: string,
+    eventId: string | null,
   ) {
+    // Idempotency guard: this task's consumption already ran (e.g. the task
+    // was marked DONE, reverted, and marked DONE again). Without this, every
+    // re-completion deducts the recipe's ingredients from stock again.
+    if (await this.inventory.hasTransactionFor(ctx, "KitchenTask", taskId, "CONSUME")) {
+      log.info({ taskId }, "kitchen task inventory already consumed — skipping duplicate auto-consume");
+      return;
+    }
+
     const recipe = await prisma.recipe.findFirst({
       where: { id: recipeId, workspaceId: ctx.workspaceId },
       include: {
@@ -149,6 +158,10 @@ export class KitchenService {
       log.warn({ recipeId, taskId }, "recipe not found for CONSUME — skipping");
       return;
     }
+
+    const event = eventId
+      ? await prisma.event.findFirst({ where: { id: eventId, workspaceId: ctx.workspaceId }, select: { name: true } })
+      : null;
 
     const portionsYielded = recipe.portionsYielded ?? 1;
     const scale = targetPortions / portionsYielded;
@@ -171,7 +184,9 @@ export class KitchenService {
           quantityCanonical: -consumedCanonical,
           sourceKind: "KitchenTask",
           sourceRef: taskId,
-          notes: `${recipe.name} × ${targetPortions} portions`,
+          notes: event
+            ? `${recipe.name} × ${targetPortions} portions — event "${event.name}"`
+            : `${recipe.name} × ${targetPortions} portions`,
         });
         consumed++;
       } catch (err: any) {
