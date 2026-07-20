@@ -2,6 +2,27 @@
 
 ---
 
+## P0-1 — Live Chef-account verification checklist (both audit-found gaps now fixed in code — needs a real Chef login to confirm)
+
+No decision needed here — both fixes were unambiguous (checked the permission matrix before applying either one; see FIX_LOG.md "P0-1 FIX" for the exact roles-granted-access check). This is purely the test list you asked for: log in as a CHEF-role user on workspace `cafe-71` and run through these. Everything else the original P0-1 audit checked was already protected pre-existing code and doesn't need re-testing here (it's covered by the audit table in FIX_LOG.md).
+
+**1. `POST /recipes/extract` — the ingredient-cost leak during recipe extraction**
+- Permission required to reach the endpoint at all: `recipe.create` (Chef holds this — intentional, chefs propose recipes, so Chef should still be able to use the extract feature).
+- What changed: the `matchedCostCents` field on each returned ingredient.
+- Test: as Chef, go to Recipes → New/Import → upload a recipe photo (or a CSV/XLSX with ingredient names that match existing ingredients that have a cost set). Check the raw API response (browser DevTools → Network tab → the `/recipes/extract` request) for each matched ingredient line.
+  - **Expected now:** `matchedCostCents` is `null` for every line, even when the ingredient it matched to has a real cost in your database.
+  - **Should still work:** `matchedName`, `ingredientId`, `matchedDimension`, `matchedCanonicalUnit`, `matchedDensityGPerMl` are all still populated — Chef should still see which existing ingredient each line matched to, just not its cost.
+  - **Cross-check as Owner or Manager:** same upload, same request — `matchedCostCents` should still show the real value (not null). If it's null for Owner/Manager too, that's a bug in the fix, not the intended behavior.
+
+**2. `GET /billing/subscription` — wrong permission gate**
+- Permission required now: `billing.read` (was `workspace.read`).
+- Test: as Chef, this isn't reachable through any UI (the `/billing` page already blocked Chef client-side, and the sidebar never showed a Billing link for Chef) — so the only way to actually test this one is a direct API call, e.g. from DevTools console while logged in as Chef: `fetch('/api/v1/billing/subscription', {credentials: 'include'})` (adjust the path prefix to match your actual API base) and confirm you get a `403 Forbidden`, not a 200 with subscription data.
+- **Cross-check as Owner or Manager:** log in as each, visit `/billing` normally — the page should load and show the real plan/subscription exactly as before (this must not regress; Manager access was the specific thing double-checked before applying this fix).
+
+**If either check comes back wrong (Chef sees data that should be hidden, or Owner/Manager gets blocked from something that worked before), that's a real bug in my fix — flag it back rather than working around it in the UI.**
+
+---
+
 ## P0-1 — Vercel deployment commit not independently verifiable
 
 I confirmed the Railway API deployment exactly matches local repo HEAD (`f1b3822`, verified via `railway status --json` deployment metadata — commit hash, author, and message all match). I do **not** have working Vercel access in this session (no CLI/API auth available non-interactively), so I cannot confirm the deployed web bundle is also on `f1b3822`.

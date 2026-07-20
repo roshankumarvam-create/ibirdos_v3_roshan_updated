@@ -269,3 +269,201 @@ This isn't a filter bug to fix — there is no code path that has ever written e
 **Re-verified (already fixed, no new work needed):** re-checked `eventStats()`'s filter and `markAsPaid()`'s `rollupCosts()` call are both still present and correct. Re-confirmed no other query anywhere filters events by the old `status: {in: [COMPLETED, IN_SERVICE]}` shape (the only other `paymentStatus`/status-filter hits in the codebase are `Invoice.paymentStatus` on the unrelated vendor-aging report, and `markAsPaid()`'s own guard against double-paying). Root cause #3 (Daily Sales / 5 of 8 Reports have no Event pipe at all) remains an open decision in `NEEDS_ROSHAN.md`, unchanged — still correctly not guessed at.
 
 ---
+
+## P0-1 AUDIT — endpoint-by-endpoint coverage table (audit only, NO code changes)
+
+**Requested explicitly: audit first, don't build.** This is a fresh line-by-line read of every controller in the current repo (not a re-statement of the earlier P0-1 fix commits above) to answer one question per endpoint: does a guard exist, what does it require, and would CHEF actually be blocked. Read every `.controller.ts` under `apps/api/src` that touches invoices, reports, recipes, ingredients, events, or inventory, plus the permission matrix and both guards (`TenantGuard`, `RbacGuard`) directly — not inferred from prior log entries.
+
+**How the guard mechanism works (for context on the table below):** `TenantGuard` runs first on every non-`@Public()` route and always enforces authentication — that part can't be bypassed. `RbacGuard` runs second and reads `@RequireRole(...)` / `@RequirePermission(...)` off the route; **if neither decorator is present, `RbacGuard` no-ops and the route is reachable by any authenticated role** ("default-open by design" per its own code comment — the guard trusts every controller to self-declare its requirement). So "UNPROTECTED" below means one of: no decorator at all, or a decorator present but using a permission CHEF happens to hold.
+
+CHEF's full permission set, current matrix (`packages/permissions/src/index.ts`): `workspace.read`, `user.read`, `ingredient.read`, `ingredient.match`, `recipe.create`, `recipe.read`, `recipe.update`, `inventory.read`, `event.read`, `kitchen.read`, `kitchen.update_task`, `yield.create`, `yield.read`, `waste.create`, `waste.read`. CHEF holds **no** `*.update_cost`, `invoice.*`, `analytics.*`, `billing.*`, `vendor.*`, `daily_sales.*`, or `inventory.adjust` — those are the permissions this table checks against.
+
+### 1. `/invoices` and invoice API endpoints — `apps/api/src/invoices/invoices.controller.ts`
+
+| Endpoint | Guard | Permission required | CHEF holds it? | Verdict |
+|---|---|---|---|---|
+| `GET /invoices` | `@RequirePermission` | `invoice.read` | No | **PROTECTED** |
+| `POST /invoices` | `@RequirePermission` | `invoice.upload` | No | **PROTECTED** |
+| `POST /invoices/extract` | `@RequirePermission` | `invoice.upload` | No | **PROTECTED** |
+| `POST /invoices/manual` | `@RequirePermission` | `invoice.upload` | No | **PROTECTED** |
+| `GET /invoices/:id` | `@RequirePermission` | `invoice.read` | No | **PROTECTED** |
+| `PATCH /invoices/:id` | `@RequirePermission` | `invoice.review` | No | **PROTECTED** |
+| `PATCH /invoices/:id/lines/:lineId` | `@RequirePermission` | `invoice.review` | No | **PROTECTED** |
+| `POST /invoices/:id/lines` | `@RequirePermission` | `invoice.review` | No | **PROTECTED** |
+| `DELETE /invoices/:id/lines/:lineId` | `@RequirePermission` | `invoice.review` | No | **PROTECTED** |
+| `POST /invoices/:id/confirm` | `@RequirePermission` | `invoice.confirm` | No | **PROTECTED** |
+| `POST /invoices/import-csv` | `@RequirePermission` | `invoice.upload` | No | **PROTECTED** |
+| `POST /invoices/:id/retry` | `@RequirePermission` | `invoice.upload` | No | **PROTECTED** |
+
+**Every invoice endpoint is decorated. CHEF holds none of `invoice.*`. All 12 routes return 403 for CHEF.**
+
+### 2. `/reports`, `/reports/vendor-aging` and report API endpoints — `apps/api/src/reports/reports.controller.ts` (+ `apps/api/src/analytics/analytics.controller.ts`, closely related)
+
+| Endpoint | Guard | Permission required | CHEF holds it? | Verdict |
+|---|---|---|---|---|
+| `GET /reports/food-cost-vs-sales` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /reports/labor-cost-vs-sales` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /reports/rent-vs-sales` | `@RequirePermission` | `analytics.finance.read` | No | **PROTECTED** |
+| `GET /reports/prime-cost` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /reports/sales-by-period` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /reports/low-margin-events` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /reports/catering-vs-events` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /reports/vendor-price-changes` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /reports/cost-alerts` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /reports/vendor-aging` | `@RequirePermission` | `analytics.finance.read` | No | **PROTECTED** |
+| `GET /analytics/summary` (Dashboard) | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /analytics/recipes/top-margin` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /analytics/recipes/high-cost` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /analytics/recipes/low-margin` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /analytics/ingredients/:id/price-trend` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /analytics/waste/by-reason` | `@RequirePermission` | `analytics.read` | No | **PROTECTED** |
+| `GET /analytics/pnl` | `@RequirePermission` | `analytics.finance.read` | No | **PROTECTED** |
+| `GET /insights` , `:id`, `:id/acknowledge`, `:id/dismiss`, `:id/actioned`, `_internal/run-now` | `@RequirePermission` (all 6) | `analytics.read` | No | **PROTECTED** |
+
+**Every report/analytics/insight endpoint is decorated with `analytics.read` or `analytics.finance.read`. CHEF holds neither. All 18 routes return 403 for CHEF.**
+
+### 3. Recipe cost/price/margin endpoints — `apps/api/src/recipes/recipes.controller.ts` + `recipes-extract.controller.ts`
+
+| Endpoint | Guard | Permission required | CHEF holds it? | Response financial fields redacted for CHEF? | Verdict |
+|---|---|---|---|---|---|
+| `GET /recipes` | `@RequirePermission` | `recipe.read` | **Yes** (legitimate — needs recipe names) | Yes — `recipes.service.ts` `toListDTO()` strips `salePriceCents`, `live*Cost/Margin*`, `cachedCost*`, per-ingredient `currentCostMicrocents` via `canViewFinancials()` | **PROTECTED** (field-level) |
+| `GET /recipes/:id` | `@RequirePermission` | `recipe.read` | Yes | Yes — same `stripFinancialFields()` helper, verified present at `recipes.service.ts:360` | **PROTECTED** (field-level) |
+| `PATCH /recipes/:id` | `@RequirePermission` | `recipe.update` | **Yes** (legitimate — edits steps/ingredients) | Yes — `update()` returns full post-update row but strips financials for `!canViewFinancials(ctx.role)`, verified at `recipes.service.ts:439-441` | **PROTECTED** (field-level) |
+| `POST /recipes/:id/recost` | `@RequirePermission` | `recipe.read` | Yes (intentional — recost is cache-freshness bookkeeping) | Yes — controller strips to `{staleness, error}` only when `!canViewFinancials(ctx.role)`, verified at `recipes.controller.ts:158-160` | **PROTECTED** (field-level) |
+| `POST /recipes` (create) | `@RequirePermission` | `recipe.create` | Yes (chefs propose recipes) | N/A — only echoes submitted input, no pre-existing financial data to leak | **PROTECTED** (nothing to leak) |
+| `POST /recipes/:id/ingredients`, `DELETE .../ingredients/:linkId` | `@RequirePermission` | `recipe.update` | Yes | N/A — line mutation responses don't include cost/price fields | **PROTECTED** |
+| `POST /recipes/preview-import`, `POST /recipes/import-csv` | `@RequirePermission` | `recipe.create` | Yes | N/A — ingredient matching in these two only selects `{id, name}`, no cost | **PROTECTED** |
+| **`POST /recipes/extract`** (`recipes-extract.controller.ts`) | `@RequirePermission` | `recipe.create` | **Yes** | **NO — no redaction at all.** `canViewFinancials` is not imported or referenced anywhere in this file. | **⚠️ UNPROTECTED — see finding below** |
+
+**Finding — `POST /recipes/extract` leaks ingredient cost to CHEF, not covered by the earlier P0-1 fix pass:** This is a *separate* NestJS controller class (`RecipesExtractController`, registered in `recipes.module.ts` alongside `RecipesController`, both mapped to the `recipes` route prefix) that handles image/Excel/CSV recipe extraction. Its `findIngredient()` helper calls `mapIngredientMatch()`, which always includes `currentCostCents` (from `currentCostMicrocents`) in the matched-ingredient object — this lands in the response as `matchedCostCents` on every enriched ingredient line, for **both** the vision path (`ingredients[]`) and the CSV/Excel path (`ingredientLines[]`). The route is gated only by `recipe.create`, which CHEF legitimately holds (chefs propose recipes). Nothing strips `matchedCostCents` before the response goes out — unlike every other recipe endpoint above, this file never imports `canViewFinancials`. **Concretely: a CHEF uploading a recipe photo, XLSX, or CSV to `POST /recipes/extract` gets back the current cost of every ingredient the extractor auto-matched, in the raw API response — even though `GET /recipes/:id` and `GET /ingredients/:id` both correctly hide that same figure from them.** Not fixed — audit only, per your instruction. Would need the same `canViewFinancials(ctx.role)` guard the other recipe endpoints use, applied to `mapIngredientMatch()`'s two call sites in `recipes-extract.controller.ts`.
+
+### 4. Ingredient cost/vendor/price-history endpoints (GET) — `apps/api/src/ingredients/ingredients.controller.ts`
+
+| Endpoint | Guard | Permission required | CHEF holds it? | Response financial fields redacted for CHEF? | Verdict |
+|---|---|---|---|---|---|
+| `GET /ingredients` | `@RequirePermission` | `ingredient.read` | Yes (legitimate) | Yes — `list()`/`toDTO()` null out `currentCostMicrocents`, `currentVendorId`, `vendor`, `priceHistory` via `canSeeCost = canViewFinancials(ctx.role)`, verified at `ingredients.service.ts:178-192` | **PROTECTED** (field-level) |
+| `GET /ingredients/:id` | `@RequirePermission` | `ingredient.read` | Yes | Yes — same fields redacted at `ingredients.service.ts:580-613` (`get()`) | **PROTECTED** (field-level) |
+| `GET /ingredients/missing-threshold-count` | `@RequirePermission` | `ingredient.read` | Yes | N/A — returns only a count, no cost data | **PROTECTED** |
+
+### 5. Ingredient edit/delete endpoints
+
+| Endpoint | Guard | Permission required | CHEF holds it? | Verdict |
+|---|---|---|---|---|
+| `PATCH /ingredients/:id` (edit name/category/etc.) | `@RequirePermission` | `ingredient.update` | **No** | **PROTECTED** |
+| `POST /ingredients/:id/price` (the actual cost-write endpoint) | `@RequirePermission` | `ingredient.update_cost` | **No** — runtime assertion in `packages/permissions/src/index.ts:276-278` throws at startup if this ever changes | **PROTECTED** |
+| `DELETE /ingredients/:id` | `@RequirePermission` | `ingredient.delete` | **No** | **PROTECTED** |
+| `POST /ingredients/:id/aliases` | `@RequirePermission` | `ingredient.update` | No | **PROTECTED** |
+| `POST /ingredients/match` | `@RequirePermission` | `ingredient.match` | Yes (legitimate — invoice-review UI) | N/A — name/confidence only, no cost | **PROTECTED** |
+| `POST /ingredients/migrate-display-units` | `@RequirePermission` | `ingredient.update` | No | **PROTECTED** |
+
+### 6. Event revenue/food-cost endpoints — `apps/api/src/events/events.controller.ts`
+
+| Endpoint | Guard | Permission required | CHEF holds it? | Response financial fields redacted for CHEF? | Verdict |
+|---|---|---|---|---|---|
+| `GET /events` | `@RequirePermission` | `event.read` | Yes (legitimate — schedules) | Yes — `redactEventFinancials()` strips `quotedPriceCents`, `computedFoodCostCents`, `computedLaborCostCents`, `computedMarginPct`, `markupPct`, labor fields, plus nested `menuItems[].recipe.{cachedCostMicrocents,salePriceCents}`; verified at `events.service.ts:340-348` | **PROTECTED** (field-level) |
+| `GET /events/:id` | `@RequirePermission` | `event.read` | Yes | Yes — same `redactEventFinancials()`, plus nested `kitchenPacket.{totalFoodCostMicrocents, ingredientsJson[].costCents}` stripped, verified at `events.service.ts:382-424` | **PROTECTED** (field-level) |
+| `GET /events/:id/ingredient-requirements` | `@RequirePermission` | `event.read` | Yes | Yes — `lastUnitPriceCents`/`vendorId`/`vendorSku` all gated on `canSeeCost`, verified at `events.service.ts:1098-1122`; quantities/gaps stay visible (legitimate kitchen-prep info) | **PROTECTED** (field-level) |
+| `POST /events` (create) | `@RequirePermission` | `event.create` | **No** | — | **PROTECTED** |
+| `PATCH /events/:id/menu`, `/menu/:itemId`, `DELETE .../menu/:itemId` | `@RequirePermission` | `event.update` | **No** | — | **PROTECTED** |
+| `PATCH /events/:id/quote` | `@RequirePermission` | `event.update` | **No** | — | **PROTECTED** |
+| `POST /events/:id/paid` (`markAsPaid`) | `@RequirePermission` | `event.update` | **No** | — | **PROTECTED** |
+| `POST /events/:id/staff` | `@RequirePermission` | `event.assign_staff` | **No** | — | **PROTECTED** |
+| `POST /events/:id/kitchen-packet/generate` | `@RequirePermission` | `event.update` | **No** — so the packet's unredacted `totalFoodCostMicrocents`/`costCents` (this generation endpoint itself does no stripping) is moot; CHEF can't reach it | **PROTECTED** (blocked before response body is built) |
+| `POST /events/:id/send-quote` | `@RequirePermission` | `event.update` | **No** | — | **PROTECTED** |
+| `DELETE /events/:id` | `@RequirePermission` | `event.delete` | **No** | — | **PROTECTED** |
+
+### 7. Inventory receive/write-off/recount/adjust endpoints — `apps/api/src/inventory/inventory.controller.ts`
+
+| Endpoint | Guard | Permission required | CHEF holds it? | Verdict |
+|---|---|---|---|---|
+| `GET /inventory/transactions` | `@RequirePermission` | `inventory.read` | Yes (legitimate — stock counts) | `costMicrocents` redacted per-transaction via `canViewFinancials()`, verified at `inventory.service.ts:161-169` | **PROTECTED** (field-level) |
+| `GET /inventory/alerts/low-stock` | `@RequirePermission` | `inventory.read` | Yes | N/A — no cost field in this payload | **PROTECTED** |
+| `POST /inventory/ingredients/:id/adjust` (covers write-off/recount — same signed-quantity endpoint, `reason` field distinguishes intent) | `@RequirePermission` | `inventory.adjust` | **No** | **PROTECTED** |
+| `POST /inventory/import-csv` | `@RequirePermission` | `inventory.adjust` | **No** | **PROTECTED** |
+| `POST /inventory/transactions/:id/reverse` | `@RequirePermission` | `inventory.adjust` | **No** | **PROTECTED** |
+
+**Note on "receive":** there is no standalone receive endpoint — `RECEIVE`-kind transactions are only ever created inside `InvoicesService.confirm()` (gated by `invoice.confirm`, CHEF doesn't hold) and `InventoryService.importCsv()` (gated by `inventory.adjust`, CHEF doesn't hold). Confirmed by grepping every `kind: "RECEIVE"` write site in `apps/api/src` — two sites, both already covered above.
+
+### 8. Other endpoints returning financial fields (cost/price/margin/vendor) found while auditing — outside the client's explicit list but flagging since the ask was "any endpoint returning financial fields"
+
+| Endpoint | Guard | Permission required | CHEF holds it? | Verdict |
+|---|---|---|---|---|
+| `GET /vendors`, `GET /vendors/:id`, `POST/PATCH /vendors` | `@RequirePermission` | `vendor.read` / `vendor.create` / `vendor.update` | **No** | **PROTECTED** |
+| `GET /daily-sales`, `:id`, `POST`, `PATCH`, `DELETE` | `@RequirePermission` (all 5) | `daily_sales.*` | **No** | **PROTECTED** |
+| `GET /billing/plans` | `@RequirePermission` | `workspace.read` | **Yes** — but returns only static plan definitions (name/price/features), not workspace-specific financial data | **PROTECTED** (nothing workspace-sensitive to leak) |
+| `GET /billing/subscription` | `@RequirePermission` | **`workspace.read`** | **Yes** | **⚠️ UNPROTECTED at the API layer — see finding below** |
+| `GET /billing/payments` | `@RequirePermission` | `billing.read` | No | **PROTECTED** |
+| `POST /billing/checkout`, `POST /billing/portal` | `@RequirePermission` | `billing.manage` | No | **PROTECTED** |
+| `GET /workspaces/:slug` | **None** (no `@RequireRole`/`@RequirePermission` — default-open per `RbacGuard`) | — | N/A, any authenticated role | Returns `{id, slug, name, status, settings, createdAt}` only — no financial fields in the select | **PROTECTED** (nothing to leak, but flagging the missing decorator since it's technically an undecorated route) |
+
+**Finding — `GET /billing/subscription` uses the wrong permission, outside the client's reported list but a real gap the matrix itself anticipates:** The permission catalog has a dedicated `workspace.billing.read` permission — `packages/permissions/src/index.ts` even has a runtime startup assertion (line 262) that CHEF can *never* hold it. But `BillingController.current()` (`GET /billing/subscription`) is decorated with `@RequirePermission("workspace.read")` instead — a permission every role including CHEF and STAFF holds. `BillingService.currentSubscription()` returns the full `Subscription` row: plan, status, `seatQuantity`, and the linked customer's `billingEmail` (not per-seat pricing — `unitAmountCents` lives on the static plan list, not this row — but plan tier + seat count + billing email is still workspace financial/PII data no non-admin role should see). **In practice this is fully mitigated on the web app** — `apps/web/src/app/[workspace]/billing/page.tsx` does its own server-side check (`if (user.role !== "OWNER" && user.role !== "MANAGER") return <...>`) before ever calling this endpoint, and the sidebar link itself is gated on `billing.read` (which CHEF lacks) so it's not even visible. But the **API endpoint is directly callable** by any authenticated CHEF/STAFF session (e.g. via curl with a valid cookie) and would return real subscription data — the UI gate doesn't change what the API allows. Not fixed — audit only. Would need `@RequirePermission("workspace.billing.read")` instead of `"workspace.read"` on that one route.
+
+### Frontend page-route guards — server-side or sidebar-only?
+
+| Route | Guard mechanism | Verdict |
+|---|---|---|
+| `/invoices` (and every nested route: `/new`, `/[id]`) | `apps/web/src/app/[workspace]/invoices/layout.tsx` — server component, calls `requireRole(["OWNER","MANAGER"])` before rendering any child, redirects to `/403` | **PROTECTED server-side**, not just hidden from sidebar |
+| `/reports` (and every nested route: `/vendor-aging`, `/food-cost`, `/labor-cost`, `/prime-cost`, `/vendor-price-changes`) | `apps/web/src/app/[workspace]/reports/layout.tsx` — same `requireRole(["OWNER","MANAGER"])` pattern, wraps the whole subtree | **PROTECTED server-side** |
+| `/billing` | Page-level check inside `billing/page.tsx` itself (not a layout, but still a server component running `requireSession()` + a role check before any data fetch) | **PROTECTED server-side** |
+| `/daily-sales`, `/vendors` | **No layout.tsx, no page-level role check found** — page would render its shell for CHEF and rely entirely on the API returning 403 on `daily_sales.read`/`vendor.read` (confirmed CHEF lacks both) for the actual data fetch to fail | **Effectively protected (API blocks the data), but not defense-in-depth like invoices/reports/billing** — not explicitly in the client's list, flagging since it's the same "hidden nav only" pattern P0-1 was originally about |
+| `/recipes`, `/ingredients`, `/events`, `/inventory`, `/kitchen` | No page-level role gate — **intentional**, CHEF legitimately has read access; API strips financial fields per section 3/4/6/7 above | **Correct as-is** — Chef is meant to see these pages, just without cost/price/margin |
+
+### Summary — what this audit means for next steps
+
+- **Every endpoint explicitly named in the client's report (`/invoices`, `/reports`, `/reports/vendor-aging`, recipe cost, ingredient cost/vendor/price-history, ingredient edit/delete, event revenue/food-cost, inventory adjust) is already PROTECTED** — either by an endpoint-level permission CHEF doesn't hold, or (for the shared-read endpoints recipe/ingredient/event/inventory) by field-level redaction verified present in the actual service code, not just claimed in this log. This matches the code state from the earlier P0-1 commits in this file (`a325efd`, `77612e6`, `5800f1c`) — re-confirmed independently in this pass, not re-derived from trusting those entries.
+- **Two real gaps found that were NOT covered by the earlier P0-1 pass:**
+  1. `POST /recipes/extract` — CHEF can extract a recipe photo/spreadsheet and get back real ingredient costs (`matchedCostCents`) with zero redaction. This is squarely inside the client's reported category ("recipe cost... endpoints") and should be fixed.
+  2. `GET /billing/subscription` — wrong permission (`workspace.read` instead of `workspace.billing.read`), letting CHEF/STAFF read workspace plan/seat/billing-email data at the API layer (mitigated in the UI, not at the API). Outside the client's explicit list but flagged since the ask covered "any endpoint returning financial fields."
+- **Conclusion on the framing question:** this is **not** "already protected in code, just not deployed" — it's "protected everywhere the client explicitly listed, with two specific gaps this audit surfaced that need actual code changes." Both are small, isolated fixes (add a `canViewFinancials` check to two call sites in one file; change one decorator's permission string in another) — not a sign of a broader hole in the auth model. Holding both for your go-ahead before touching any code, per instruction.
+
+**Files changed:** none — audit only.
+**Commit:** none yet — pending your review of this table.
+
+---
+
+## P0-1 FIX — the two gaps the audit found (guard-only, no business logic changed)
+
+**Confirmed by you as real gaps in current code, not a deployment issue. Both fixed. Everything the audit marked PROTECTED was left untouched — no re-guarding of already-correct endpoints, per your "additive/guard-only" instruction.**
+
+### Roles the permission system grants financial access to (checked before applying either fix, so the guard couldn't lock out a legitimate role)
+
+Read directly from `ROLE_PERMISSIONS` in `packages/permissions/src/index.ts`:
+- **`analytics.read`** (the signal `canViewFinancials()` is built on): held by **OWNER** (full permission set) and **MANAGER** (explicit grant, `"// operational analytics; finance still owner-only" — analytics.read` in MANAGER's list). **Not** held by CHEF, STAFF, or CUSTOMER.
+- **`billing.read`**: held by **OWNER** (full set) and **MANAGER** (explicit grant, `"// Billing — managers can READ but not change plan" — billing.read`). **Not** held by CHEF, STAFF, or CUSTOMER.
+- Both checks are static reads of the matrix, not assumptions — `ROLE_PERMISSIONS.MANAGER` and `ROLE_PERMISSIONS.OWNER` were opened and read line-by-line before writing either fix below, specifically to confirm Manager wasn't about to be locked out.
+
+### Fix 1 — `POST /recipes/extract` (`apps/api/src/recipes/recipes-extract.controller.ts`)
+
+**What was wrong:** this route (a separate `RecipesExtractController`, registered alongside `RecipesController` under the same `recipes` prefix) enriches every extracted ingredient line with `matchedCostCents` via `findIngredient()`/`mapIngredientMatch()`, and never imported or called `canViewFinancials` — the one call site in the whole recipes/ingredients/events/inventory surface that the original P0-1 pass missed.
+
+**Fix:** imported `canViewFinancials` from `@ibirdos/permissions`; added `const canSeeCost = canViewFinancials(ctx.role);` once at the top of `extract()`; changed both enrichment blocks (vision/image path and CSV/Excel path — two separate `.map()` calls, both patched identically) so `matchedCostCents` is `null` when `!canSeeCost`, same pattern already used in `recipes.service.ts`/`ingredients.service.ts`. Every other field on the matched-ingredient object (`matchedName`, `matchedDimension`, `matchedDensityGPerMl`, `matchedCanonicalUnit`) is untouched — those are needed for unit-conversion display while confirming a match and carry no financial information.
+
+**Guard-only, not a permission change:** the route still requires `recipe.create` (unchanged) — CHEF and MANAGER both still hold it and can still upload/extract recipes; only the cost figure embedded in the response is now conditional. OWNER/MANAGER (who hold `analytics.read`) still see `matchedCostCents` exactly as before.
+
+**Files changed:** `apps/api/src/recipes/recipes-extract.controller.ts`
+**Commit:** `108df04` — fix(P0-1): strip ingredient cost from POST /recipes/extract for Chef/Staff
+**Verification:** `pnpm typecheck` (all 9 packages) — clean. Full `vitest run` on `@ibirdos/api` — 103/106 pass; the 3 failures (`recipes.service.spec.ts` × 2, `http-exception.filter.spec.ts` × 1) are the same pre-existing-on-master failures noted throughout this log, confirmed unrelated (neither failing spec touches `recipes-extract.controller.ts` or `billing.controller.ts`, and both files have no dedicated spec file to begin with). No automated test covers this controller — **needs live verification**, see list in `NEEDS_ROSHAN.md`.
+
+### Fix 2 — `GET /billing/subscription` (`apps/api/src/billing/billing.controller.ts`)
+
+**What was wrong:** decorated with `@RequirePermission("workspace.read")`, a permission every role including CHEF and STAFF holds. Returns the workspace's `Subscription` row (plan, status, `seatQuantity`) plus the linked customer's `billingEmail`.
+
+**Fix:** changed the decorator to `@RequirePermission("billing.read")` — one-line change, matching the sibling `GET /billing/payments` route in the same controller, which already correctly used `billing.read`. Deliberately did **not** use `workspace.billing.read` (the permission this log's audit pass originally floated) — checked the matrix first and found `workspace.billing.read` is OWNER-only (MANAGER is explicitly asserted to never hold it, `packages/permissions/src/index.ts:269-273`), which would have **locked Manager out of a page they currently use**. `billing.read` is the permission this controller's own sibling route already establishes as the "Owner+Manager can view billing, nobody else" line, so using it here is consistent with the rest of the file, not a new precedent.
+
+**Files changed:** `apps/api/src/billing/billing.controller.ts`
+**Commit:** `3d0a7b6` — fix(P0-1): gate GET /billing/subscription on billing.read, not workspace.read
+**Verification:** `pnpm typecheck` — clean. Full `vitest run` — same 103/106, same 3 pre-existing unrelated failures. No spec file exists for `billing.controller.ts` (checked — none found). Confirmed the only caller in the codebase is `apps/web/src/app/[workspace]/billing/page.tsx`, which already gates itself to `OWNER`/`MANAGER` before making this call — so this fix closes the API-level hole without changing what any real user currently experiences in the UI. **Needs live verification** — see `NEEDS_ROSHAN.md`.
+
+### What was explicitly NOT touched, and why
+
+- `/invoices`, `/reports`, `/reports/vendor-aging` frontend page routes — audit confirmed these already have real server-side `requireRole(["OWNER","MANAGER"])` guards via `layout.tsx` (not sidebar-only). No code change needed; re-verified the two layout files are still in place and unchanged.
+- Every endpoint in audit sections 1, 2, 4, 5, 6, 7 (invoices, reports/vendor-aging, ingredient cost/vendor/price-history GET, ingredient edit/delete, event revenue/food-cost, inventory receive/write-off/recount/adjust) — audit found all of these already PROTECTED (either endpoint-gated or field-redacted). Re-guarding them would be adding decorators/checks that already exist, which the "additive/guard-only, don't change business logic" instruction argues against doing without a reason.
+- `/daily-sales` and `/vendors` page routes lacking a dedicated `layout.tsx` (noted in the audit as "effectively protected via API 403, not defense-in-depth") — outside both the client's original list and your fix instruction, which named `/invoices`, `/reports`, `/reports/vendor-aging` specifically for frontend guards. Not touched. Flagging again here in case you want it as a follow-up, not doing it unprompted.
+
+**Files changed (both fixes):**
+- `apps/api/src/recipes/recipes-extract.controller.ts`
+- `apps/api/src/billing/billing.controller.ts`
+
+**Commits:** `108df04`, `3d0a7b6` (kept separate/reviewable per instruction — each is a single-purpose, single-file change).
+
+---
