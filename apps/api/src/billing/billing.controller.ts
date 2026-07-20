@@ -31,7 +31,7 @@ export class BillingController {
     return this.svc.listPlans().then((items) => ok({ items }));
   }
 
-  @Get("subscription") @RequirePermission("workspace.read")
+  @Get("subscription") @RequirePermission("billing.read")
   current(@CurrentCtx() ctx: TenantContext) {
     return this.svc.currentSubscription(ctx.workspaceId).then(ok);
   }
