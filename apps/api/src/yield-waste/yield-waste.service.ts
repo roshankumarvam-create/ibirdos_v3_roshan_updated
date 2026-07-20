@@ -9,6 +9,7 @@ const Decimal = Prisma.Decimal;
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
 import { toCanonical } from "@ibirdos/types";
+import { canViewFinancials } from "@ibirdos/permissions";
 
 import { InventoryService } from "../inventory/inventory.service";
 
@@ -115,6 +116,15 @@ export class YieldWasteService {
       action: "waste.recorded", entityType: "Ingredient", entityId: input.ingredientId,
       metadata: { reason: input.reason, costCents: Number(costMicrocents) / 1000, recipeId: input.recipeId, eventId: input.eventId },
     });
+
+    // waste.create is held by CHEF (they log their own waste) but the $ cost
+    // basis snapshotted onto the entry must not come back in the response --
+    // same rule as listWaste()/getWasteTargetReport()/getEventWasteImpact()
+    // below for the same reason.
+    if (!canViewFinancials(ctx.role)) {
+      const { costMicrocents: _omit, ...safeEntry } = entry;
+      return safeEntry;
+    }
     return entry;
   }
 
@@ -133,11 +143,13 @@ export class YieldWasteService {
     if (opts.ingredientId) where.ingredientId = opts.ingredientId;
     if (opts.reason) where.reason = opts.reason;
     if (opts.sinceDays) where.occurredAt = { gte: new Date(Date.now() - opts.sinceDays * 86400_000) };
-    return prisma.wasteEntry.findMany({
+    const entries = await prisma.wasteEntry.findMany({
       where, take: Math.min(opts.limit ?? 100, 200),
       orderBy: { occurredAt: "desc" },
       include: { ingredient: { select: { id: true, name: true } } },
     });
+    if (canViewFinancials(ctx.role)) return entries;
+    return entries.map(({ costMicrocents, ...safeEntry }) => safeEntry);
   }
 
   /** Per-ingredient trim yield rates (avg, min, max over the window). */
@@ -200,17 +212,25 @@ export class YieldWasteService {
 
     const totalCostCents = Array.from(byReason.values()).reduce((s, v) => s + Number(v.costMicrocents) / 1000, 0);
     const targetCostCents = opts.targetCostCents ?? null;
+    const canSeeCost = canViewFinancials(ctx.role);
 
-    return {
-      totalCostCents: parseFloat(totalCostCents.toFixed(2)),
-      targetCostCents,
-      overTarget: targetCostCents != null ? totalCostCents > targetCostCents : null,
-      byReason: Array.from(byReason.entries()).map(([reason, v]) => ({
+    const byReasonRanked = Array.from(byReason.entries())
+      .map(([reason, v]) => ({
         reason,
         count: v.count,
         costCents: parseFloat((Number(v.costMicrocents) / 1000).toFixed(2)),
         qtyCanonical: parseFloat(v.qtyCanonical.toFixed(3)),
-      })).sort((a, b) => b.costCents - a.costCents),
+      }))
+      .sort((a, b) => b.costCents - a.costCents);
+
+    // waste.read is held by CHEF (they need to see which reasons cause the
+    // most waste, by quantity, for operational reasons) but the $ figures
+    // this report exists to surface are financial and must not reach them.
+    return {
+      totalCostCents: canSeeCost ? parseFloat(totalCostCents.toFixed(2)) : null,
+      targetCostCents: canSeeCost ? targetCostCents : null,
+      overTarget: canSeeCost && targetCostCents != null ? totalCostCents > targetCostCents : null,
+      byReason: byReasonRanked.map((row) => ({ ...row, costCents: canSeeCost ? row.costCents : null })),
     };
   }
 
@@ -243,8 +263,9 @@ export class YieldWasteService {
       select: { id: true, name: true, startsAt: true },
     });
     const eventMap = new Map(events.map((e) => [e.id, e]));
+    const canSeeCost = canViewFinancials(ctx.role);
 
-    return Array.from(byEvent.entries()).map(([eventId, v]) => {
+    const ranked = Array.from(byEvent.entries()).map(([eventId, v]) => {
       const ev = eventMap.get(eventId);
       return {
         eventId,
@@ -254,5 +275,9 @@ export class YieldWasteService {
         wasteCount: v.count,
       };
     }).sort((a, b) => b.costCents - a.costCents);
+
+    // waste.read is held by CHEF; wasteCount (operational) stays, costCents
+    // (financial — the whole point of this "impact" report) does not.
+    return ranked.map((row) => ({ ...row, costCents: canSeeCost ? row.costCents : null }));
   }
 }
