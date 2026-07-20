@@ -4,6 +4,7 @@ import { Redis } from "ioredis";
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
 import { toCanonical } from "@ibirdos/types";
+import { canViewFinancials } from "@ibirdos/permissions";
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { InventoryService } from "../inventory/inventory.service";
 
@@ -84,6 +85,21 @@ export class KitchenService {
           },
         },
       });
+
+      // kitchen.read is shared with CHEF/STAFF for legitimate prep purposes
+      // (recipe name/instructions/quantities), but this is a raw Prisma row
+      // with no `select` limiting columns -- it carries the same cost/price/
+      // margin fields recipes.service.ts strips from GET /recipes/:id. The
+      // nested ingredient `select` above already excludes cost columns.
+      if (recipe && !canViewFinancials(ctx.role)) {
+        const {
+          salePriceCents, goalFoodCostPct, paperCostCents,
+          cachedCostMicrocents, cachedCostPerPortionMicrocents, cachedCostUpdatedAt,
+          costStaleness, costComputeError, cachedMarginPct, cachedMarginCents, targetMarginPct,
+          ...safeRecipe
+        } = recipe;
+        recipe = safeRecipe;
+      }
     }
 
     return { task, recipe };
