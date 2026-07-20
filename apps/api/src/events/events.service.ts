@@ -388,8 +388,11 @@ export class EventsService {
    * roles without financial visibility (CHEF/STAFF). They hold event.read
    * for legitimate operational reasons (schedule, menu, guest count) but
    * must never see quoted price, computed food/labor cost, or margin —
-   * including the same figures nested in menuItems[].recipe and
-   * kitchenPacket.
+   * including the same figures nested in menuItems[] (both the per-line
+   * billed price and the embedded recipe's cost/price), kitchenPacket
+   * (both the aggregated ingredientsJson and the per-task tasksJson), and
+   * inventoryShortages (shortage quantity/gap stays visible for kitchen
+   * prep; vendor and $ cost of the shortage do not).
    */
   private redactEventFinancials(e: any): any {
     const {
@@ -402,9 +405,10 @@ export class EventsService {
 
     if (Array.isArray(result.menuItems)) {
       result.menuItems = result.menuItems.map((mi: any) => {
-        if (!mi.recipe) return mi;
-        const { cachedCostMicrocents, salePriceCents, ...restRecipe } = mi.recipe;
-        return { ...mi, recipe: restRecipe };
+        const { unitPriceCentsAtAdd, unitPriceCentsOverride, ...restMi } = mi;
+        if (!restMi.recipe) return restMi;
+        const { cachedCostMicrocents, salePriceCents, ...restRecipe } = restMi.recipe;
+        return { ...restMi, recipe: restRecipe };
       });
     }
 
@@ -417,7 +421,22 @@ export class EventsService {
           return restRow;
         });
       }
+      if (Array.isArray(restPacket.tasksJson)) {
+        restPacket.tasksJson = restPacket.tasksJson.map((task: any) => {
+          if (!task || typeof task !== "object") return task;
+          const { totalCostMicrocents, ...restTask } = task;
+          return restTask;
+        });
+      }
       result.kitchenPacket = restPacket;
+    }
+
+    if (Array.isArray(result.inventoryShortages)) {
+      result.inventoryShortages = result.inventoryShortages.map((s: any) => {
+        if (!s || typeof s !== "object") return s;
+        const { vendorId, lastUnitPriceCents, estCostCents, ...restShortage } = s;
+        return restShortage;
+      });
     }
 
     return result;
