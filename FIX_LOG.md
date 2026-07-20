@@ -467,3 +467,70 @@ Read directly from `ROLE_PERMISSIONS` in `packages/permissions/src/index.ts`:
 **Commits:** `108df04`, `3d0a7b6` (kept separate/reviewable per instruction — each is a single-purpose, single-file change).
 
 ---
+
+## P0-1 FIX ROUND 2 — Chef/Staff financial-visibility rule applied precisely (kitchen, events, waste)
+
+**Given a precise rule this round** (operational fields stay; cost/price/margin/vendor/price-history/revenue/profit is stripped for endpoints Chef legitimately calls; purely-financial endpoints/pages stay 403'd) rather than a generic re-audit instruction. Re-checked the client's original endpoint list against this rule first — everything there (invoices, reports/vendor-aging, recipe cost, ingredient cost/vendor/price-history, ingredient edit/delete, event revenue/food-cost, inventory adjust) was already correctly handled by the prior two rounds. Ran a fresh sweep specifically for the "endpoint a Chef legitimately calls but the response still carries a $ figure" pattern across every controller CHEF/STAFF can reach, since that's exactly the shape of bug the prior rounds' gaps (recipes/extract, billing/subscription) both were. Found three more, all in files the prior rounds hadn't touched: `kitchen.service.ts`, `events.service.ts` (an incomplete spot in the function that was supposedly already fixed), and `yield-waste.service.ts`.
+
+### Roles confirmed before applying any fix (same check as round 1, redone for this round's specific gate)
+
+Every fix below gates on `canViewFinancials(ctx.role)` — already-established, unchanged function, confirmed again by reading `ROLE_PERMISSIONS` directly: `true` for OWNER (full permission set) and MANAGER (holds `analytics.read`), `false` for CHEF/STAFF/CUSTOMER (none hold `analytics.read`). No new permission was introduced, so there was no new role-lockout risk to check beyond re-confirming this one function's behavior is what every fix assumes.
+
+### Fix 1 — `GET /kitchen/tasks/:id` (`apps/api/src/kitchen/kitchen.service.ts`)
+
+**What was wrong:** `getTask()` calls `prisma.recipe.findFirst()` with no `select` clause when building the response's `recipe` field — meaning every Recipe column, including `salePriceCents`, `cachedCostMicrocents`, `cachedCostPerPortionMicrocents`, `cachedCostUpdatedAt`, `costStaleness`, `costComputeError`, `cachedMarginPct`, `cachedMarginCents`, `targetMarginPct`, and `paperCostCents`, passed straight through. The route requires only `kitchen.read` — held by CHEF and STAFF, correctly, since kitchen/prep is exactly the operational surface they need. The nested `ingredients[].ingredient` select was already scoped to non-financial columns (dimension, canonical unit, density, stock, yield — no cost), so only the top-level recipe row needed the fix.
+
+**Fix:** added the same `canViewFinancials(ctx.role)` check used elsewhere, destructuring out the 11 financial columns listed above when the caller can't see financials. Operational fields (name, category, instructions, prep/cook time, portions, photos, full ingredient list with quantities) are untouched.
+
+**Files changed:** `apps/api/src/kitchen/kitchen.service.ts`
+**Commit:** `4006972` — fix(P0-1): strip recipe cost/price/margin from GET /kitchen/tasks/:id
+
+### Fix 2 — `GET /events` and `GET /events/:id` (`apps/api/src/events/events.service.ts`) — three gaps in the existing `redactEventFinancials()`
+
+**What was wrong:** the redaction function from the original P0-1 pass was real but incomplete — it caught the obvious top-level financial fields and one nested recipe object, but missed three more paths through the same response:
+1. `menuItems[].unitPriceCentsAtAdd` / `.unitPriceCentsOverride` — sibling fields on the menu-item row itself (not nested in `recipe`), set in `addMenuItem()`/`updateMenuItem()`. The function stripped `mi.recipe.salePriceCents` but never looked at `mi` itself.
+2. `kitchenPacket.tasksJson[].totalCostMicrocents` — the function already stripped `costCents` from the sibling `ingredientsJson` array in the same `kitchenPacket`, but never touched `tasksJson`, which carries the same per-recipe-task cost figure (set in `generateKitchenPacket()`).
+3. `inventoryShortages[].vendorId` / `.lastUnitPriceCents` / `.estCostCents` — this whole array is written by `markAsPaid()` and persisted directly onto the `Event` row; every later `GET` returned it verbatim, with zero redaction, since the original function never destructured `inventoryShortages` at all.
+
+**Fix:** extended `redactEventFinancials()` to also strip all three, applying your literal rule for the shortage case — `neededCanonical`/`haveCanonical`/`shortCanonical`/`canonicalUnit`/`preferredDisplayUnit` stay (Chef needs to know what's short and by how much to prep around it), `vendorId`/`lastUnitPriceCents`/`estCostCents` are removed. Same for menu items (portions/recipe name stay, price fields go) and kitchen packet tasks (recipe name/portions/prep time stay, cost goes).
+
+**Files changed:** `apps/api/src/events/events.service.ts`
+**Commit:** `24d6610` — fix(P0-1): close three more leaks in redactEventFinancials()
+
+### Fix 3 — `stripFinancialFields()` completeness (`apps/api/src/recipes/recipes.service.ts`)
+
+**What was wrong:** cross-checking the full Recipe column list against `packages/db/prisma/schema.prisma` (done while writing Fix 1, to make sure kitchen.service.ts's new strip list was complete) surfaced that `recipes.service.ts`'s own `stripFinancialFields()` — the function `GET /recipes/:id`, `PATCH /recipes/:id`, and `POST /recipes/:id/recost` all already rely on — was itself missing two real columns: `cachedCostPerPortionMicrocents` and `cachedMarginCents`. Grepped for both across `apps/api/src` — neither is written anywhere (dead columns, always `null` today), so this was a latent gap, not an actively-exploited one — but the fix is one line each and the list should be complete regardless of whether something currently populates them.
+
+**Files changed:** `apps/api/src/recipes/recipes.service.ts`
+**Commit:** `d126779` — fix(P0-1): strip two Recipe columns stripFinancialFields() had missed
+
+### Fix 4 — Waste endpoints (`apps/api/src/yield-waste/yield-waste.service.ts`)
+
+**What was wrong:** `waste.create`/`waste.read` are held by CHEF — correctly, per your rule ("Waste/yield entry (their own)" is operational). But four methods returned real $ figures with no redaction at all (this module never imported `canViewFinancials` before this fix):
+- `recordWaste()` — the created entry's `costMicrocents` (cost basis snapshotted from the ingredient's current price × quantity).
+- `listWaste()` — same field, per entry, on the list view.
+- `getWasteTargetReport()` — `totalCostCents`, `targetCostCents`, `overTarget`, and a per-reason `costCents` breakdown. This one is essentially a financial report wearing an operational permission — the entire point of the endpoint is "waste cost vs. a dollar target."
+- `getEventWasteImpact()` — per-event `costCents`.
+
+**Fix:** applied your rule exactly — kept the operational content (which ingredient, which reason, how much quantity, which event, how many waste events) and nulled only the dollar figures. For the two report methods this meant restructuring the redaction from "field present only when visible" to "field present, value `null` when not" (matching the null-out convention already used in `inventory.service.ts`/`ingredients.service.ts` for the same reason, and because the omit-the-key version produced an unnavigable TS union type against the existing `yield-waste-analytics.service.spec.ts`, whose 8 tests all run as OWNER and expect `costCents` to exist).
+
+**Files changed:** `apps/api/src/yield-waste/yield-waste.service.ts`
+**Commit:** `65c867c` — fix(P0-1): strip $ cost from waste endpoints for Chef/Staff
+
+### Verification (all four fixes)
+
+- `pnpm typecheck` (all 9 packages) — clean after every fix, checked incrementally.
+- Full `vitest run` on `@ibirdos/api` — 103/106 pass, same 3 pre-existing-on-master failures noted throughout this log (`recipes.service.spec.ts` × 2 unrelated `importCsv`/low-stock-alert mock issue, `http-exception.filter.spec.ts` × 1) — confirmed unrelated, none of the four touched files share a spec file with these failures.
+- `events.service.spec.ts` (8 tests) and `yield-waste-analytics.service.spec.ts` (8 tests) — both pass, both exercise the exact functions changed here (all under `role: "OWNER"`, so they also serve as a live check that the Owner-sees-everything path wasn't broken).
+- `kitchen.service.ts` has no existing spec file — no automated coverage either before or after this fix.
+- No ambiguous fields came up this round — see `NEEDS_ROSHAN.md` for the full endpoint-by-endpoint list this maps to, plus what to test live as Chef vs. Owner/Manager.
+
+**Files changed (this round):**
+- `apps/api/src/kitchen/kitchen.service.ts`
+- `apps/api/src/events/events.service.ts`
+- `apps/api/src/recipes/recipes.service.ts`
+- `apps/api/src/yield-waste/yield-waste.service.ts`
+
+**Commits:** `4006972`, `24d6610`, `d126779`, `65c867c`.
+
+---

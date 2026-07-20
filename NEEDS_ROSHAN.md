@@ -2,6 +2,41 @@
 
 ---
 
+## P0-1 — Chef/Staff financial-visibility rule: full endpoint list for live Chef-account testing
+
+Applied your rule precisely: operational fields stay, financial fields (cost/price/margin/vendor/price-history/revenue/profit) are stripped from JSON for endpoints Chef legitimately calls, and purely-financial endpoints/pages stay 403'd. **No ambiguous cases came up this round** — every gap found was a clear "this field is a dollar amount, strip it" case, consistent with the redaction pattern already established elsewhere in the code, so nothing is being guessed at or deferred here.
+
+**Before writing any of these, confirmed in `packages/permissions/src/index.ts` that `canViewFinancials()` (the function every fix below gates on) returns `true` for OWNER and MANAGER and `false` for CHEF/STAFF/CUSTOMER — it's the same signal already used throughout the codebase, not a new check, so Owner/Manager behavior is structurally unchanged by any of these fixes (every fix is `if (!canViewFinancials(role)) { strip }`, meaning the `true` branch — Owner/Manager — always returns the original, full data).**
+
+### Endpoints fixed this round (field-stripped — Chef/Staff still get a 200, with financial fields removed/nulled)
+
+| Endpoint | Permission required (unchanged) | What was stripped | What Chef/Staff still sees |
+|---|---|---|---|
+| `GET /kitchen/tasks/:id` | `kitchen.read` | Embedded recipe's `salePriceCents`, `goalFoodCostPct`, `paperCostCents`, `cachedCostMicrocents`, `cachedCostPerPortionMicrocents`, `cachedCostUpdatedAt`, `costStaleness`, `costComputeError`, `cachedMarginPct`, `cachedMarginCents`, `targetMarginPct` | Recipe name, instructions, prep/cook time, full ingredient list with quantities |
+| `GET /events`, `GET /events/:id` | `event.read` | **(new, on top of the existing redaction)** `menuItems[].unitPriceCentsAtAdd`/`unitPriceCentsOverride`; `kitchenPacket.tasksJson[].totalCostMicrocents`; `inventoryShortages[].vendorId`/`lastUnitPriceCents`/`estCostCents` | Event name, guest count, timing, menu items (recipe name/portions, no price), kitchen tasks, **shortage quantity/gap per ingredient** (`neededCanonical`/`haveCanonical`/`shortCanonical`) — this is the "show 10 lb short, not the $ estimate" rule applied directly |
+| `POST /yield-waste/waste` | `waste.create` | `costMicrocents` on the created entry | The entry itself (ingredient, quantity, reason, notes) |
+| `GET /yield-waste/waste` | `waste.read` | `costMicrocents` per entry | Same list, ingredient/quantity/reason per entry |
+| `GET /yield-waste/waste/target-report` | `waste.read` | `totalCostCents`, `targetCostCents`, `overTarget`, per-reason `costCents` (all set to `null`) | `byReason[].count` and `.qtyCanonical` — which reasons cause the most waste, by quantity |
+| `GET /yield-waste/waste/event-impact` | `waste.read` | Per-event `costCents` (set to `null`) | `eventName`, `startsAt`, `wasteCount` per event |
+
+### Endpoints already correct before this round (re-confirmed, not re-touched)
+
+Everything from the P0-1 audit table in `FIX_LOG.md` — recipes, ingredients, inventory transactions, `/invoices`, `/reports` + `/reports/vendor-aging`, `/billing/subscription`, `POST /recipes/extract` (fixed in the prior round). Also explicitly re-checked this round and found clean: `GET /kitchen/tasks` (board view — `KitchenTask` has no cost columns), `PATCH /kitchen/tasks/:id`, all `yield.*`-gated endpoints (yield has no cost dimension), every `events.controller.ts` write route (`event.create`/`event.update`/`event.delete`/`event.assign_staff` — none held by Chef/Staff, so not reachable at all), `users`/`notifications`/`uploads`/`workspaces` controllers.
+
+### Frontend page guards — unchanged, still correct
+
+`/invoices`, `/reports` (including `/reports/vendor-aging`) still 403/redirect via `apps/web/src/app/[workspace]/{invoices,reports}/layout.tsx`'s `requireRole(["OWNER","MANAGER"])` — no code touched here this round, confirmed still in place.
+
+### What to test as Chef on `cafe-71`
+
+1. Open a kitchen task detail (`/kitchen/[taskId]` or the task-detail API) for a task linked to a recipe with a real sale price/cost set — confirm the recipe name/instructions/ingredients show, but no cost/price/margin number appears anywhere (check Network tab, not just the UI, in case a number is fetched but not rendered).
+2. View a paid event with a known ingredient shortage — confirm the shortage shows as a quantity (e.g. "short 9 lb"), with no `$` figure next to it, in both the UI and the raw `GET /events/:id` response.
+3. Log a waste entry (`POST /yield-waste/waste`) — confirm the response/confirmation doesn't show a $ value.
+4. View the waste list and (if there's a Chef-visible waste report page) the target-report/event-impact views — confirm counts/quantities show, dollar totals don't.
+5. **Cross-check as Owner or Manager**: same kitchen task, same event, same waste views — confirm cost/price/margin/$ figures all still show exactly as before. If any of these went missing for Owner/Manager, that's a real bug — flag it back.
+
+---
+
 ## P0-1 — Live Chef-account verification checklist (both audit-found gaps now fixed in code — needs a real Chef login to confirm)
 
 No decision needed here — both fixes were unambiguous (checked the permission matrix before applying either one; see FIX_LOG.md "P0-1 FIX" for the exact roles-granted-access check). This is purely the test list you asked for: log in as a CHEF-role user on workspace `cafe-71` and run through these. Everything else the original P0-1 audit checked was already protected pre-existing code and doesn't need re-testing here (it's covered by the audit table in FIX_LOG.md).
