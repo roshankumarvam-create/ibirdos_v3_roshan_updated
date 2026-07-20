@@ -14,6 +14,7 @@ import {
   type ExtractedRecipe,
 } from "@ibirdos/ai";
 import { env } from "@ibirdos/config";
+import { canViewFinancials } from "@ibirdos/permissions";
 import { CurrentCtx } from "../common/decorators/current-ctx.decorator";
 import { RequirePermission } from "../common/decorators/require-permission.decorator";
 import * as XLSX from "xlsx";
@@ -169,6 +170,11 @@ export class RecipesExtractController {
       });
     }
 
+    // CHEF/STAFF legitimately hold recipe.create (they propose recipes) but must
+    // not see ingredient cost data -- same signal every other recipe/ingredient
+    // endpoint uses to decide whether to include cost fields in the response.
+    const canSeeCost = canViewFinancials(ctx.role);
+
     // --- Vision path: new schema with ConvertedIngredient[] ---
     if (visionResult) {
       const ingredients = visionResult.data.ingredients;
@@ -189,7 +195,7 @@ export class RecipesExtractController {
             ...ing,
             ingredientId:        match?.id ?? null,
             matchedName:         match?.name ?? null,
-            matchedCostCents:    match?.currentCostCents ?? null,
+            matchedCostCents:    canSeeCost ? (match?.currentCostCents ?? null) : null,
             matchedDimension:    match?.dimension ?? null,
             matchedDensityGPerMl: match?.densityGPerMl ?? null,
             matchedCanonicalUnit: match?.canonicalUnit ?? null,
@@ -221,7 +227,7 @@ export class RecipesExtractController {
             ...line,
             ingredientId:        match?.id ?? null,
             matchedName:         match?.name ?? null,
-            matchedCostCents:    match?.currentCostCents ?? null,
+            matchedCostCents:    canSeeCost ? (match?.currentCostCents ?? null) : null,
             matchedDimension:    match?.dimension ?? null,
             matchedDensityGPerMl: match?.densityGPerMl ?? null,
             matchedCanonicalUnit: match?.canonicalUnit ?? null,
