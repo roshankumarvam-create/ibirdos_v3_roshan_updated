@@ -773,10 +773,23 @@ export class EventsService {
       : 0;
 
     // --- Persist: set paymentStatus=PAID, freeze, store shortages ---
+    // BUG 1 fix: markAsPaid() previously only ever touched paymentStatus,
+    // never the kitchen-lifecycle `status` field -- so a payment taken
+    // before any kitchen-side confirmation left the event showing "draft"
+    // and "Paid" side by side, and the events list (which only shows
+    // `status`, no payment indicator at all) displayed a paid event as
+    // indistinguishable from an untouched draft. DRAFT is the one status
+    // value that reads as "nothing has happened yet", which is no longer
+    // true once money has changed hands -- advance it to CONFIRMED, same
+    // as a manual kitchen-side confirmation would. Only DRAFT is advanced;
+    // an event already further along (PREP_IN_PROGRESS/IN_SERVICE/
+    // COMPLETED) or CANCELLED keeps its real status untouched.
+    const statusUpdate = event.status === "DRAFT" ? { status: "CONFIRMED" as any } : {};
     const updatedEvent = await prisma.event.update({
       where: { id: eventId },
       data: {
         paymentStatus: "PAID",
+        ...statusUpdate,
         frozenAt: event.frozenAt ?? new Date(),
         ...(event.frozenAt ? {} : {
           frozenRecipeCostsCents: recipeSnap,

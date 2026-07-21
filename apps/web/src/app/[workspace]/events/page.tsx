@@ -11,6 +11,7 @@ interface EventListItem {
   id: string;
   name: string;
   status: string;
+  paymentStatus: string;
   serviceType: string;
   customerName: string | null;
   startsAt: string;
@@ -113,7 +114,12 @@ export default async function EventsPage({ searchParams }: { searchParams: Promi
                       </td>
                     </>
                   )}
-                  <td className="px-5 py-3"><StatusBadge label={e.status.toLowerCase().replace(/_/g, " ")} tone={STATUS_TONE[e.status] ?? "neutral"} /></td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <StatusBadge label={e.status.toLowerCase().replace(/_/g, " ")} tone={STATUS_TONE[e.status] ?? "neutral"} />
+                      {e.paymentStatus === "PAID" && <StatusBadge label="Paid" tone="success" />}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
