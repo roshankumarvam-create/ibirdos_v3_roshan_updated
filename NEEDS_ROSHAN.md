@@ -338,3 +338,38 @@ COMMIT;
 Let me know if you want these run as-is, want the flagged `INV-1001`/`vendor1` invoice looked at first, or want to just have the client re-open and re-save each one from the UI instead (also works — editing/re-confirming isn't possible once `CONFIRMED` though, so UI-side that specific invoice's Total field would need a manual edit via the invoice detail page's PATCH, landing at the same corrected numbers).
 
 ---
+
+## BUG 3 — Does the customer's quote total include labor, or is labor purely an internal cost?
+
+Three places in the code disagree, and this isn't cosmetic — it decides what counts as real revenue.
+
+- **Create-event page** and **the actual `sendQuote()` customer email** both compute `total = menu subtotal + markup + labor`. Two independent, real, customer-facing surfaces agree labor is billed.
+- **The saved event detail page's Quote Summary** computes `total = menu subtotal + markup` (no labor) — this is the exact $4,414 vs. $3,789 gap you saw, and it's the reported bug.
+- **`computeLiveQuoteTotalCents()`** — the shared backend function that freezes `Event.quotedPriceCents` at `markAsPaid()` time (i.e. what actually becomes "revenue" for the Dashboard and every report) — has its own explicit code comment saying labor is deliberately excluded, "a separate cost line subtracted in the profit calc, not part of revenue."
+
+So `sendQuote()` and `computeLiveQuoteTotalCents()` — one downstream of the other in spirit, both meant to represent "the quote total" — actively disagree with each other today.
+
+**The real-money question:** does your business bill the client for labor as part of the catering total (a staffing/service fee the client pays), or is labor purely what it costs *you* to staff the event, never itemized to the client? I don't know your actual billing practice and won't guess at it, because whichever way this goes:
+
+- If labor **should** be revenue: `computeLiveQuoteTotalCents()` needs `+ labor`, and every already-PAID event with a labor cost has been under-counting revenue in the Dashboard/Reports (P0-4 work) until this is fixed — likely needs its own small backfill pass, similar in spirit to the P0-3 invoice backfill, once decided.
+- If labor should **NOT** be revenue: the create-event page and `sendQuote()`'s customer email are the ones that need fixing (strip labor out), and any already-sent quote/invoice that included labor may have overbilled a real client — a conversation with affected clients might be needed, not just a code fix.
+
+Either direction is a quick, mechanical code change once you tell me which one is correct — I just don't want to guess at something that changes what a customer is billed or how revenue is reported.
+
+---
+
+## BUG 5 — Public quote page doesn't exist; needs to be built (scope, not started)
+
+"Send Quote" → "Email not set up" happens because `RESEND_API_KEY` isn't set in this environment (an API-side/Railway secret, not something Vercel needs). Separately, and worse: the "Copy quote & link" fallback copies `window.location.href` — literally the current page's own internal, login-walled URL (`workspace.ibirdos.com/{workspace}/events/{id}`). A client pasted this link hits your login page for a workspace they have no account in. Confirmed via a full `@Public()` route grep across the API: **no public quote-viewing page or route exists anywhere today** — the only similarly-named endpoint (`/orders/quote`) is an unrelated customer-ordering feature.
+
+This needs building, not fixing — real scope, roughly in order of what touches what:
+
+1. **A way to identify one event without login.** Simplest: an unguessable token. Additive schema change (e.g. `Event.quoteToken String? @unique`, generated the first time a quote is sent/copied) — written to `PENDING_MIGRATIONS.sql` if you want to proceed, not run by me.
+2. **A new public API route** (`@Public()`, rate-limited like the other public routes) resolving `token → event`, returning only what an external client should see (menu, total, business name/venue — no other tenant data, no mutation capability).
+3. **A new public web page** (outside the `[workspace]` layout entirely, e.g. `/quote/[token]`) rendering that data for an external client to actually open.
+4. **Update `sendQuote()`'s email and the copy-link fallback** to point at this new page instead of the internal one.
+5. Decide: should the link expire? Should it go dead once the event is paid/completed/cancelled? Should re-sending a quote reuse the same token or mint a new one (invalidating the old link)?
+
+This is a real, multi-file, security-relevant feature (public unauthenticated data exposure, even if scoped/redacted) — not something I'll build without your go-ahead on scope and the token/expiry model. Let me know if you want this built, and if so, answers to the expiry/reuse questions in point 5 so I don't guess at the security model.
+
+---

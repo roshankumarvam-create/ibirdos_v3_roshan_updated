@@ -896,3 +896,79 @@ Swept for any other invoice still at null/0 total: 22 remain (23 minus `INV-1001
 **Verification:** Full before/after re-query against production for all 16 backfilled rows plus a fresh full-table sweep, both shown above.
 
 ---
+
+## Five general event-system bugs (affecting ALL workspaces, not just cafe-71)
+
+Investigated first, fixed the clear ones (1, 2, 4), reported scope/decision for the other two (3, 5) rather than guessing. Not deployed — logged for review before Roshan deploys and live-tests.
+
+### BUG 1 — Paid event still displayed "draft" — FIXED
+
+**Root cause:** `markAsPaid()` only ever set `paymentStatus: "PAID"` — the kitchen-lifecycle `status` field (`DRAFT`/`CONFIRMED`/`PREP_IN_PROGRESS`/`IN_SERVICE`/`COMPLETED`/`CANCELLED`) was completely untouched. A payment taken before any kitchen-side confirmation left `status: "DRAFT"`, so the event detail page showed both a "draft" badge (from `status`) and a "Paid" badge (from `paymentStatus`) side by side — contradictory-looking. Worse, the events **list** page only ever rendered `status`, with no payment indicator at all, so a paid event there was visually indistinguishable from an untouched draft.
+
+**Decision made and reported, not silently guessed:** `status` and `paymentStatus` are legitimately two separate axes (kitchen lifecycle vs. money) — that orthogonality is exactly what the P0-4 Dashboard fix depends on ("count paid revenue regardless of status"). So the fix does **not** blanket-advance status on every payment. It specifically advances `DRAFT → CONFIRMED` only, since DRAFT is the one value that reads as "nothing has happened yet" — no longer true once money changes hands. Any event already further along, or `CANCELLED`, keeps its real status untouched; payment never skips or rewinds kitchen-lifecycle progress.
+
+**Fix:** `markAsPaid()` now includes `status: "CONFIRMED"` in its update, conditionally only when `event.status === "DRAFT"`. Also fixed the events list page, which never showed a payment indicator at all — added a "Paid" badge next to the status badge, matching the detail page, so a paid event sitting at a later status (e.g. paid while `IN_SERVICE`) still reads as paid in the list.
+
+**Files changed:** `apps/api/src/events/events.service.ts`, `apps/web/src/app/[workspace]/events/page.tsx`
+**Commit:** `6e543d7`
+**Verification:** Live-backtested against production (isolated `roshantest` workspace, cleaned up after): a DRAFT event marked paid → `status=CONFIRMED, paymentStatus=PAID`; a `PREP_IN_PROGRESS` event marked paid → `status=PREP_IN_PROGRESS` (untouched), `paymentStatus=PAID`. `pnpm typecheck` clean. **Live test for Roshan**: mark a DRAFT event paid, confirm it now shows "confirmed" + "Paid" (not "draft" + "Paid") on both the detail page and the events list.
+
+### BUG 2 — Same event in both Upcoming and Past tabs — FIXED
+
+**Root cause, NOT the hypothesized timezone/boundary bug:** `EventsService.list()`'s date filter was `if (opts.upcoming) where.startsAt = { gte: new Date() }` — truthy-only. The Past tab sends `upcoming=false`; `if (false)` never runs, so the Past tab applied **no date filter at all** and returned every event in the workspace regardless of date — past and future both. That's why a future event like "smith" appeared in both tabs: Upcoming correctly filtered to future-only, Past filtered to nothing and showed everything.
+
+**Fix:** explicit `opts.upcoming === true` / `=== false` branches — true filters `startsAt >= now`, false filters `startsAt < now`. Omitting the parameter entirely still applies no filter (unchanged for any caller that isn't the two tabs).
+
+**Files changed:** `apps/api/src/events/events.service.ts`, `apps/api/src/events/events.service.spec.ts` (4 new tests)
+**Commit:** `739a608`
+**Verification:** Live-backtested against production (isolated `roshantest` workspace): created one future-dated and one past-dated event, confirmed each now appears in exactly one tab, never both. `pnpm typecheck` clean, new tests pass. **Live test for Roshan**: open Upcoming and Past tabs side by side, confirm no event appears in both.
+
+### BUG 3 — Quote total inconsistency: labor cost — INVESTIGATED, NOT FIXED, needs a decision
+
+**Found a genuine 3-way conflict in the code, not a simple display bug:**
+
+1. **Create-event page** (`apps/web/.../events/new/page.tsx:368`): `totalCents = subtotalCents + laborTotalCents + markupAmount` — **includes labor**.
+2. **`sendQuote()`** (`apps/api/src/events/events.service.ts:1209`), the actual email a real customer receives: `totalCents = subtotalCents + markupAmount + laborTotal` — **includes labor**. Two of three places agree labor is billable.
+3. **Saved event detail page's "Quote Summary"** (`apps/web/.../events/[id]/page.tsx:176`): `liveQuoteTotalCents = quoteSubtotalCents + Math.round(quoteSubtotalCents * markupPct / 100)` — **excludes labor entirely**. This is the exact reported discrepancy ($4,414 at creation vs. $3,789 saved — the difference is precisely the $625 labor line).
+4. **`computeLiveQuoteTotalCents()`** (`apps/api/src/events/events.service.ts:1278`), the shared backend function that freezes `quotedPriceCents` at `markAsPaid()` time and feeds the public quote page — has an explicit code comment: *"Does NOT include labor: labor is a separate cost line subtracted in the profit calc, not part of revenue."* This is a **deliberate, documented design decision** that directly contradicts what `sendQuote()` actually bills the customer.
+
+**Why this can't be guessed at:** `computeLiveQuoteTotalCents()` is what sets `Event.quotedPriceCents` — the exact field the just-shipped P0-4 Dashboard/Reports work reads as "revenue." If labor should be billable (matching `sendQuote()` and the create page), then every paid event with labor costs has been **undercounting real revenue** in the Dashboard and reports by its labor amount, this whole session's P0-4 work included. If labor should NOT be billable (matching `computeLiveQuoteTotalCents()`'s own comment), then the create page and the actual customer-facing quote email are both wrong and have been overbilling clients for labor that was only ever meant to be an internal cost.
+
+**Question for Roshan, needs an answer before touching any of this:** does the customer's real invoice/quote include labor as billable revenue, or is labor purely an internal cost never charged to the client? Logged in full to `NEEDS_ROSHAN.md` with the exact fix for each of the 4 call sites once decided.
+
+**Files changed:** none — investigation only.
+
+### BUG 4 — Backdated event dates were accepted — FIXED
+
+**Root cause:** zero validation existed anywhere. `CreateEventSchema.startsAt` was just `z.string().datetime()` (any valid ISO timestamp, past or future); `EventsService.create()` had no date check; the frontend's `datetime-local` input had no `min` and no client-side check. Nothing stopped creating an event dated months in the past.
+
+**Rule confirmed before fixing (per instruction):** reject any event whose start date is before today, compared by **calendar day** (not exact instant) — so picking "right now" and submitting a few seconds later is never incorrectly rejected.
+
+**Fix:** `CreateEventSchema.startsAt` now `.refine()`s against a UTC-calendar-day comparison (`isTodayOrFutureUTC`, exported for testing), returning a clear validation error through the existing `ZodValidationPipe`. Frontend: the `datetime-local` input gets a `min` (browser-level picker prevention, best-effort only — a datetime-local value can still be typed by hand past the min) plus a real `handleSubmit` check using the same day-level comparison in the browser's own local time, blocking submit with the same message.
+
+**Files changed:** `apps/api/src/events/events.controller.ts`, `apps/api/src/events/events.controller.spec.ts` (new, 6 tests), `apps/web/src/app/[workspace]/events/new/page.tsx`
+**Commit:** `ae0903b`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. New tests 6/6 pass. Full API suite 120/123 (same 3 pre-existing unrelated failures). **Live test for Roshan**: try creating an event dated last month — should be blocked client-side with a clear message; if bypassed somehow, the server also rejects it.
+
+### BUG 5 — Send Quote: no email configured, and the fallback link is internal/login-walled — INVESTIGATED, NOT BUILT, scope reported
+
+**(a) "Email not set up" checks `process.env.RESEND_API_KEY`** (`apps/api/src/events/events.service.ts:1167`) — confirmed unset in this environment. This is an API-side secret (per `CLAUDE.md`, would need to be set on Railway, not Vercel).
+
+**(b) The copy-link fallback is genuinely broken, confirmed by reading the code:** `send-quote-button.tsx`'s `copyToClipboard()` uses `window.location.href` — the **current page's own URL**, i.e. the internal `/{workspace}/events/{id}` route, which sits behind the login wall. A client pasted this link gets bounced to a login page for a workspace they have no account in. There is no way to make this link usable without building something new.
+
+**(c) Is a public quote page already built?** No — confirmed via `grep` for every `@Public()` route in the API: the only quote-adjacent public endpoint is `customer-ordering.controller.ts`'s `/orders/quote`, which is a completely different feature (computing a live price quote for a customer placing a food order), not this catering-event quote system. **There is no public, unauthenticated page or route for viewing a specific event's quote today. It needs to be built from scratch.**
+
+**Scope of building it (reported per instruction, not built unattended):**
+- A new way to resolve a specific event without requiring login — most likely an unguessable token (new field on `Event`, e.g. `quoteToken`, or a separate table with an expiry) generated when a quote is first sent/copied. **Additive schema change** — would go in `PENDING_MIGRATIONS.sql`, not run, per the standing rule.
+- A new **public** (`@Public()`, rate-limited) API route, e.g. `GET /public/quote/:token`, resolving the token to a read-only, redacted view of one event (menu, total, no other tenant data reachable).
+- A new **public** Next.js page, e.g. `apps/web/src/app/quote/[token]/page.tsx`, entirely outside the `[workspace]` layout/auth wall, rendering the quote for an external client.
+- Updating `sendQuote()`'s email and `copyToClipboard()` to link to this new public page instead of the internal one.
+- Security considerations: token unguessability, whether it should expire, whether it should be single-event-scoped only (yes) or allow any mutation (no — read-only).
+
+This is a real, multi-file, security-sensitive feature — not a bug fix. Not built. Logged to `NEEDS_ROSHAN.md` for a scope/priority decision.
+
+**Files changed:** none — investigation only.
+
+**Overall verification for this batch:** `pnpm typecheck` (all 9 packages) clean after every commit. Full API suite 120/123 pass (same 3 pre-existing unrelated failures throughout). Bugs 1 and 2 additionally live-backtested against real production data in an isolated test workspace. Nothing deployed — Roshan will deploy and live-test.
+
+---
