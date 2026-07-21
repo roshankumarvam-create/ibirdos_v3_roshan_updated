@@ -797,7 +797,14 @@ export class EventsService {
       select: { userId: true },
     });
     const totalPortions = event.menuItems.reduce((sum: number, mi: any) => sum + mi.portions, 0);
-    const eventDateStr = new Date(event.startsAt).toLocaleDateString();
+    // Explicit timeZone: "UTC" -- matches apps/web/src/lib/format.ts's
+    // formatDate/formatDateTime. This runs in the API's own Node process
+    // (Railway), a different runtime than the web app that renders every
+    // other view of this same event.startsAt (Vercel) -- without a pinned,
+    // shared timezone, the two could independently fall back to different
+    // ambient defaults and show genuinely different dates for the same
+    // timestamp. See BUG D in FIX_LOG.md.
+    const eventDateStr = new Date(event.startsAt).toLocaleDateString("en-US", { timeZone: "UTC" });
 
     await Promise.all(
       chefMembers.map((m) =>
@@ -1193,7 +1200,7 @@ export class EventsService {
     const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
 <h2 style="margin:0 0 4px">${event.name}</h2>
 <p style="color:#666;font-size:14px;margin:0 0 24px">
-  ${new Date(event.startsAt).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})} &nbsp;·&nbsp;
+  ${new Date(event.startsAt).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric",timeZone:"UTC"})} &nbsp;·&nbsp;
   ${event.guestCount} guests${event.venueAddress ? ` &nbsp;·&nbsp; ${event.venueAddress}` : ""}
 </p>
 <table style="width:100%;border-collapse:collapse;font-size:14px">

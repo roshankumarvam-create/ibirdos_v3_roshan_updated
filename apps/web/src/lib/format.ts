@@ -60,16 +60,30 @@ export function formatNumber(value: number | string | null | undefined, decimals
   return new Intl.NumberFormat("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(num);
 }
 
+// BUG D fix: explicit timeZone: "UTC" on every call here, matching the two
+// backend formatters in events.service.ts (notification text, quote email).
+// Without it, each of these silently fell back to whatever ambient
+// timezone the rendering process happened to default to -- and since web
+// pages render on Vercel while notifications/emails render on the API's
+// Railway process, the SAME event.startsAt could format to a genuinely
+// different displayed date/time depending on which of the two independent
+// runtimes did the formatting. Pinning both sides to the same fixed zone
+// guarantees every view agrees with every other view. This does NOT make
+// the displayed time match the venue's actual local time -- that needs a
+// real per-workspace timezone setting, which doesn't exist yet (separate,
+// already-logged item) -- it only guarantees internal consistency.
+const EVENT_TIME_ZONE = "UTC";
+
 export function formatDate(iso: string | Date | null | undefined) {
   if (!iso) return "—";
   const d = typeof iso === "string" ? new Date(iso) : iso;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: EVENT_TIME_ZONE });
 }
 
 export function formatDateTime(iso: string | Date | null | undefined) {
   if (!iso) return "—";
   const d = typeof iso === "string" ? new Date(iso) : iso;
-  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: EVENT_TIME_ZONE });
 }
 
 export function relativeTime(iso: string | Date) {
