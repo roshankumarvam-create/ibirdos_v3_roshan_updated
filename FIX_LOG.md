@@ -690,3 +690,29 @@ Also confirmed: **no per-workspace timezone setting exists anywhere in the codeb
 **Verification:** `pnpm typecheck` (all 9 packages) clean, both commits. `pnpm --filter @ibirdos/api test -- --run` — 103/106, same 3 pre-existing failures (unrelated). **Needs live verification**: as Chef, confirm the Delete button is absent on both the recipe detail page and the recipe edit page, and that `DELETE /recipes/:id` returns 403 if called directly; as Manager/Owner, confirm delete still works.
 
 ---
+
+## ISSUE 2 — Event detail page showed "Nov 10" and "7/20/2026" for the same event
+
+**Investigated first, as asked, before any fix — root cause confirmed against `events.service.ts` and `packages/db/prisma/schema.prisma`, not guessed.**
+
+`Event` has exactly one service-date field, `startsAt`, and it was already being read correctly everywhere that matters: the event detail header (`formatDateTime(event.startsAt)`), the Chef prep list page, and the Staff service list page. **This is a display bug, not a data bug** — no event date is stored wrong.
+
+The "7/20/2026" came from two *other* fields on the same event-detail page, both action timestamps that happened to be stamped today, shown without any label distinguishing them from the event date:
+- **`event.frozenAt`** — set to `new Date()` (real wall-clock now) when the event transitions to CONFIRMED/PREP/PAID (`events.service.ts` `updateStatus()` and the mark-paid flow). Displayed as "Frozen quote · {date}".
+- **`kitchenPacket.generatedAt`** — `@default(now())`, and explicitly reset to `new Date()` on every packet regeneration (`events.service.ts`, kitchen-packet upsert). Displayed as "Packet generated {date}".
+
+Both values were individually correct for what they represent ("when was this action taken"), but sitting next to a header showing the real `startsAt`, with no "locked on" / "generated on" framing, they read as if the same event had three conflicting dates.
+
+**Separately noted, not the cause of this symptom:** `KitchenTask.scheduledStartAt` exists in the schema but is never written by any code path (`events.service.ts` task-generation and `kitchen.service.ts` `explodeFromEvent` both omit it) — dead data, flagged but out of scope here since a null field doesn't render as a specific wrong date.
+
+**Fix (per your direction — relabel + show event date alongside):**
+- "Frozen quote" badge now reads "Frozen quote · locked {frozenAt} · event {startsAt}", and its tooltip likewise shows both dates.
+- "Packet generated" line now reads "Packet last generated {generatedAt} · for event date {startsAt}".
+- Replaced the frozen-quote badge's raw, timezone-unpinned `new Date(...).toLocaleDateString()` with the shared UTC-pinned `formatDate()` helper — the same BUG D fix already applied to every other date on this page, missed on this one call site.
+- No schema or write-path change; purely a display fix.
+
+**Files changed:** `apps/web/src/app/[workspace]/events/[id]/page.tsx`
+**Commit:** `72eac8d`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. **Needs live verification**: open the "smith" event detail page, confirm the Frozen-quote badge and Packet-generated line now both show the event's real date (Nov 10) alongside their respective action date, and that the header, prep list, and service list all still agree with each other.
+
+---
