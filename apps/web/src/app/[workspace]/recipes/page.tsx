@@ -26,8 +26,12 @@ interface RecipeListItem {
   ingredientCount: number;
 }
 
-function MarginBadge({ pct }: { pct: number | null }) {
-  if (pct === null) {
+function MarginBadge({ pct }: { pct: number | null | undefined }) {
+  // Loose check: liveFoodCostPct is omitted entirely (undefined), not sent
+  // as null, for roles without financial visibility -- a strict `=== null`
+  // here previously fell through and rendered a false "HIGH" (danger) tone
+  // for every recipe row instead of the intended blank/hidden state.
+  if (pct == null) {
     return <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-bg-inset text-text-tertiary border border-bg-border">—</span>;
   }
   if (pct <= 30) {

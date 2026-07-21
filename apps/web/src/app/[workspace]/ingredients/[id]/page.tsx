@@ -29,16 +29,20 @@ interface IngredientDetail {
   dimension: string;
   canonicalUnit: string;
   preferredDisplayUnit: string | null;
-  currentCostMicrocents: number | null;
   currentStockCanonical: number;
   reorderThresholdCanonical: number | null;
   densityGPerMl: number | null;
   defaultYieldPct: number;
   photoUrl: string | null;
   notes: string | null;
-  vendor: { id: string; name: string } | null;
   aliases: { id: string; text: string; source: string }[];
-  priceHistory: PriceHistory[];
+  // Cost/vendor/price-history are omitted from the API response entirely
+  // (not sent as null) for roles without financial visibility -- see
+  // canViewFinancials()/ingredients.service.ts get(). Every read site must
+  // handle "key absent" (undefined), not just "key present with null".
+  currentCostMicrocents?: number | null;
+  vendor?: { id: string; name: string } | null;
+  priceHistory?: PriceHistory[];
 }
 
 export default function IngredientDetailPage({
@@ -70,6 +74,10 @@ export default function IngredientDetailPage({
   const costCentsPerCanonical = ing.currentCostMicrocents != null
     ? ing.currentCostMicrocents / 1000
     : null;
+  // Absent entirely (not an empty array) for roles without financial
+  // visibility -- normalize to [] once here so every read site downstream
+  // works with a real array instead of re-checking for undefined.
+  const priceHistory = ing.priceHistory ?? [];
 
   return (
     <div className="max-w-[900px] space-y-6">
@@ -152,11 +160,11 @@ export default function IngredientDetailPage({
       )}
 
       {/* Price history */}
-      {ing.priceHistory.length > 0 && (
+      {priceHistory.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>Price history</CardTitle>
-            <CardDescription>Last {Math.min(ing.priceHistory.length, 5)} price changes</CardDescription>
+            <CardDescription>Last {Math.min(priceHistory.length, 5)} price changes</CardDescription>
           </CardHeader>
           <table className="w-full text-sm">
             <thead className="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-bg-border">
@@ -168,7 +176,7 @@ export default function IngredientDetailPage({
               </tr>
             </thead>
             <tbody className="divide-y divide-bg-border">
-              {ing.priceHistory.slice(0, 5).map((ph) => {
+              {priceHistory.slice(0, 5).map((ph) => {
                 const phCents = ph.pricePerCanonicalMicrocents / 1000;
                 return (
                   <tr key={ph.id} className="hover:bg-bg-hover/30">
