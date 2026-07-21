@@ -144,7 +144,7 @@ export const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
     // Invoices
     "invoice.upload", "invoice.read", "invoice.review", "invoice.confirm",
     // Recipes (cost commit too)
-    "recipe.create", "recipe.read", "recipe.update", "recipe.update_cost",
+    "recipe.create", "recipe.read", "recipe.update", "recipe.update_cost", "recipe.delete",
     // Inventory
     "inventory.read", "inventory.adjust", "inventory.transfer",
     // Events
@@ -279,4 +279,13 @@ if (can("CHEF", "ingredient.update_cost")) {
 // Spec invariant: CHEF must not have recipe.update_cost
 if (can("CHEF", "recipe.update_cost")) {
   throw new Error("Permission matrix violates spec: CHEF must not be able to update recipe costs.");
+}
+// Spec invariant: CHEF must not have recipe.delete -- recipe.delete existed
+// in the PERMISSIONS catalog but was never granted to any role, and
+// DELETE /recipes/:id checked recipe.update instead (which CHEF legitimately
+// holds, to edit steps/ingredients) -- so CHEF could delete recipes by
+// accident. Fixed at both the matrix and the endpoint; this assertion is
+// the guard against that regression recurring silently.
+if (can("CHEF", "recipe.delete")) {
+  throw new Error("Permission matrix violates spec: CHEF must not be able to delete recipes.");
 }

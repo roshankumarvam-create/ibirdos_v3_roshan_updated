@@ -118,7 +118,13 @@ export class RecipesController {
     return this.svc.update(ctx, id, body).then(ok);
   }
 
-  @Delete(":id") @RequirePermission("recipe.update")
+  // Was @RequirePermission("recipe.update") -- CHEF legitimately holds that
+  // (to edit steps/ingredients) but must not be able to delete recipes.
+  // recipe.delete is the permission built for this specifically; see the
+  // matching fix in packages/permissions granting it to MANAGER (it was
+  // never explicitly granted to any role before, only reachable here by
+  // accident via the wrong check).
+  @Delete(":id") @RequirePermission("recipe.delete")
   delete(@CurrentCtx() ctx: TenantContext, @Param("id") id: string) {
     return this.svc.delete(ctx, id).then(() => ok(null));
   }
