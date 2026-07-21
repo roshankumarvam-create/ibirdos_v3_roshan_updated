@@ -6,6 +6,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
+import { canViewFinancials } from "@ibirdos/permissions";
 import { Card, CardHeader, CardTitle, CardDescription, Badge, Button, EmptyState } from "@ibirdos/ui";
 import type { IngredientDTO } from "@ibirdos/types";
 import { formatStock, formatCostPerUnit } from "@/lib/format";
@@ -43,6 +44,7 @@ export default async function IngredientsPage({
   const missingThresholdCount = missingThresholdRes.data?.count ?? 0;
 
   const canCreate = user.role === "OWNER" || user.role === "MANAGER";
+  const canSeeFinancials = canViewFinancials(user.role);
 
   return (
     <div className="space-y-6">
@@ -111,7 +113,7 @@ export default async function IngredientsPage({
                 <th className="text-left px-5 py-3 font-medium">Name</th>
                 <th className="text-left px-5 py-3 font-medium">Category</th>
                 <th className="text-left px-5 py-3 font-medium">Unit</th>
-                <th className="text-right px-5 py-3 font-medium">Cost</th>
+                {canSeeFinancials && <th className="text-right px-5 py-3 font-medium">Cost</th>}
                 <th className="text-right px-5 py-3 font-medium">Stock</th>
                 <th className="text-left px-5 py-3 font-medium">Aliases</th>
               </tr>
@@ -133,11 +135,13 @@ export default async function IngredientsPage({
                   <td className="px-5 py-3 text-text-secondary tabular-nums">
                     {ing.preferredDisplayUnit ?? ing.canonicalUnit}
                   </td>
-                  <td className="px-5 py-3 text-right tabular-nums">
-                    <span className={ing.currentCostCents != null ? "text-text-primary" : "text-text-tertiary"}>
-                      {formatCostPerUnit(ing.currentCostCents, ing.canonicalUnit, ing.preferredDisplayUnit)}
-                    </span>
-                  </td>
+                  {canSeeFinancials && (
+                    <td className="px-5 py-3 text-right tabular-nums">
+                      <span className={ing.currentCostCents != null ? "text-text-primary" : "text-text-tertiary"}>
+                        {formatCostPerUnit(ing.currentCostCents, ing.canonicalUnit, ing.preferredDisplayUnit)}
+                      </span>
+                    </td>
+                  )}
                   <td className="px-5 py-3 text-right tabular-nums">
                     <span className={ing.reorderThresholdCanonical != null && ing.currentStockCanonical < ing.reorderThresholdCanonical
                       ? "text-warning"
