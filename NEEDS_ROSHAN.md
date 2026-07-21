@@ -2,16 +2,9 @@
 
 ---
 
-## BUG C — Should Chef be able to log inventory write-offs at all?
+## BUG C — Should Chef be able to log inventory write-offs at all? — RESOLVED
 
-Your bug report listed "adjust/receive/write-off inventory" together as things Chef/Staff should be blocked from. I implemented the permission-accurate version instead of blocking all three uniformly, because it's not one uniform action underneath:
-
-- **Receive** and **Recount** go through `inventory.adjust` — Chef/Staff don't hold it, fully blocked, matches your report exactly.
-- **Write-off** goes through a *different* permission, `waste.create` — which **Chef legitimately holds**, and which matches a standing item from earlier in this same session's backlog: "Visible Record Waste/Yield action for Chef." Blocking write-off too would reverse that.
-
-What's live now: Chef sees `/inventory/adjust` but with only the "Write-off (spoilage/waste)" option available (Receive/Recount hidden). Staff, who holds neither permission, is blocked from the page entirely (redirects to `/403`).
-
-**If you actually want write-off blocked for Chef too** (overriding the earlier waste-logging request), that's a real product decision, not a bug fix — let me know and I'll gate it the same way as the other two. Didn't want to silently remove a capability that was explicitly asked for earlier without you confirming the change.
+**Resolved 2026-07-21: keep as implemented.** Decision: Chef's write-off/waste-logging ability (`waste.create`) stays — a chef logging spoilage is legitimate kitchen work. Receive and Recount (`inventory.adjust`) stay blocked for Chef/Staff. No change needed; the shipped implementation is correct.
 
 ---
 
