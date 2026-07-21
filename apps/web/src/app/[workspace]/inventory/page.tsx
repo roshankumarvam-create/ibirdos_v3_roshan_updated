@@ -13,6 +13,7 @@ export default async function InventoryPage() {
       canSeeFinancials={canSeeFinancials}
       canAdjustInventory={canAdjustInventory}
       canAccessAdjustPage={canAccessAdjustPage}
+      workspaceTimeZone={user.workspaceTimeZone}
     />
   );
 }

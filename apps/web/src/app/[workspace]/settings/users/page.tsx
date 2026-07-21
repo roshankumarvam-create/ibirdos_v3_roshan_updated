@@ -3,6 +3,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
+import { formatDate } from "@/lib/format";
 import { Card, Button, EmptyState } from "@ibirdos/ui";
 import type { Role } from "@ibirdos/types";
 import { RoleBadge } from "@/components/common/role-badge";
@@ -19,14 +20,10 @@ interface UserListItem {
   disabled: boolean;
 }
 
-function fmtDate(iso: string | null) {
-  if (!iso) return "Never";
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
 export default async function UsersSettingsPage() {
   const user = await requireSession();
   if (user.role !== "OWNER") redirect(`/${user.workspaceSlug}`);
+  const fmtDate = (iso: string | null) => (iso ? formatDate(iso, user.workspaceTimeZone) : "Never");
 
   const c = await cookies();
   const res = await api.get<{ users: UserListItem[] }>("/users", { cookies: c });

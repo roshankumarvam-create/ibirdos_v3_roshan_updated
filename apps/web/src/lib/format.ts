@@ -1,4 +1,4 @@
-import { UNITS, normalizeUnit } from "@ibirdos/types";
+import { UNITS, normalizeUnit, formatWorkspaceDate as sharedFormatDate, formatWorkspaceDateTime as sharedFormatDateTime, formatWorkspaceTime as sharedFormatTime } from "@ibirdos/types";
 
 /**
  * Convert a canonical quantity (g, ml, each) to the preferred display unit and format it.
@@ -60,33 +60,26 @@ export function formatNumber(value: number | string | null | undefined, decimals
   return new Intl.NumberFormat("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(num);
 }
 
-// BUG D fix: explicit timeZone: "UTC" on every call here, matching the two
-// backend formatters in events.service.ts (notification text, quote email).
-// Without it, each of these silently fell back to whatever ambient
-// timezone the rendering process happened to default to -- and since web
-// pages render on Vercel while notifications/emails render on the API's
-// Railway process, the SAME event.startsAt could format to a genuinely
-// different displayed date/time depending on which of the two independent
-// runtimes did the formatting. Pinning both sides to the same fixed zone
-// guarantees every view agrees with every other view. This does NOT make
-// the displayed time match the venue's actual local time -- that needs a
-// real per-workspace timezone setting, which doesn't exist yet (separate,
-// already-logged item) -- it only guarantees internal consistency.
-const EVENT_TIME_ZONE = "UTC";
-
-export function formatDate(iso: string | Date | null | undefined) {
-  if (!iso) return "—";
-  const d = typeof iso === "string" ? new Date(iso) : iso;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: EVENT_TIME_ZONE });
+// Thin wrappers over the ONE shared formatter (packages/types/src/datetime.ts),
+// used by both this app and the API. `timeZone` is required, not defaulted --
+// every call site must pass the current workspace's timezone
+// (`user.workspaceTimeZone` from requireSession(), or a `workspaceTimeZone`
+// prop threaded down into client components) so a given event's time
+// reads the same everywhere it's shown. See FIX_LOG.md, "Timezone display
+// bug" for why this replaced the old UTC-only pin.
+export function formatDate(iso: string | Date | null | undefined, timeZone: string) {
+  return sharedFormatDate(iso, timeZone);
 }
 
-export function formatDateTime(iso: string | Date | null | undefined) {
-  if (!iso) return "—";
-  const d = typeof iso === "string" ? new Date(iso) : iso;
-  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: EVENT_TIME_ZONE });
+export function formatDateTime(iso: string | Date | null | undefined, timeZone: string) {
+  return sharedFormatDateTime(iso, timeZone);
 }
 
-export function relativeTime(iso: string | Date) {
+export function formatTime(iso: string | Date | null | undefined, timeZone: string) {
+  return sharedFormatTime(iso, timeZone);
+}
+
+export function relativeTime(iso: string | Date, timeZone: string) {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   const diffMs = Date.now() - d.getTime();
   const sec = Math.floor(diffMs / 1000);
@@ -97,5 +90,5 @@ export function relativeTime(iso: string | Date) {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   if (day < 30) return `${day}d ago`;
-  return d.toLocaleDateString();
+  return sharedFormatDate(d, timeZone);
 }

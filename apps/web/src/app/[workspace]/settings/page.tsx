@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { requireSession } from "@/lib/session";
+import { can } from "@ibirdos/permissions";
 import { Card, CardHeader, CardTitle, CardBody, Badge, Button } from "@ibirdos/ui";
 import { RoleBadge } from "@/components/common/role-badge";
 
 export default async function SettingsPage() {
   const user = await requireSession();
   const isOwner = user.role === "OWNER";
+  const canEditWorkspace = can(user.role, "workspace.update");
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -52,22 +54,33 @@ export default async function SettingsPage() {
           </Card>
         </div>
 
-        <div className="block">
-          <Card className="h-full">
+        <Link href={`/${user.workspaceSlug}/settings/workspace` as any} className="block group">
+          <Card className="h-full hover:border-accent-500/40 transition-colors">
             <CardBody className="space-y-1">
-              <div className="text-base font-medium text-text-primary">Workspace</div>
+              <div className="text-base font-medium text-text-primary group-hover:text-accent-400 transition-colors">
+                Workspace
+              </div>
               <p className="text-xs text-text-secondary">
-                Workspace name and slug (read-only).
+                Workspace name, slug, and timezone.
               </p>
               <div className="mt-2 space-y-1 text-xs">
                 <div className="flex justify-between">
                   <span className="text-text-tertiary">Slug</span>
                   <span className="font-mono text-text-secondary">{user.workspaceSlug}</span>
                 </div>
+                <div className="flex justify-between">
+                  <span className="text-text-tertiary">Timezone</span>
+                  <span className="font-mono text-text-secondary">{user.workspaceTimeZone}</span>
+                </div>
               </div>
+              {canEditWorkspace && (
+                <span className="inline-block mt-2 text-xs text-accent-500 group-hover:text-accent-400">
+                  Edit →
+                </span>
+              )}
             </CardBody>
           </Card>
-        </div>
+        </Link>
       </div>
 
       {/* Profile section */}

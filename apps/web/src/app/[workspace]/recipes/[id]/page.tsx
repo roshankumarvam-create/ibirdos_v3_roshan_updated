@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { can, canViewFinancials } from "@ibirdos/permissions";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button } from "@ibirdos/ui";
 import { IngredientsEditor, type EditableIngredientLine } from "./IngredientsEditor";
@@ -115,7 +116,7 @@ export default async function RecipeDetailPage({
 
   // Cache timestamp for tooltip
   const cacheUpdatedAt = recipe.cachedCostUpdatedAt
-    ? new Date(recipe.cachedCostUpdatedAt).toLocaleString()
+    ? formatDateTime(recipe.cachedCostUpdatedAt, user.workspaceTimeZone)
     : null;
 
   function FoodCostBadge({ pct }: { pct: number | null | undefined }) {

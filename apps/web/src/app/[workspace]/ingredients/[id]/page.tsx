@@ -25,6 +25,7 @@ export default async function IngredientDetailPage({
       canEditIngredient={canEditIngredient}
       canDeleteIngredient={canDeleteIngredient}
       canAccessAdjustPage={canAccessAdjustPage}
+      workspaceTimeZone={user.workspaceTimeZone}
     />
   );
 }

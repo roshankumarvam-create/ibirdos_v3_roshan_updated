@@ -19,7 +19,7 @@ export default async function DailySalesPage() {
           + New entry
         </a>
       </header>
-      <DailySalesList workspaceSlug={user.workspaceSlug} />
+      <DailySalesList workspaceSlug={user.workspaceSlug} workspaceTimeZone={user.workspaceTimeZone} />
     </div>
   );
 }

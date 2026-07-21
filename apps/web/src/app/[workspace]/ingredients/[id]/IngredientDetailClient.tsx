@@ -51,10 +51,11 @@ interface Props {
   canEditIngredient: boolean;
   canDeleteIngredient: boolean;
   canAccessAdjustPage: boolean;
+  workspaceTimeZone: string;
 }
 
 export function IngredientDetailClient({
-  workspace, id, canSeeFinancials, canEditIngredient, canDeleteIngredient, canAccessAdjustPage,
+  workspace, id, canSeeFinancials, canEditIngredient, canDeleteIngredient, canAccessAdjustPage, workspaceTimeZone,
 }: Props) {
   const router = useRouter();
 
@@ -202,7 +203,7 @@ export function IngredientDetailClient({
                 const phCents = ph.pricePerCanonicalMicrocents / 1000;
                 return (
                   <tr key={ph.id} className="hover:bg-bg-hover/30">
-                    <td className="px-5 py-2 text-text-tertiary text-xs">{formatDate(ph.effectiveAt)}</td>
+                    <td className="px-5 py-2 text-text-tertiary text-xs">{formatDate(ph.effectiveAt, workspaceTimeZone)}</td>
                     <td className="px-5 py-2 tabular-nums font-medium">
                       {formatCostPerUnit(phCents, ing.canonicalUnit, ing.preferredDisplayUnit)}
                     </td>

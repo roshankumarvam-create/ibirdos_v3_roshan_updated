@@ -96,7 +96,7 @@ export default async function EventsPage({ searchParams }: { searchParams: Promi
                     </Link>
                     {e.customerName && <div className="text-xs text-text-tertiary">{e.customerName}</div>}
                   </td>
-                  <td className="px-5 py-3 text-text-secondary text-xs">{formatDateTime(e.startsAt)}</td>
+                  <td className="px-5 py-3 text-text-secondary text-xs">{formatDateTime(e.startsAt, user.workspaceTimeZone)}</td>
                   <td className="px-5 py-3 text-text-secondary text-xs">{e.serviceType.replace(/_/g, " ").toLowerCase()}</td>
                   <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{e.guestCount}</td>
                   {canSeeFinancials && (

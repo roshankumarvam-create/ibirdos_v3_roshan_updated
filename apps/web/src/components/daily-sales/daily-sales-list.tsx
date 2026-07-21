@@ -2,6 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState, useMemo } from "react";
 import { api } from "@/lib/api";
+import { formatInWorkspaceTz } from "@ibirdos/types";
 import { Skeleton } from "@/components/common/skeleton";
 import { StatusBadge } from "@/components/common/status-badge";
 import { VarianceStatus } from "@/components/VarianceStatus";
@@ -33,7 +34,7 @@ const SHIFT_LABEL: Record<string, string> = {
   BREAKFAST: "Breakfast", LUNCH: "Lunch", DINNER: "Dinner", LATE_NIGHT: "Late Night", OTHER: "Other",
 };
 
-export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
+export function DailySalesList({ workspaceSlug, workspaceTimeZone }: { workspaceSlug: string; workspaceTimeZone: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ["daily-sales"],
     queryFn: async () => {
@@ -55,7 +56,11 @@ export function DailySalesList({ workspaceSlug }: { workspaceSlug: string }) {
     }
     return Array.from(map.entries()).map(([dateKey, rows]) => ({
       dateKey,
-      label: new Date(dateKey + "T12:00:00").toLocaleDateString("en-US", {
+      // Noon anchor (not the workspace's actual local noon) keeps this a
+      // pure calendar-date label -- safe from day-boundary flips for any
+      // real-world timezone offset, while still routing through the one
+      // shared formatter for consistency with every other date on the site.
+      label: formatInWorkspaceTz(dateKey + "T12:00:00Z", workspaceTimeZone, {
         weekday: "short", month: "short", day: "numeric", year: "numeric",
       }),
       rows,

@@ -26,6 +26,7 @@ import { Redis } from "ioredis";
 import { prisma, writeAudit } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
 import type { LoginInput, SessionUser } from "@ibirdos/types";
+import { getWorkspaceTimeZone } from "@ibirdos/types";
 import type { TenantContext } from "@ibirdos/db";
 
 import { PasswordService } from "../common/services/password.service";
@@ -77,7 +78,7 @@ export class AuthService {
           where: { status: "ACTIVE" },
           include: {
             workspace: {
-              select: { id: true, slug: true, status: true, deletedAt: true },
+              select: { id: true, slug: true, status: true, deletedAt: true, settings: true },
             },
           },
           orderBy: { createdAt: "asc" }, // first-joined workspace wins
@@ -159,6 +160,7 @@ export class AuthService {
       displayName: user.displayName,
       workspaceId: membership.workspaceId,
       workspaceSlug: membership.workspace.slug,
+      workspaceTimeZone: getWorkspaceTimeZone(membership.workspace.settings),
       role: membership.role,
       mustChangePassword: user.mustChangePassword,
     };
@@ -179,7 +181,7 @@ export class AuthService {
       include: {
         memberships: {
           where: { workspaceId, status: "ACTIVE" },
-          include: { workspace: { select: { slug: true } } },
+          include: { workspace: { select: { slug: true, settings: true } } },
         },
       },
     });
@@ -203,6 +205,7 @@ export class AuthService {
       displayName: user.displayName,
       workspaceId,
       workspaceSlug: membership.workspace.slug,
+      workspaceTimeZone: getWorkspaceTimeZone(membership.workspace.settings),
       role: membership.role,
       mustChangePassword: user.mustChangePassword,
     };

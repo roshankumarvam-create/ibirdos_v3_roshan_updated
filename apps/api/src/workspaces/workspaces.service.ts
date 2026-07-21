@@ -19,10 +19,10 @@ import {
 } from "@nestjs/common";
 import { Response, Request } from "express";
 
-import { prisma, writeAudit } from "@ibirdos/db";
+import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { env } from "@ibirdos/config";
 import { moduleLogger } from "@ibirdos/logger";
-import { UsernameSchema, PasswordSchema, WorkspaceSlugSchema } from "@ibirdos/types";
+import { UsernameSchema, PasswordSchema, WorkspaceSlugSchema, DEFAULT_WORKSPACE_TIME_ZONE } from "@ibirdos/types";
 import { z } from "zod";
 
 import { PasswordService } from "../common/services/password.service";
@@ -41,6 +41,18 @@ export const SignupInputSchema = z.object({
 });
 
 export type SignupInput = z.infer<typeof SignupInputSchema>;
+
+// Intl.supportedValuesOf is Node 18+ / modern browsers -- always the
+// current IANA registry, no hand-maintained list to go stale.
+const VALID_TIME_ZONES = new Set(Intl.supportedValuesOf("timeZone"));
+
+export const UpdateWorkspaceSettingsSchema = z.object({
+  timezone: z.string().refine((tz) => VALID_TIME_ZONES.has(tz), {
+    message: "Not a recognized IANA timezone",
+  }),
+});
+
+export type UpdateWorkspaceSettingsInput = z.infer<typeof UpdateWorkspaceSettingsSchema>;
 
 @Injectable()
 export class WorkspacesService {
@@ -98,6 +110,9 @@ export class WorkspacesService {
           name: input.workspaceName,
           slug: input.workspaceSlug,
           status: workspaceStatus,
+          // Client base is US/Pacific by default; changeable any time via
+          // Settings -> Workspace (PATCH /workspaces/:slug).
+          settings: { timezone: DEFAULT_WORKSPACE_TIME_ZONE },
         },
       });
 
@@ -191,5 +206,36 @@ export class WorkspacesService {
       },
     });
     return ws;
+  }
+
+  /**
+   * Merge-update workspace settings (currently just `timezone`). Merges
+   * into the existing JSON blob rather than replacing it wholesale, so
+   * future settings keys added by other features aren't clobbered.
+   */
+  async updateSettings(ctx: TenantContext, slug: string, input: UpdateWorkspaceSettingsInput): Promise<any> {
+    const existing = await prisma.workspace.findFirst({
+      where: { slug, id: ctx.workspaceId, deletedAt: null },
+      select: { id: true, settings: true },
+    });
+    if (!existing) {
+      throw new BadRequestException({ code: "not_found", message: "Workspace not found" });
+    }
+    const mergedSettings = {
+      ...(typeof existing.settings === "object" && existing.settings ? existing.settings : {}),
+      ...input,
+    };
+    const updated = await prisma.workspace.update({
+      where: { id: existing.id },
+      data: { settings: mergedSettings },
+      select: { id: true, slug: true, name: true, status: true, settings: true, createdAt: true },
+    });
+    await writeAudit(ctx, {
+      action: "workspace.settings_updated",
+      entityType: "Workspace",
+      entityId: existing.id,
+      metadata: { changes: Object.keys(input) },
+    });
+    return updated;
   }
 }

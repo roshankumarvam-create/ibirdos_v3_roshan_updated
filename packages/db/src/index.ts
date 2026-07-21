@@ -50,6 +50,11 @@ export interface TenantContext {
   workspaceId: string;
   userId: string;
   role: "OWNER" | "MANAGER" | "CHEF" | "STAFF" | "CUSTOMER";
+  // Resolved once per request by TenantGuard from workspace.settings.timezone
+  // (falls back to a default there if unset). Optional here only so
+  // hand-built TenantContext literals in tests/scripts keep compiling --
+  // every real request path always populates it.
+  workspaceTimeZone?: string;
 }
 
 // ---------------------------------------------------------------------

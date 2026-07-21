@@ -90,9 +90,9 @@ export default async function BillingPage({
               </div>
             </div>
             <div className="text-xs text-text-secondary border-t border-bg-border pt-3 flex items-center justify-between">
-              <span>Period: {formatDate(sub.currentPeriodStart)} → {formatDate(sub.currentPeriodEnd)}</span>
-              {sub.trialEndsAt && <span className="text-info">Trial ends {formatDate(sub.trialEndsAt)}</span>}
-              {sub.cancelAt && <span className="text-warning">Cancels {formatDate(sub.cancelAt)}</span>}
+              <span>Period: {formatDate(sub.currentPeriodStart, user.workspaceTimeZone)} → {formatDate(sub.currentPeriodEnd, user.workspaceTimeZone)}</span>
+              {sub.trialEndsAt && <span className="text-info">Trial ends {formatDate(sub.trialEndsAt, user.workspaceTimeZone)}</span>}
+              {sub.cancelAt && <span className="text-warning">Cancels {formatDate(sub.cancelAt, user.workspaceTimeZone)}</span>}
             </div>
             {user.role === "OWNER" && <BillingActions />}
           </CardBody>

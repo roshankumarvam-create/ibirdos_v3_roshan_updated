@@ -62,7 +62,7 @@ export default async function TaskPrepPage({
   params: Promise<{ workspace: string; taskId: string }>;
 }) {
   const { workspace, taskId } = await params;
-  await requireSession();
+  const user = await requireSession();
   const c = await cookies();
 
   const res = await api.get<{ task: TaskDetail; recipe: RecipeDetail | null }>(
@@ -133,6 +133,7 @@ export default async function TaskPrepPage({
       initialTask={task}
       recipe={recipe}
       prepLines={prepLines}
+      workspaceTimeZone={user.workspaceTimeZone}
     />
   );
 }

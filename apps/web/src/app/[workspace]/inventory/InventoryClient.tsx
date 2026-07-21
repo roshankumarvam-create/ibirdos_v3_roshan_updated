@@ -51,9 +51,10 @@ interface InventoryContentProps {
   canSeeFinancials: boolean;
   canAdjustInventory: boolean;
   canAccessAdjustPage: boolean;
+  workspaceTimeZone: string;
 }
 
-function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjustPage }: InventoryContentProps) {
+function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjustPage, workspaceTimeZone }: InventoryContentProps) {
   const { workspace } = useParams<{ workspace: string }>();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -201,7 +202,7 @@ function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjus
                       ? `Order: ${a.ingredient.reorderQty} ${a.ingredient.purchaseUnit}`
                       : "—"}
                   </td>
-                  <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(a.detectedAt)}</td>
+                  <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(a.detectedAt, workspaceTimeZone)}</td>
                   <td className="px-5 py-3 text-right">
                     <Link href={`/${workspace}/inventory/adjust?ingredientId=${a.ingredient.id}` as any} className="text-xs text-accent-500 hover:text-accent-400">
                       Adjust
@@ -369,7 +370,7 @@ function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjus
 
                   return (
                     <tr key={tx.id} className="hover:bg-bg-hover/30">
-                      <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(tx.createdAt)}</td>
+                      <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(tx.createdAt, workspaceTimeZone)}</td>
                       <td className="px-5 py-3">
                         <Link href={`/${workspace}/ingredients/${tx.ingredient.id}` as any} className="text-text-primary hover:text-accent-500">
                           {tx.ingredient.name}
@@ -422,13 +423,14 @@ function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjus
   );
 }
 
-export function InventoryClient({ canSeeFinancials, canAdjustInventory, canAccessAdjustPage }: InventoryContentProps) {
+export function InventoryClient({ canSeeFinancials, canAdjustInventory, canAccessAdjustPage, workspaceTimeZone }: InventoryContentProps) {
   return (
     <Suspense fallback={<div className="text-text-secondary py-8">Loading…</div>}>
       <InventoryContent
         canSeeFinancials={canSeeFinancials}
         canAdjustInventory={canAdjustInventory}
         canAccessAdjustPage={canAccessAdjustPage}
+        workspaceTimeZone={workspaceTimeZone}
       />
     </Suspense>
   );

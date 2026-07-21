@@ -6,7 +6,7 @@ import { Redis } from "ioredis";
 
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
-import { toCanonical, formatCanonical } from "@ibirdos/types";
+import { toCanonical, formatCanonical, formatWorkspaceDate, formatInWorkspaceTz } from "@ibirdos/types";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { RecipesService } from "../recipes/recipes.service";
@@ -797,14 +797,12 @@ export class EventsService {
       select: { userId: true },
     });
     const totalPortions = event.menuItems.reduce((sum: number, mi: any) => sum + mi.portions, 0);
-    // Explicit timeZone: "UTC" -- matches apps/web/src/lib/format.ts's
-    // formatDate/formatDateTime. This runs in the API's own Node process
-    // (Railway), a different runtime than the web app that renders every
-    // other view of this same event.startsAt (Vercel) -- without a pinned,
-    // shared timezone, the two could independently fall back to different
-    // ambient defaults and show genuinely different dates for the same
-    // timestamp. See BUG D in FIX_LOG.md.
-    const eventDateStr = new Date(event.startsAt).toLocaleDateString("en-US", { timeZone: "UTC" });
+    // formatWorkspaceDate (packages/types) -- the one shared formatter used
+    // everywhere, web and API. Uses ctx.workspaceTimeZone (resolved once by
+    // TenantGuard from Workspace.settings.timezone) so this notification's
+    // date agrees with every screen showing the same event.startsAt,
+    // in the venue's actual local time, not a raw UTC readout.
+    const eventDateStr = formatWorkspaceDate(event.startsAt, ctx.workspaceTimeZone!);
 
     await Promise.all(
       chefMembers.map((m) =>
@@ -1200,7 +1198,7 @@ export class EventsService {
     const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
 <h2 style="margin:0 0 4px">${event.name}</h2>
 <p style="color:#666;font-size:14px;margin:0 0 24px">
-  ${new Date(event.startsAt).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric",timeZone:"UTC"})} &nbsp;·&nbsp;
+  ${formatInWorkspaceTz(event.startsAt, ctx.workspaceTimeZone!, { month: "long", day: "numeric", year: "numeric" })} &nbsp;·&nbsp;
   ${event.guestCount} guests${event.venueAddress ? ` &nbsp;·&nbsp; ${event.venueAddress}` : ""}
 </p>
 <table style="width:100%;border-collapse:collapse;font-size:14px">

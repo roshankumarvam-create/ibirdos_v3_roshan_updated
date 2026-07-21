@@ -34,6 +34,7 @@ import { JwtService } from "@nestjs/jwt";
 import { prisma, TenantContext } from "@ibirdos/db";
 import { env } from "@ibirdos/config";
 import { moduleLogger } from "@ibirdos/logger";
+import { getWorkspaceTimeZone } from "@ibirdos/types";
 
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 import { IS_PLATFORM_ROUTE_KEY } from "../decorators/platform-route.decorator";
@@ -107,7 +108,7 @@ export class TenantGuard implements CanActivate {
               select: {
                 workspaceId: true,
                 role: true,
-                workspace: { select: { status: true, deletedAt: true } },
+                workspace: { select: { status: true, deletedAt: true, settings: true } },
               },
             },
           },
@@ -162,6 +163,7 @@ export class TenantGuard implements CanActivate {
       userId: session.userId,
       workspaceId: session.workspaceId,
       role: membership.role,
+      workspaceTimeZone: getWorkspaceTimeZone(membership.workspace.settings),
     };
 
     return true;

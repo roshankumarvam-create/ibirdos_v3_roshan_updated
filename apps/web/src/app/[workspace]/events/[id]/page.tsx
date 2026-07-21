@@ -204,7 +204,7 @@ export default async function EventDetailPage({
           </div>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">{event.name}</h1>
           <p className="mt-1 text-xs font-mono text-text-secondary">
-            {formatDateTime(event.startsAt)}
+            {formatDateTime(event.startsAt, user.workspaceTimeZone)}
             {event.venueAddress && ` · ${event.venueAddress}`}
             {event.customerName && ` · ${event.customerName}`}
           </p>
@@ -217,9 +217,9 @@ export default async function EventDetailPage({
           {event.frozenAt ? (
             <span
               className="inline-flex items-center gap-1 rounded border border-accent-500/30 bg-accent-500/10 px-2 py-0.5 text-[10px] font-medium text-accent-400"
-              title={`Costs locked on ${formatDate(event.frozenAt)} · event date ${formatDate(event.startsAt)}`}
+              title={`Costs locked on ${formatDate(event.frozenAt, user.workspaceTimeZone)} · event date ${formatDate(event.startsAt, user.workspaceTimeZone)}`}
             >
-              Frozen quote · locked {formatDate(event.frozenAt)} · event {formatDate(event.startsAt)}
+              Frozen quote · locked {formatDate(event.frozenAt, user.workspaceTimeZone)} · event {formatDate(event.startsAt, user.workspaceTimeZone)}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 rounded border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
@@ -316,7 +316,7 @@ export default async function EventDetailPage({
               <CardHeader>
                 <CardTitle>Kitchen tasks generated</CardTitle>
                 <CardDescription>
-                  {prepTasks.length} prep + {serviceTasks.length} service tasks · check inventory checked {event.inventoryCheckedAt ? new Date(event.inventoryCheckedAt).toLocaleString() : "—"}
+                  {prepTasks.length} prep + {serviceTasks.length} service tasks · check inventory checked {formatDateTime(event.inventoryCheckedAt, user.workspaceTimeZone)}
                 </CardDescription>
               </CardHeader>
               <table className="w-full text-sm">
@@ -452,7 +452,7 @@ export default async function EventDetailPage({
               {event.kitchenPacket ? (
                 <>
                   <p className="text-xs text-success">
-                    Packet last generated {formatDate(event.kitchenPacket.generatedAt)} · for event date {formatDate(event.startsAt)}
+                    Packet last generated {formatDate(event.kitchenPacket.generatedAt, user.workspaceTimeZone)} · for event date {formatDate(event.startsAt, user.workspaceTimeZone)}
                   </p>
                   <Link href={`/${workspace}/kitchen?eventId=${event.id}` as any}>
                     <Button variant="secondary" size="sm" className="w-full">View kitchen board</Button>

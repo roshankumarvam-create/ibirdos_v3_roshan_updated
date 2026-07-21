@@ -9,6 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Req,
   Res,
@@ -22,12 +23,15 @@ import type { TenantContext } from "@ibirdos/db";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/guards/rate-limit.guard";
 import { CurrentCtx } from "../common/decorators/current-ctx.decorator";
+import { RequirePermission } from "../common/decorators/require-permission.decorator";
 import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 
 import {
   WorkspacesService,
   SignupInputSchema,
+  UpdateWorkspaceSettingsSchema,
   type SignupInput,
+  type UpdateWorkspaceSettingsInput,
 } from "./workspaces.service";
 
 @Controller("workspaces")
@@ -54,6 +58,17 @@ export class WorkspacesController {
   ): Promise<any> {
     const ws = await this.workspaces.findBySlug(slug, ctx.workspaceId);
     if (!ws) throw new NotFoundException({ code: "not_found", message: "Workspace not found" });
+    return ok({ workspace: ws });
+  }
+
+  @Patch(":slug")
+  @RequirePermission("workspace.update")
+  async updateSettings(
+    @Param("slug") slug: string,
+    @CurrentCtx() ctx: TenantContext,
+    @Body(new ZodValidationPipe(UpdateWorkspaceSettingsSchema)) body: UpdateWorkspaceSettingsInput,
+  ) {
+    const ws = await this.workspaces.updateSettings(ctx, slug, body);
     return ok({ workspace: ws });
   }
 }

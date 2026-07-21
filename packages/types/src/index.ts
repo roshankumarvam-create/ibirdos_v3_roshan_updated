@@ -134,6 +134,7 @@ export interface SessionUser {
   displayName: string | null;
   workspaceId: string;
   workspaceSlug: string;
+  workspaceTimeZone: string;
   role: Role;
   mustChangePassword: boolean;
 }
@@ -177,6 +178,7 @@ export interface CreatedUserCredentials {
 // Phase 5+ additions
 export * from "./units";
 export * from "./ingredient";
+export * from "./datetime";
 
 // ---------------------------------------------------------------------
 // Recipe creation — shared by web form and API validation

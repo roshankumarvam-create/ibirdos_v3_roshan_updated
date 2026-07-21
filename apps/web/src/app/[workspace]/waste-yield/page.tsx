@@ -52,7 +52,7 @@ export default async function WasteYieldPage() {
                   <tr key={w.id} className="hover:bg-bg-hover/30">
                     <td className="px-5 py-3">
                       <div className="text-text-primary text-sm">{w.ingredient.name}</div>
-                      <div className="text-[10px] text-text-tertiary">{relativeTime(w.occurredAt)}</div>
+                      <div className="text-[10px] text-text-tertiary">{relativeTime(w.occurredAt, user.workspaceTimeZone)}</div>
                     </td>
                     <td className="px-5 py-3"><Badge tone="warning">{w.reason.toLowerCase().replace(/_/g, " ")}</Badge></td>
                     <td className="px-5 py-3 text-right tabular-nums text-danger">
@@ -94,7 +94,7 @@ export default async function WasteYieldPage() {
                       {Number(y.yieldPct).toFixed(1)}%
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(y.observedAt)}</td>
+                  <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(y.observedAt, user.workspaceTimeZone)}</td>
                 </tr>
               ))}
             </tbody>

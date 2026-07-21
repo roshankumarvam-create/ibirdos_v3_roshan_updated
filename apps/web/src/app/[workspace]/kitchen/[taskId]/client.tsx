@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button } from "@ibirdos/ui";
 import { api } from "@/lib/api";
+import { formatTime } from "@/lib/format";
 import type { PrepLine } from "./page";
 
 interface RecipeSummary {
@@ -39,12 +40,14 @@ export function TaskPrepClient({
   initialTask,
   recipe,
   prepLines,
+  workspaceTimeZone,
 }: {
   workspace: string;
   taskId: string;
   initialTask: TaskDetail;
   recipe: RecipeSummary | null;
   prepLines: PrepLine[];
+  workspaceTimeZone: string;
 }) {
   const router = useRouter();
   const [task, setTask] = useState(initialTask);
@@ -84,7 +87,7 @@ export function TaskPrepClient({
             {(task.targetPortions ?? 1)} portion{(task.targetPortions ?? 1) === 1 ? "" : "s"}
             {task.estimatedMinutes ? ` · ~${task.estimatedMinutes}min` : ""}
             {task.scheduledStartAt
-              ? ` · prep by ${new Date(task.scheduledStartAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+              ? ` · prep by ${formatTime(task.scheduledStartAt, workspaceTimeZone)}`
               : ""}
           </p>
         </div>
@@ -203,7 +206,7 @@ export function TaskPrepClient({
       {isDone && (
         <p className="text-sm text-text-tertiary">
           Task {task.status.toLowerCase()}
-          {task.completedAt && ` at ${new Date(task.completedAt).toLocaleTimeString()}`}.
+          {task.completedAt && ` at ${formatTime(task.completedAt, workspaceTimeZone)}`}.
           {task.status === "DONE" && " Inventory auto-deducted."}
         </p>
       )}

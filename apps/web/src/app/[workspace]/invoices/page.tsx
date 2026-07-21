@@ -96,7 +96,7 @@ export default async function InvoicesPage() {
                     {inv.vendor?.name ?? inv.vendorNameRaw ?? "—"}
                   </td>
                   <td className="px-5 py-3 text-text-secondary text-xs">
-                    {inv.invoiceDate ? formatDate(inv.invoiceDate) : "—"}
+                    {inv.invoiceDate ? formatDate(inv.invoiceDate, user.workspaceTimeZone) : "—"}
                   </td>
                   <td className="px-5 py-3">
                     <StatusBadge
@@ -111,7 +111,7 @@ export default async function InvoicesPage() {
                     {inv._count.lines}
                   </td>
                   <td className="px-5 py-3 text-text-tertiary text-xs">
-                    {relativeTime(inv.createdAt)}
+                    {relativeTime(inv.createdAt, user.workspaceTimeZone)}
                   </td>
                 </tr>
               ))}

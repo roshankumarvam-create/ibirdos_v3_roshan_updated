@@ -82,7 +82,7 @@ export default async function StaffServicePage({
         </div>
         <h1 className="mt-2 text-xl font-semibold tracking-tight">Staff service list</h1>
         <p className="mt-1 text-xs font-mono text-text-secondary">
-          {event.name} · {event.guestCount} guests{event.customerName && ` · ${event.customerName}`} · {formatDate(event.startsAt)} ·{" "}
+          {event.name} · {event.guestCount} guests{event.customerName && ` · ${event.customerName}`} · {formatDate(event.startsAt, user.workspaceTimeZone)} ·{" "}
           {event.serviceType.replace(/_/g, " ").toLowerCase()} · {totalPortions} total portions
         </p>
         <div className="mt-2">

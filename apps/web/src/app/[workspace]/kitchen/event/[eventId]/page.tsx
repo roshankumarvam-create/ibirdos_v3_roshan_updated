@@ -84,7 +84,7 @@ export default async function ChefPrepPage({
         </div>
         <h1 className="mt-2 text-xl font-semibold tracking-tight">Chef prep list</h1>
         <p className="mt-1 text-xs font-mono text-text-secondary">
-          {event.name} · {event.guestCount} guests{event.customerName && ` · ${event.customerName}`} · {formatDate(event.startsAt)} ·{" "}
+          {event.name} · {event.guestCount} guests{event.customerName && ` · ${event.customerName}`} · {formatDate(event.startsAt, user.workspaceTimeZone)} ·{" "}
           {totalPortions} total portions
         </p>
         {isPaid && (
