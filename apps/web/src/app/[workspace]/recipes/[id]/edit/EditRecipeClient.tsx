@@ -105,11 +105,12 @@ function newLine(): IngredientLine {
 // ---------------------------------------------------------------------------
 
 export function EditRecipeClient({
-  workspaceSlug, recipeId, canSeeFinancials,
+  workspaceSlug, recipeId, canSeeFinancials, canDelete,
 }: {
   workspaceSlug: string;
   recipeId: string;
   canSeeFinancials: boolean;
+  canDelete: boolean;
 }) {
   const router = useRouter();
 
@@ -411,9 +412,11 @@ export function EditRecipeClient({
           <h1 className="text-xl font-semibold tracking-tight">Edit recipe</h1>
         </div>
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" className="text-danger hover:bg-danger/10" onClick={() => setShowDeleteModal(true)}>
-            Delete
-          </Button>
+          {canDelete && (
+            <Button variant="ghost" size="sm" className="text-danger hover:bg-danger/10" onClick={() => setShowDeleteModal(true)}>
+              Delete
+            </Button>
+          )}
           <Button variant="secondary" onClick={() => router.push(`/${workspaceSlug}/recipes/${recipeId}` as Route)}>
             Cancel
           </Button>

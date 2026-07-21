@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
-import { canViewFinancials } from "@ibirdos/permissions";
+import { can, canViewFinancials } from "@ibirdos/permissions";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button } from "@ibirdos/ui";
 import { IngredientsEditor, type EditableIngredientLine } from "./IngredientsEditor";
 import { DeleteRecipeButton } from "./delete-recipe-button";
@@ -91,6 +91,11 @@ export default async function RecipeDetailPage({
   const recipe = res.data;
 
   const canEdit = user.role === "OWNER" || user.role === "MANAGER" || user.role === "CHEF";
+  // recipe.delete -- distinct from recipe.update (canEdit above). CHEF
+  // legitimately holds recipe.update to edit steps/ingredients but must
+  // not be able to delete recipes; DELETE /recipes/:id now enforces this
+  // server-side too (previously checked recipe.update by mistake).
+  const canDelete = can(user.role, "recipe.delete");
   // Same signal the API redaction is built on -- if this is false, the API
   // never sent cost/price/margin data for this recipe in the first place.
   const canSeeFinancials = canViewFinancials(user.role);
@@ -171,12 +176,16 @@ export default async function RecipeDetailPage({
             </p>
           </div>
         </div>
-        {canEdit && (
+        {(canEdit || canDelete) && (
           <div className="flex items-center gap-2">
-            <Link href={`/${workspace}/recipes/${id}/edit` as any}>
-              <Button variant="secondary" size="sm">Edit</Button>
-            </Link>
-            <DeleteRecipeButton recipeId={id} workspaceSlug={workspace} recipeName={recipe.name} />
+            {canEdit && (
+              <Link href={`/${workspace}/recipes/${id}/edit` as any}>
+                <Button variant="secondary" size="sm">Edit</Button>
+              </Link>
+            )}
+            {canDelete && (
+              <DeleteRecipeButton recipeId={id} workspaceSlug={workspace} recipeName={recipe.name} />
+            )}
           </div>
         )}
       </div>
