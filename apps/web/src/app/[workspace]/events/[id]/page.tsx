@@ -217,9 +217,9 @@ export default async function EventDetailPage({
           {event.frozenAt ? (
             <span
               className="inline-flex items-center gap-1 rounded border border-accent-500/30 bg-accent-500/10 px-2 py-0.5 text-[10px] font-medium text-accent-400"
-              title={`Costs locked at ${new Date(event.frozenAt).toLocaleString()}`}
+              title={`Costs locked on ${formatDate(event.frozenAt)} · event date ${formatDate(event.startsAt)}`}
             >
-              Frozen quote · {new Date(event.frozenAt).toLocaleDateString()}
+              Frozen quote · locked {formatDate(event.frozenAt)} · event {formatDate(event.startsAt)}
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 rounded border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
@@ -451,7 +451,9 @@ export default async function EventDetailPage({
             <CardBody className="space-y-2">
               {event.kitchenPacket ? (
                 <>
-                  <p className="text-xs text-success">Packet generated {formatDate(event.kitchenPacket.generatedAt)}</p>
+                  <p className="text-xs text-success">
+                    Packet last generated {formatDate(event.kitchenPacket.generatedAt)} · for event date {formatDate(event.startsAt)}
+                  </p>
                   <Link href={`/${workspace}/kitchen?eventId=${event.id}` as any}>
                     <Button variant="secondary" size="sm" className="w-full">View kitchen board</Button>
                   </Link>
