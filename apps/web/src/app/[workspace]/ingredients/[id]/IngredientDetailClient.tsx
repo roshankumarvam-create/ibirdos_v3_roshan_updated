@@ -15,8 +15,10 @@ import {
 interface PriceHistory {
   id: string;
   pricePerCanonicalMicrocents: number;
+  previousPricePerCanonicalMicrocents: number | null;
   source: string;
   sourceRef: string | null;
+  invoiceNumber: string | null;
   effectiveAt: string;
   vendor: { name: string } | null;
 }
@@ -193,24 +195,29 @@ export function IngredientDetailClient({
             <thead className="text-[10px] uppercase tracking-wider text-text-tertiary border-b border-bg-border">
               <tr>
                 <th className="text-left px-5 py-2 font-medium">Date</th>
-                <th className="text-left px-5 py-2 font-medium">Price</th>
+                <th className="text-left px-5 py-2 font-medium">Previous → New</th>
                 <th className="text-left px-5 py-2 font-medium">Source</th>
                 <th className="text-left px-5 py-2 font-medium">Vendor</th>
+                <th className="text-left px-5 py-2 font-medium">Invoice #</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-bg-border">
               {priceHistory.slice(0, 5).map((ph) => {
                 const phCents = ph.pricePerCanonicalMicrocents / 1000;
+                const prevCents = ph.previousPricePerCanonicalMicrocents != null ? ph.previousPricePerCanonicalMicrocents / 1000 : null;
                 return (
                   <tr key={ph.id} className="hover:bg-bg-hover/30">
                     <td className="px-5 py-2 text-text-tertiary text-xs">{formatDate(ph.effectiveAt, workspaceTimeZone)}</td>
                     <td className="px-5 py-2 tabular-nums font-medium">
-                      {formatCostPerUnit(phCents, ing.canonicalUnit, ing.preferredDisplayUnit)}
+                      {prevCents != null
+                        ? `${formatCostPerUnit(prevCents, ing.canonicalUnit, ing.preferredDisplayUnit)} → ${formatCostPerUnit(phCents, ing.canonicalUnit, ing.preferredDisplayUnit)}`
+                        : formatCostPerUnit(phCents, ing.canonicalUnit, ing.preferredDisplayUnit)}
                     </td>
                     <td className="px-5 py-2">
                       <Badge tone="neutral">{ph.source.toLowerCase()}</Badge>
                     </td>
                     <td className="px-5 py-2 text-text-tertiary text-xs">{ph.vendor?.name ?? "—"}</td>
+                    <td className="px-5 py-2 text-text-tertiary text-xs font-mono">{ph.invoiceNumber ?? "—"}</td>
                   </tr>
                 );
               })}

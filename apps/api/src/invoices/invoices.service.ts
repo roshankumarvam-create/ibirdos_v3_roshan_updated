@@ -515,6 +515,12 @@ export class InvoicesService {
         source: "INVOICE",
         sourceRef: invoice.id,
         vendorId: invoice.vendorId ?? undefined,
+        // P1-C fix: date price history by the invoice's own printed date
+        // (when the price actually took effect), not by whenever this
+        // invoice happened to get confirmed in the app. Falls back to
+        // "now" (via updatePrice's own default) for invoices with no
+        // printed date.
+        effectiveAt: invoice.invoiceDate ?? undefined,
       });
       updatedIngredientIds.add(ingredientId);
       priceUpdates++;

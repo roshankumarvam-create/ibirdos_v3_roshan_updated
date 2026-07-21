@@ -176,6 +176,28 @@ export class IngredientsService implements OnApplicationBootstrap {
     });
     if (!ing) throw new NotFoundException({ code: "not_found", message: "Ingredient not found" });
     const canSeeCost = canViewFinancials(ctx.role);
+
+    // P1-C: resolve INVOICE-sourced price history rows' sourceRef (an
+    // Invoice id, not human-readable) to that invoice's actual printed
+    // invoice number, and compute each row's previous price -- rows come
+    // back newest-first, so "previous" is the next OLDER row.
+    let priceHistory: any[] | undefined;
+    if (canSeeCost) {
+      const rows = ((ing as any).priceHistory ?? []) as any[];
+      const invoiceIds = rows.filter((r) => r.source === "INVOICE" && r.sourceRef).map((r) => r.sourceRef);
+      const invoices = invoiceIds.length
+        ? await prisma.invoice.findMany({ where: { id: { in: invoiceIds } }, select: { id: true, invoiceNumber: true } })
+        : [];
+      const invoiceNumberById = new Map(invoices.map((i) => [i.id, i.invoiceNumber]));
+
+      priceHistory = rows.map((ph, idx) => ({
+        ...ph,
+        pricePerCanonicalMicrocents: Number(ph.pricePerCanonicalMicrocents),
+        invoiceNumber: ph.source === "INVOICE" ? invoiceNumberById.get(ph.sourceRef) ?? null : null,
+        previousPricePerCanonicalMicrocents: idx + 1 < rows.length ? Number(rows[idx + 1].pricePerCanonicalMicrocents) : null,
+      }));
+    }
+
     return {
       ...ing,
       densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
@@ -188,12 +210,7 @@ export class IngredientsService implements OnApplicationBootstrap {
       currentCostMicrocents: canSeeCost && ing.currentCostMicrocents != null ? Number(ing.currentCostMicrocents) : null,
       currentVendorId: canSeeCost ? ing.currentVendorId : null,
       vendor: canSeeCost ? ing.vendor : undefined,
-      priceHistory: canSeeCost
-        ? (ing as any).priceHistory?.map((ph: any) => ({
-            ...ph,
-            pricePerCanonicalMicrocents: Number(ph.pricePerCanonicalMicrocents),
-          }))
-        : undefined,
+      priceHistory,
     };
   }
 
@@ -255,6 +272,12 @@ export class IngredientsService implements OnApplicationBootstrap {
       sourceRef?: string;
       vendorId?: string;
       notes?: string;
+      // P1-C fix: price history should be dated by when the price actually
+      // took effect (the invoice's own printed date), not by whenever the
+      // invoice happened to get uploaded/confirmed in the app. Optional --
+      // falls back to the schema's @default(now()) for MANUAL updates and
+      // any invoice with no printed date.
+      effectiveAt?: Date;
     },
   ): Promise<any> {
     if (params.pricePerCanonicalCents < 0) {
@@ -305,6 +328,7 @@ export class IngredientsService implements OnApplicationBootstrap {
           sourceRef: params.sourceRef ?? null,
           notes: params.notes ?? null,
           createdById: ctx.userId,
+          ...(params.effectiveAt ? { effectiveAt: params.effectiveAt } : {}),
         },
       }),
     ]);
