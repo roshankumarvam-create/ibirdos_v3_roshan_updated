@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
+import { canViewFinancials } from "@ibirdos/permissions";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button } from "@ibirdos/ui";
 import { IngredientsEditor, type EditableIngredientLine } from "./IngredientsEditor";
 import { DeleteRecipeButton } from "./delete-recipe-button";
@@ -90,6 +91,9 @@ export default async function RecipeDetailPage({
   const recipe = res.data;
 
   const canEdit = user.role === "OWNER" || user.role === "MANAGER" || user.role === "CHEF";
+  // Same signal the API redaction is built on -- if this is false, the API
+  // never sent cost/price/margin data for this recipe in the first place.
+  const canSeeFinancials = canViewFinancials(user.role);
 
   const portionWeightOz = recipe.portionWeightG ? (recipe.portionWeightG / 28.3495).toFixed(1) : null;
   const portionVolumeFloz = recipe.portionVolumeMl ? (recipe.portionVolumeMl / 29.5735).toFixed(1) : null;
@@ -177,8 +181,8 @@ export default async function RecipeDetailPage({
         )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
+      <div className={canSeeFinancials ? "grid grid-cols-1 lg:grid-cols-3 gap-6" : "grid grid-cols-1 gap-6"}>
+        <div className={canSeeFinancials ? "lg:col-span-2 space-y-6" : "space-y-6"}>
 
           {/* Info */}
           <Card>
@@ -218,6 +222,7 @@ export default async function RecipeDetailPage({
                 workspaceId={workspace}
                 lines={recipe.ingredients ?? []}
                 canEdit={canEdit}
+                canSeeFinancials={canSeeFinancials}
               />
             </CardBody>
           </Card>
@@ -274,58 +279,62 @@ export default async function RecipeDetailPage({
           </Card>
         </div>
 
-        {/* Cost summary sidebar */}
-        <div className="lg:col-span-1">
-          <div className="sticky top-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Cost summary</CardTitle>
-                {cacheUpdatedAt && (
-                  <p className="text-[10px] text-text-tertiary mt-0.5" title={`Cache last written: ${cacheUpdatedAt}`}>
-                    Cache updated {cacheUpdatedAt}
-                  </p>
-                )}
-              </CardHeader>
-              <CardBody className="space-y-3 text-sm">
-                <FoodCostBadge pct={foodCostPct} />
-                {recipe.liveStaleness === "MISSING_PRICE" && (
-                  <p className="text-[10px] text-warning">Some ingredients have no price set — cost is partial.</p>
-                )}
-                <CostRow label="Live ingredient cost" value={fmtCents(liveCostCents)} />
-                {recipe.paperCostCents != null && recipe.portionsYielded && (
-                  <CostRow
-                    label="Paper cost (total)"
-                    value={fmtCents(recipe.paperCostCents * recipe.portionsYielded)}
-                  />
-                )}
-                <CostRow label="Portion cost" value={fmtCents(portionCostCents)} />
-
-                <div className="border-t border-bg-border pt-2 mt-2 space-y-2">
-                  <CostRow label="Sell price" value={fmtCents(recipe.salePriceCents)} />
-                  <CostRow
-                    label="Food cost %"
-                    value={fmtPct(foodCostPct)}
-                    {...(foodCostPct != null && {
-                      valueClass: foodCostPct <= (recipe.goalFoodCostPct ?? 30)
-                        ? "text-success font-medium"
-                        : "text-danger font-medium",
-                    })}
-                  />
-                  {recipe.goalFoodCostPct != null && (
-                    <CostRow label="Goal food cost %" value={fmtPct(recipe.goalFoodCostPct)} />
+        {/* Cost summary sidebar -- omitted entirely (not a card full of
+            dashes) for roles without financial visibility. The API never
+            sent this data for this role in the first place. */}
+        {canSeeFinancials && (
+          <div className="lg:col-span-1">
+            <div className="sticky top-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Cost summary</CardTitle>
+                  {cacheUpdatedAt && (
+                    <p className="text-[10px] text-text-tertiary mt-0.5" title={`Cache last written: ${cacheUpdatedAt}`}>
+                      Cache updated {cacheUpdatedAt}
+                    </p>
                   )}
-                  <CostRow
-                    label="Margin per portion"
-                    value={fmtCents(marginCents)}
-                    {...(marginCents != null && {
-                      valueClass: marginCents >= 0 ? "text-success font-medium" : "text-danger font-medium",
-                    })}
-                  />
-                </div>
-              </CardBody>
-            </Card>
+                </CardHeader>
+                <CardBody className="space-y-3 text-sm">
+                  <FoodCostBadge pct={foodCostPct} />
+                  {recipe.liveStaleness === "MISSING_PRICE" && (
+                    <p className="text-[10px] text-warning">Some ingredients have no price set — cost is partial.</p>
+                  )}
+                  <CostRow label="Live ingredient cost" value={fmtCents(liveCostCents)} />
+                  {recipe.paperCostCents != null && recipe.portionsYielded && (
+                    <CostRow
+                      label="Paper cost (total)"
+                      value={fmtCents(recipe.paperCostCents * recipe.portionsYielded)}
+                    />
+                  )}
+                  <CostRow label="Portion cost" value={fmtCents(portionCostCents)} />
+
+                  <div className="border-t border-bg-border pt-2 mt-2 space-y-2">
+                    <CostRow label="Sell price" value={fmtCents(recipe.salePriceCents)} />
+                    <CostRow
+                      label="Food cost %"
+                      value={fmtPct(foodCostPct)}
+                      {...(foodCostPct != null && {
+                        valueClass: foodCostPct <= (recipe.goalFoodCostPct ?? 30)
+                          ? "text-success font-medium"
+                          : "text-danger font-medium",
+                      })}
+                    />
+                    {recipe.goalFoodCostPct != null && (
+                      <CostRow label="Goal food cost %" value={fmtPct(recipe.goalFoodCostPct)} />
+                    )}
+                    <CostRow
+                      label="Margin per portion"
+                      value={fmtCents(marginCents)}
+                      {...(marginCents != null && {
+                        valueClass: marginCents >= 0 ? "text-success font-medium" : "text-danger font-medium",
+                      })}
+                    />
+                  </div>
+                </CardBody>
+              </Card>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

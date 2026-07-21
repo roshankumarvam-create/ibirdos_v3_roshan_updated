@@ -41,6 +41,7 @@ interface Props {
   workspaceId: string;
   lines: EditableIngredientLine[];
   canEdit: boolean;
+  canSeeFinancials: boolean;
 }
 
 function fmtCents(cents: number | null) {
@@ -48,7 +49,7 @@ function fmtCents(cents: number | null) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 
-export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, canEdit }: Props) {
+export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, canEdit, canSeeFinancials }: Props) {
   const [lines, setLines] = useState(initialLines);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const router = useRouter();
@@ -107,7 +108,7 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
           <th className="text-left px-4 py-2 font-medium w-24">Unit</th>
           <th className="text-left px-4 py-2 font-medium w-24">Size</th>
           <th className="text-right px-4 py-2 font-medium w-20">% Used</th>
-          <th className="text-right px-4 py-2 font-medium w-24">Line cost</th>
+          {canSeeFinancials && <th className="text-right px-4 py-2 font-medium w-24">Line cost</th>}
           {canEdit && <th className="w-8 px-1 py-2" />}
         </tr>
       </thead>
@@ -239,11 +240,13 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
             </td>
 
             {/* Line cost */}
-            <td className="px-4 py-1.5 text-right tabular-nums text-text-secondary">
-              {line.lineCostMicrocents != null
-                ? fmtCents(line.lineCostMicrocents / 1000)
-                : fmtCents(line.lineCostCents)}
-            </td>
+            {canSeeFinancials && (
+              <td className="px-4 py-1.5 text-right tabular-nums text-text-secondary">
+                {line.lineCostMicrocents != null
+                  ? fmtCents(line.lineCostMicrocents / 1000)
+                  : fmtCents(line.lineCostCents)}
+              </td>
+            )}
             {/* Remove button */}
             {canEdit && (
               <td className="px-1 py-1.5 text-center">
