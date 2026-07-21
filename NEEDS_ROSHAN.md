@@ -261,3 +261,80 @@ Notes:
 - This only touches `cafe-71`'s "Test Event" data (the event the bug was diagnosed against). If the client's real "smith" event or other real catering events also show duplicate `CONSUME` rows once you check, the same pattern applies — I only reversed the two rows I found and verified; I did not go looking for other affected ingredients/events beyond what this investigation surfaced.
 
 ---
+
+## P0-3 — backfill SQL for the 17 already-CONFIRMED invoices still stuck at $0.00
+
+**Not run.** Root cause (see `FIX_LOG.md`, "P0-3 re-verification"): these 17 invoices were confirmed during the ~2.4-day window where the P0-3 fix was committed to git but the API hadn't actually redeployed yet (broken GitHub webhook, no manual deploy happened in that window). The fix is live now and confirmed working via a live backtest, but it only runs at `addLine`/`updateLine`/`deleteLine`/`confirm()` time — an already-`CONFIRMED` invoice's stored total is never touched again on its own, so these 17 are permanently stuck at their bad value unless corrected directly.
+
+Each `UPDATE` recomputes `subtotal_cents` fresh from that invoice's current (non-excluded) lines and sets `total_cents = subtotal + tax`, guarded by a `WHERE total_cents = <value I last saw>` (or `IS NULL`) so it becomes a no-op instead of clobbering anything if the row has changed since I checked. Verify row counts before `COMMIT`; `ROLLBACK` if any `UPDATE` affects 0 rows unexpectedly.
+
+**One invoice flagged, not included below — needs a human look, not a mechanical backfill:** `cmqjg1nd6005xji3ulby3cesi` (workspace `cmqjb35990006ji3uq465vfj6`, "vendor1", `INV-1001`) has `subtotalCents: 60100` stored but its lines currently sum to **$0** (likely all excluded, or lines were removed after confirm) — applying the same mechanical formula here would silently drop a $601 invoice to $1.03 (tax only). That's clearly not right; look at what actually happened to this invoice's lines before deciding what its total should be.
+
+```sql
+BEGIN;
+
+-- Sysco Central Texas, Inc. — invoice 913814357
+UPDATE invoices SET subtotal_cents = 128529, total_cents = 128529, updated_at = now()
+  WHERE id = 'cmqh3lhkp0036r62key5y7d4s' AND workspace_id = 'cmq6pubr00001ek69556e1g5v' AND total_cents = 0;
+
+-- SYSCO — invoice 84106-3287
+UPDATE invoices SET subtotal_cents = 32140, total_cents = 32140, updated_at = now()
+  WHERE id = 'cmqnh47c100gsji3u0pltwe5n' AND workspace_id = 'cmqh3fvth000lr62k0otop4b4' AND total_cents IS NULL;
+
+-- vendor "?" — invoice INV-1001 (workspace cmqjb3...; note: different invoice from the flagged one above, same INV-1001 number, different workspace)
+UPDATE invoices SET subtotal_cents = 3, total_cents = 3, updated_at = now()
+  WHERE id = 'cmqotwaa600q6ji3u9e9c333o' AND workspace_id = 'cmqjb35990006ji3uq465vfj6' AND total_cents IS NULL;
+
+-- vendor "?" — invoice RS-2001
+UPDATE invoices SET subtotal_cents = 543000, total_cents = 543000, updated_at = now()
+  WHERE id = 'cmqt20rz8011yji3udpxw6un3' AND workspace_id = 'cmqjb35990006ji3uq465vfj6' AND total_cents IS NULL;
+
+-- vendor "?" — invoice INV-001
+UPDATE invoices SET subtotal_cents = 3500, total_cents = 3500, updated_at = now()
+  WHERE id = 'cmqx1kh7l0053qpmtktb66mca' AND workspace_id = 'cmqh3fvth000lr62k0otop4b4' AND total_cents IS NULL;
+
+-- Fresh Farms Suppliers — invoice Inv-2026-001
+UPDATE invoices SET subtotal_cents = 12900, total_cents = 12900, updated_at = now()
+  WHERE id = 'cmqxbgckv001pe2ynjndpxns4' AND workspace_id = 'cmqxaaac70015e2ynof0x3pf4' AND total_cents IS NULL;
+
+-- vendor "?" — invoice INV-2026-002
+UPDATE invoices SET subtotal_cents = 26400, total_cents = 26400, updated_at = now()
+  WHERE id = 'cmqxfg7z30050e2yn22p3xu1h' AND workspace_id = 'cmqxaaac70015e2ynof0x3pf4' AND total_cents IS NULL;
+
+-- vendor "?" — no invoice number
+UPDATE invoices SET subtotal_cents = 10000, total_cents = 10000, updated_at = now()
+  WHERE id = 'cmr1rzzc9000a5pjpztstbisz' AND workspace_id = 'cmr1rzdd900015pjpo5qy8imq' AND total_cents IS NULL;
+
+-- vendor "?" — invoice 755292997
+UPDATE invoices SET subtotal_cents = 19291, total_cents = 19291, updated_at = now()
+  WHERE id = 'cmrc53f8100gmfem4t1e27mcb' AND workspace_id = 'cmrc4mrvc002hfem4teu1gn04' AND total_cents = 0;
+
+-- vendor "?" — invoice 755330115 (x4 duplicates below, different workspaces — looks like the same
+-- source invoice was imported/tested into several different test workspaces)
+UPDATE invoices SET subtotal_cents = 158816, total_cents = 158816, updated_at = now()
+  WHERE id = 'cmroqkavk009v104y9hkpnx3e' AND workspace_id = 'cmroq785y006c104y32wn8pu4' AND total_cents = 0;
+UPDATE invoices SET subtotal_cents = 158816, total_cents = 158816, updated_at = now()
+  WHERE id = 'cmroqnhva00bq104y4r7bjhhc' AND workspace_id = 'cmroqmw9v00bh104y45i9scwg' AND total_cents = 0;
+UPDATE invoices SET subtotal_cents = 158771, total_cents = 158771, updated_at = now()
+  WHERE id = 'cmrqeedlk0001yf7wgy9t5lqx' AND workspace_id = 'cmrou917400fk104yny71u1hg' AND total_cents = 0;
+UPDATE invoices SET subtotal_cents = 158816, total_cents = 158816, updated_at = now()
+  WHERE id = 'cmrt5lxw200lm9uv8ov74hbvs' AND workspace_id = 'cmrt5jccr00l79uv86uqao2vv' AND total_cents = 0;
+
+-- Sysco — invoice 935708 (cafe-71)
+UPDATE invoices SET subtotal_cents = 158816, total_cents = 158816, updated_at = now()
+  WHERE id = 'cmrs1n5a5008q9uv89alhvoc5' AND workspace_id = 'cmq8woxqi0007q0u7zxgfab5q' AND total_cents = 0;
+
+-- Charlie's Produce — invoice 120624947 (cafe-71)
+UPDATE invoices SET subtotal_cents = 36333, total_cents = 36333, updated_at = now()
+  WHERE id = 'cmrs1riso00ft9uv8lxmp8cel' AND workspace_id = 'cmq8woxqi0007q0u7zxgfab5q' AND total_cents = 0;
+
+-- Charlie's Produce — invoice TEST-TOFU-002 (cafe-71) -- THIS is the client's literal reported $150 tofu invoice
+UPDATE invoices SET subtotal_cents = 15000, total_cents = 15000, updated_at = now()
+  WHERE id = 'cmrs2132c00iq9uv8iec5bktp' AND workspace_id = 'cmq8woxqi0007q0u7zxgfab5q' AND total_cents IS NULL;
+
+COMMIT;
+```
+
+Let me know if you want these run as-is, want the flagged `INV-1001`/`vendor1` invoice looked at first, or want to just have the client re-open and re-save each one from the UI instead (also works — editing/re-confirming isn't possible once `CONFIRMED` though, so UI-side that specific invoice's Total field would need a manual edit via the invoice detail page's PATCH, landing at the same corrected numbers).
+
+---

@@ -790,3 +790,43 @@ Storage and DB sorting/filtering (`upcoming events`, etc.) unchanged — display
 **Verification:** `pnpm typecheck` (all 9 packages) clean. `pnpm --filter @ibirdos/api test -- --run` — 103/106, same 3 pre-existing failures (unrelated). **Needs live verification** (not yet pushed/deployed): create an event at a specific time, confirm it shows that same time on event detail, event list, and kitchen prep/service views; then change the workspace's timezone in Settings → Workspace and reload — every view should update together.
 
 ---
+
+## P0-3 re-verification — ALREADY FIXED in deployed code; real root cause of remaining bad data was a ~2.4-day deploy gap, not a code bug
+
+**Asked to investigate P0-3 fresh with real data before touching anything. Did that first — no code change was needed.**
+
+### Is the fix from `531d75b`/`94dec54` still in the code? Yes, confirmed by reading the current file.
+
+`sumInvoiceLineCents`, `reconcileInvoiceTotal`, and `recalcInvoiceTotals` are all present and wired into `addLine`/`updateLine`/`deleteLine`/`confirm`/`importCsv`/the AI-extraction worker exactly as the prior FIX_LOG P0-3 entry describes. No regression, nothing missing.
+
+### Real-data check #1 — are there invoices in prod with lines but $0.00/blank total?
+
+Yes: **39** across all workspaces, including the exact client-reported invoices — Charlie's Produce `TEST-TOFU-002` (1 line, "Tofu, Extra Firm Org/C", $150.00, `totalCents: null`) and several `Sysco`/`SYSCO` invoices with `totalCents: 0` despite real line sums ($1,588.16, $1,047.71, etc.).
+
+### Real-data check #2 — is this the fix failing, or stale data from before the fix went live?
+
+Cross-referenced every one of the 39 invoices' `confirmedAt`/`updatedAt` against the actual Railway deployment history (`railway deployment list`). Found a critical gap: the deployment immediately before the fix commits (`09b9bb5c`, 2026-07-18T22:31:51Z) predates them; the *next* deployment after that (`f671ccd1`, 2026-07-21T05:57:02Z) is the earliest point the fix could possibly have been live — **a ~2.4-day gap with zero deploys**, consistent with this session's own earlier `DEPLOY-1` finding that Railway's GitHub webhook has been dead this whole time and deploys only happen via manual `railway up`.
+
+**Result: all 39 broken invoices were last touched BEFORE 2026-07-21T05:57:02Z. Zero invoices of any kind — broken or not — have been created/confirmed/updated since.** The fix was committed to git on 2026-07-19 (~20:15–22:23 UTC) but the production API kept running the old, pre-fix code for almost two more days because nothing redeployed it. Every one of the 39 bad invoices, including the client's literal reported examples, was processed by that stale code. This is a deploy-lag artifact, not a defect in the fix itself.
+
+### Real-data check #3 — since no real invoice has been confirmed against the live fix yet, proved it works via a live backtest (same method as P0-2)
+
+No staging environment exists, so imported the actual `InvoicesService` class via `tsx` and ran its real `createManual`/`addLine`/`confirm` methods against production Postgres/Redis, scoped to the isolated `roshantest` workspace (client data untouched; all created rows deleted afterward, confirmed clean). The service's constructor eagerly creates two BullMQ queues that hang when constructed outside a real worker process against the public Redis proxy — worked around by building the instance via `Object.create(InvoicesService.prototype)` with stub queues instead of calling the real constructor, since neither queue is touched by the code paths under test.
+
+Three scenarios, all **PASS**:
+- **The literal reported bug** — manual invoice, one $150.00 line, total never touched by hand: subtotal auto-recalculated to $150.00 the moment the line was added; `confirm()` auto-filled the total to $150.00 and succeeded — no manual Recalc click, exactly the required behavior.
+- **Total entered but wrong** — total manually set to $999.99 against $150.00 of lines: `confirm()` threw and blocked with `"Invoice total ($999.99) doesn't match the sum of lines + tax ($150.00). Fix the line items or update the total before confirming."` Invoice correctly stayed `PENDING_REVIEW`, not confirmed.
+- **Incremental multi-line recalculation** — subtotal correctly updated after each of two sequential `addLine()` calls ($10.00 → $35.00), not just once at confirm time.
+
+**One behavior worth noting, not a bug:** once a total is auto-filled after an early line (e.g. after just 1 of 2 lines), it becomes the reconciliation anchor — adding a further line does NOT silently re-fill it again; if the total no longer matches, `confirm()` blocks until a human looks at it. This is the correct, intended trade-off already described in the original P0-3 entry ("a deliberately-entered/extracted total isn't silently overwritten mid-review") and it's exactly the "block on non-reconciling total" behavior the client asked for — flagging only so it doesn't read as a gap.
+
+### Status of the two things the original fix explicitly left open — still open, unchanged
+
+- **Should `DISCOUNT`-category lines subtract from the total?** Still an open product decision in `NEEDS_ROSHAN.md` ("P0-3 — Should DISCOUNT-category invoice lines subtract from the total?"). Nothing since has resolved it; not guessed at here either.
+- **The 39 stale bad invoices already in the database** — 22 are still `PENDING_REVIEW`/unconfirmed and will self-correct (or correctly block with a clear message) the next time someone opens and confirms them, no backfill needed. The other **17 are already `CONFIRMED`** — locked financial records the fixed code will never touch again on its own. Backfilling these means rewriting historical financial data, which I'm not doing unattended. Exact backfill SQL (one `UPDATE` per invoice, guarded by the row's current stored total so it's a no-op if anything's changed since I checked) is in `NEEDS_ROSHAN.md`, not run.
+
+**Files changed:** none — investigation and live backtest only, no code change needed.
+**Commit:** none (docs-only; see next commit).
+**Verification:** Live-backtested against real production data in an isolated test workspace (`roshantest`) as described above — all 3 scenarios PASS, matching every required behavior in the bug report. **Live test for you to do once you're back**: open one of the 22 still-`PENDING_REVIEW` stale invoices (e.g. `cmrq7e9ze00ft104ywzy6xz4z`) and confirm it — should now either succeed with a corrected total or block with a clear reconciliation message, never silently save at $0 again.
+
+---
