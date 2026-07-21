@@ -3,6 +3,7 @@ type Decimal = Prisma.Decimal;
 const Decimal = Prisma.Decimal;
 import { prisma, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
+import { toCanonical } from "@ibirdos/types";
 
 const log = moduleLogger("VendorPriceChangeRule");
 
@@ -16,6 +17,33 @@ export interface VendorPriceChangeParams {
   ingredientName: string;
   previousMicrocents: bigint | null | undefined;
   newMicrocents: bigint;
+  // P1-D: needed to show the alert in the ingredient's actual display unit
+  // (e.g. "$4.37/lb -> $5.00/lb") instead of a raw per-canonical-unit
+  // value (e.g. per-gram) nobody actually thinks in.
+  dimension: "MASS" | "VOLUME" | "COUNT";
+  preferredDisplayUnit?: string | null;
+  canonicalUnit: string;
+  invoiceNumber?: string | null;
+}
+
+/** Cents-per-canonical-unit -> cents-per-display-unit. Falls back to the
+ * canonical unit itself if no preferred display unit is set or the
+ * conversion fails (e.g. an unrecognized unit string). */
+function toDisplayUnitCents(
+  microcentsPerCanonical: number,
+  dimension: "MASS" | "VOLUME" | "COUNT",
+  canonicalUnit: string,
+  preferredDisplayUnit: string | null | undefined,
+): { cents: number; unit: string } {
+  const centsPerCanonical = microcentsPerCanonical / 1000; // 1 cent = 1000 microcents
+  const displayUnit = preferredDisplayUnit || canonicalUnit;
+  if (displayUnit === canonicalUnit) return { cents: centsPerCanonical, unit: canonicalUnit };
+  try {
+    const canonicalPerDisplay = toCanonical(1, displayUnit, { dimension });
+    return { cents: centsPerCanonical * canonicalPerDisplay, unit: displayUnit };
+  } catch {
+    return { cents: centsPerCanonical, unit: canonicalUnit };
+  }
 }
 
 /**
@@ -55,8 +83,25 @@ export async function detectVendorPriceChange(
   if (existing) return false;
 
   const severity = pctChange >= 30 ? "CRITICAL" : "WARNING";
-  const oldDisplay = (oldVal / 1_000_000).toFixed(4);
-  const newDisplay = (newVal / 1_000_000).toFixed(4);
+
+  // P1-D fix: this previously divided by 1_000_000 to go from microcents to
+  // dollars -- this codebase's actual convention is 1 cent = 1000
+  // microcents (see ingredients.service.ts updatePrice()), so the alert
+  // showed a price 10x smaller than real. Also previously always showed
+  // the raw per-canonical-unit price (e.g. per-gram) rather than the
+  // ingredient's preferred display unit (e.g. per-lb), and never mentioned
+  // which vendor/invoice triggered it.
+  const oldDisplayUnit = toDisplayUnitCents(oldVal, params.dimension, params.canonicalUnit, params.preferredDisplayUnit);
+  const newDisplayUnit = toDisplayUnitCents(newVal, params.dimension, params.canonicalUnit, params.preferredDisplayUnit);
+  const oldDisplay = (oldDisplayUnit.cents / 100).toFixed(2);
+  const newDisplay = (newDisplayUnit.cents / 100).toFixed(2);
+
+  const vendor = params.vendorId
+    ? await prisma.vendor.findUnique({ where: { id: params.vendorId }, select: { name: true } }).catch(() => null)
+    : null;
+  const sourceRef = [vendor?.name, params.invoiceNumber ? `invoice #${params.invoiceNumber}` : null]
+    .filter(Boolean)
+    .join(", ");
 
   await prisma.insight.create({
     data: {
@@ -64,7 +109,7 @@ export async function detectVendorPriceChange(
       kind: "VENDOR_PRICE_CHANGE",
       severity,
       title: `${params.ingredientName} price jumped ${pctChange.toFixed(1)}%`,
-      body: `${params.ingredientName} increased from $${oldDisplay} to $${newDisplay} per canonical unit (${pctChange.toFixed(1)}% increase).`,
+      body: `${params.ingredientName} increased from $${oldDisplay}/${newDisplayUnit.unit} to $${newDisplay}/${newDisplayUnit.unit} (${pctChange.toFixed(1)}% increase)${sourceRef ? ` — ${sourceRef}` : ""}.`,
       recommendation: "Review this vendor's pricing or consider sourcing from an alternative supplier.",
       confidence: new Decimal("0.95"),
       metadataJson: {

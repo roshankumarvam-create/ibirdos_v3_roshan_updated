@@ -450,7 +450,11 @@ export class InvoicesService {
       // Without this, we'd store cents-per-case instead of cents-per-gram.
       const ingMeta = await prisma.ingredient.findUnique({
         where: { id: ingredientId },
-        select: { dimension: true, densityGPerMl: true, currentCostMicrocents: true, name: true, vendorItemCode: true, reorderThresholdCanonical: true },
+        select: {
+          dimension: true, densityGPerMl: true, currentCostMicrocents: true, name: true,
+          vendorItemCode: true, reorderThresholdCanonical: true,
+          canonicalUnit: true, preferredDisplayUnit: true,
+        },
       }).catch(() => null);
 
       // Opportunistic backfill: ingredients matched via alias/fuzzy (not just-created) may
@@ -532,6 +536,10 @@ export class InvoicesService {
         ingredientName: ingMeta?.name ?? ingredientId,
         previousMicrocents,
         newMicrocents,
+        dimension: (ingMeta?.dimension ?? "MASS") as any,
+        canonicalUnit: ingMeta?.canonicalUnit ?? "g",
+        preferredDisplayUnit: ingMeta?.preferredDisplayUnit ?? null,
+        invoiceNumber: invoice.invoiceNumber ?? null,
       }).catch((err: any) => log.warn({ ingredientId, err: err.message }, "vendor-price-change detection failed"));
 
       try {
