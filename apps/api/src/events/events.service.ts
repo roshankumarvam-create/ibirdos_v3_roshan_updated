@@ -390,9 +390,11 @@ export class EventsService {
    * must never see quoted price, computed food/labor cost, or margin —
    * including the same figures nested in menuItems[] (both the per-line
    * billed price and the embedded recipe's cost/price), kitchenPacket
-   * (both the aggregated ingredientsJson and the per-task tasksJson), and
+   * (both the aggregated ingredientsJson and the per-task tasksJson),
    * inventoryShortages (shortage quantity/gap stays visible for kitchen
-   * prep; vendor and $ cost of the shortage do not).
+   * prep; vendor and $ cost of the shortage do not), and staff[] (who's
+   * assigned and how many hours stays visible for coordination; their
+   * hourly pay rate does not).
    */
   private redactEventFinancials(e: any): any {
     const {
@@ -436,6 +438,14 @@ export class EventsService {
         if (!s || typeof s !== "object") return s;
         const { vendorId, lastUnitPriceCents, estCostCents, ...restShortage } = s;
         return restShortage;
+      });
+    }
+
+    if (Array.isArray(result.staff)) {
+      result.staff = result.staff.map((s: any) => {
+        if (!s || typeof s !== "object") return s;
+        const { hourlyRateCents, ...restStaff } = s;
+        return restStaff;
       });
     }
 
