@@ -769,7 +769,7 @@ export class EventsService {
     const needsRevenueFreeze =
       !event.frozenAt && event.quotedTotalOverrideCents == null && event.quotedPriceCents == null;
     const liveQuoteTotalCents = needsRevenueFreeze
-      ? computeLiveQuoteTotalCents(event.menuItems as any, event.markupPct)
+      ? computeLiveQuoteTotalCents(event.menuItems as any, event.markupPct, event.laborTotalCents)
       : 0;
 
     // --- Persist: set paymentStatus=PAID, freeze, store shortages ---
@@ -1292,10 +1292,15 @@ ${event.notes ? `<p style="font-size:13px;color:#666;margin-top:24px"><strong>No
 }
 
 /**
- * Live computed quote total (menu subtotal + markup%) -- matches MenuSection's
- * "Total quote" display exactly. Does NOT include labor: labor is a separate
- * cost line subtracted in the profit calc, not part of revenue. Extracted for
- * reuse (markAsPaid revenue freeze, public quote page) and unit testing.
+ * Live computed quote total (menu subtotal + markup% + labor) -- matches
+ * MenuSection's "Total quote" display and sendQuote()'s customer-facing
+ * email exactly. BUG 3 fix: this function previously excluded labor ("a
+ * separate cost line subtracted in the profit calc, not part of
+ * revenue"), which directly contradicted the create-event page and the
+ * actual email a customer receives -- both of which already billed labor
+ * as part of the total. Decision made by Roshan: labor IS billed to the
+ * customer, so it's part of the quote total AND part of revenue. Extracted
+ * for reuse (markAsPaid revenue freeze, public quote page) and unit testing.
  */
 export function computeLiveQuoteTotalCents(
   menuItems: Array<{
@@ -1305,13 +1310,14 @@ export function computeLiveQuoteTotalCents(
     recipe: { salePriceCents: number | null };
   }>,
   markupPct: number | Decimal | null | undefined,
+  laborTotalCents: number | null | undefined = 0,
 ): number {
   const subtotalCents = menuItems.reduce((sum, mi) => {
     const unitPrice = mi.unitPriceCentsOverride ?? mi.unitPriceCentsAtAdd ?? mi.recipe.salePriceCents ?? 0;
     return sum + unitPrice * mi.portions;
   }, 0);
   const markupAmount = Math.round(subtotalCents * (Number(markupPct ?? 0) / 100));
-  return subtotalCents + markupAmount;
+  return subtotalCents + markupAmount + (laborTotalCents ?? 0);
 }
 
 /** Pure margin computation — extracted for unit testing. */

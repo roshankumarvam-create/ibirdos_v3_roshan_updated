@@ -164,8 +164,12 @@ export default async function EventDetailPage({
   const effectiveQuoteCents = event.quotedTotalOverrideCents ?? event.quotedPriceCents;
   const revenueCents = effectiveQuoteCents ?? null;
 
-  // Live computed quote total (menu subtotal + markup%) -- same formula as
-  // MenuSection's "Total quote" display and the backend's computeLiveQuoteTotalCents().
+  // Live computed quote total (menu subtotal + markup% + labor) -- same
+  // formula as MenuSection's "Total quote" display and the backend's
+  // computeLiveQuoteTotalCents(). BUG 3 fix: this previously excluded
+  // labor, which was the exact reported inconsistency ($4,414 at creation
+  // vs. $3,789 saved) -- labor IS billed to the customer (Roshan's
+  // decision), so it belongs in the total everywhere it's computed.
   // Profit/Margin use this as a further fallback beyond revenueCents: they should
   // populate as soon as ANY quote total exists, even one that's only been computed
   // live and never explicitly saved -- unlike Revenue, which stays persisted-only.
@@ -173,7 +177,7 @@ export default async function EventDetailPage({
     const unitPrice = mi.unitPriceCentsOverride ?? mi.unitPriceCentsAtAdd ?? mi.recipe.salePriceCents ?? 0;
     return sum + unitPrice * mi.portions;
   }, 0);
-  const liveQuoteTotalCents = quoteSubtotalCents + Math.round(quoteSubtotalCents * (Number(event.markupPct ?? 0) / 100));
+  const liveQuoteTotalCents = quoteSubtotalCents + Math.round(quoteSubtotalCents * (Number(event.markupPct ?? 0) / 100)) + totalLaborCents;
 
   const profitBaseCents = revenueCents ?? (liveQuoteTotalCents > 0 ? liveQuoteTotalCents : null);
   const profitCents = profitBaseCents != null ? profitBaseCents - foodCostCents - totalLaborCents : null;
@@ -306,6 +310,7 @@ export default async function EventDetailPage({
             portionMultiplier={Number(event.portionMultiplier)}
             markupPct={Number(event.markupPct ?? 0)}
             quotedTotalOverrideCents={event.quotedTotalOverrideCents ?? null}
+            laborTotalCents={totalLaborCents}
             isPaid={isPaid}
             canSeeFinancials={canSeeFinancials}
           />

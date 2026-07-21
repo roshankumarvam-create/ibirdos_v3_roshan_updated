@@ -26,7 +26,7 @@ vi.mock("../common/constants/tokens", () => ({ REDIS_CLIENT: "REDIS_CLIENT" }));
 vi.mock("../recipes/recipes.service", () => ({ RecipesService: class {} }));
 vi.mock("../notifications/notifications.service", () => ({ NotificationsService: class {} }));
 
-import { EventsService, computeMarginPct } from "./events.service";
+import { EventsService, computeMarginPct, computeLiveQuoteTotalCents } from "./events.service";
 import { NotFoundException } from "@nestjs/common";
 
 const ctx = { workspaceId: "ws1", userId: "u1", role: "OWNER" as const };
@@ -148,5 +148,38 @@ describe("computeMarginPct — Fix #5: margin formula includes labor cost", () =
     const result = computeMarginPct(100_000, 40_000, 0);
     expect(result).not.toBeNull();
     expect(Number((result as any).v)).toBeCloseTo(60.0, 1);
+  });
+});
+
+describe("computeLiveQuoteTotalCents — BUG 3: labor IS billed, must be included in the quote total", () => {
+  const simpleMenu = [
+    { portions: 1, unitPriceCentsOverride: null, unitPriceCentsAtAdd: 378_900, recipe: { salePriceCents: null } },
+  ];
+
+  it("reproduces the exact reported bug shape: $3,789 menu + $625 labor = $4,414, not $3,789", () => {
+    // markupPct: 0 to isolate the reported numbers exactly
+    const total = computeLiveQuoteTotalCents(simpleMenu, 0, 62_500);
+    expect(total).toBe(378_900 + 62_500); // $4,414.00
+    expect(total).not.toBe(378_900); // the old, buggy, labor-excluded total
+  });
+
+  it("still applies markup on top of the menu subtotal only, then adds labor", () => {
+    // $100 subtotal, 20% markup = $20, + $50 labor = $170
+    const total = computeLiveQuoteTotalCents(
+      [{ portions: 1, unitPriceCentsOverride: null, unitPriceCentsAtAdd: 10_000, recipe: { salePriceCents: null } }],
+      20,
+      5_000,
+    );
+    expect(total).toBe(10_000 + 2_000 + 5_000);
+  });
+
+  it("defaults labor to 0 when omitted (backward compatible with any other caller)", () => {
+    const total = computeLiveQuoteTotalCents(simpleMenu, 0);
+    expect(total).toBe(378_900);
+  });
+
+  it("treats null/undefined labor as 0", () => {
+    expect(computeLiveQuoteTotalCents(simpleMenu, 0, null)).toBe(378_900);
+    expect(computeLiveQuoteTotalCents(simpleMenu, 0, undefined)).toBe(378_900);
   });
 });

@@ -42,6 +42,7 @@ interface Props {
   portionMultiplier: number;
   markupPct: number;
   quotedTotalOverrideCents: number | null;
+  laborTotalCents: number;
   isPaid: boolean;
   canSeeFinancials: boolean;
 }
@@ -51,6 +52,7 @@ export function MenuSection({
   guestCount, portionMultiplier,
   markupPct: initialMarkupPct,
   quotedTotalOverrideCents: initialQuoteTotalOverride,
+  laborTotalCents,
   isPaid,
   canSeeFinancials,
 }: Props) {
@@ -70,7 +72,12 @@ export function MenuSection({
     return sum + unitPrice * mi.portions;
   }, 0);
   const markupAmount = Math.round(subtotalCents * markupPct / 100);
-  const computedTotal = subtotalCents + markupAmount;
+  // BUG 3 fix: labor IS billed to the customer (decision made) -- this
+  // total previously excluded it entirely (no labor prop existed here at
+  // all), which was the exact reported inconsistency: create-event page
+  // and the actual sendQuote() customer email both included labor, but
+  // this saved "Total quote" display didn't.
+  const computedTotal = subtotalCents + markupAmount + laborTotalCents;
   const displayTotal = quoteTotalOverride ?? computedTotal;
 
   const refresh = async () => {
@@ -162,6 +169,12 @@ export function MenuSection({
             <span className="text-text-secondary">Markup amount</span>
             <span className="font-mono tabular-nums">{formatCents(markupAmount)}</span>
           </div>
+          {laborTotalCents > 0 && (
+            <div className="flex justify-between text-sm">
+              <span className="text-text-secondary">Labor</span>
+              <span className="font-mono tabular-nums">{formatCents(laborTotalCents)}</span>
+            </div>
+          )}
           <div className="border-t border-bg-border pt-2 flex items-center justify-between text-sm font-semibold">
             <span>Total quote</span>
             {isPaid ? (
