@@ -743,9 +743,15 @@ export class EventsService {
       const gap = entry.neededCanonical - entry.currentStockCanonical;
       if (gap <= 0) continue;
       const lastLine = priceByIng.get(entry.ingredientId);
-      // Compute est cost in canonical units: gap(g) × microcents/g / 1_000_000 = cents
+      // P1-A fix: this codebase's convention is 1 cent = 1000 microcents
+      // (see ingredients.service.ts updatePrice(), insights-generator.worker.ts),
+      // not 1,000,000 -- dividing by 1,000,000 made every shortage cost
+      // ~1000x too small (9 cases x $43.78 showed as $0.39 instead of
+      // $394.02) and destroyed sub-cent precision before rounding, since
+      // the true value was scaled down by an extra factor of 1000 before
+      // Math.round() ever saw it.
       const estCostCents = entry.currentCostMicrocents > 0
-        ? Math.round((gap * entry.currentCostMicrocents) / 1_000_000)
+        ? Math.round((gap * entry.currentCostMicrocents) / 1_000)
         : null;
       shortages.push({
         ingredientId: entry.ingredientId,
