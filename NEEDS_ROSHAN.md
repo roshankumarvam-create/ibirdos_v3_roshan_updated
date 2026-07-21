@@ -404,3 +404,23 @@ This needs building, not fixing — real scope, roughly in order of what touches
 This is a real, multi-file, security-relevant feature (public unauthenticated data exposure, even if scoped/redacted) — not something I'll build without your go-ahead on scope and the token/expiry model. Let me know if you want this built, and if so, answers to the expiry/reuse questions in point 5 so I don't guess at the security model.
 
 ---
+
+## P1-B — Ingredient categories default to OTHER: detection exists, but was never wired to a real category, and mapping it needs a decision
+
+**Not a simple bug — investigated fully, here's the exact shape of it.**
+
+The **only** place that assigns `category` at ingredient creation is `InvoicesService.confirm()`'s auto-create-unmatched-ingredient path (`apps/api/src/invoices/invoices.service.ts:396`), which hardcodes `category: "OTHER"` unconditionally. The manual "New ingredient" page already lets a human pick a real category — this only affects ingredients auto-created from an invoice line the system couldn't match to an existing ingredient.
+
+**The AI extraction already detects a category — it's just never used.** `packages/ai/src/invoice-extraction.ts`'s prompts explicitly ask the model to capture the food-section header above each line item (its own words: *"category — the section header above this item, propagated until the next header (e.g. 'Grocery/Storeroom', 'Dairy/Milk', 'Meat/Poultry', 'Cleaning Supplies', 'MEATS', 'PRODUCE', 'FROZEN', 'MISC CHARGES')"*), and the response schema has a `category: z.string().nullish()` field for exactly this. But it's currently used **only** internally by the extraction worker to reconcile extracted line sums against the invoice's own printed GROUP TOTAL rows (a QA check) — it is **never persisted**. `InvoiceLine` has no column to store it, and it's discarded before `confirm()` ever runs.
+
+**Why this needs a decision, not a guess:** wiring this up means building a genuinely new mapping layer, not just "use the field that's already there" — because the AI's extracted text is raw vendor-invoice wording (`"MEATS"`, `"Meat/Poultry"`, `"POULTRY"`, `"Dairy/Milk"`, `"CANNED & DRY"`, `"Grocery/Storeroom"`, `"MISC CHARGES"`, `"Cleaning Supplies"`, etc. — different vendors, different wording, not standardized) and the app's `IngredientCategory` enum is a fixed 11 values (`PRODUCE, PROTEIN, DAIRY, DRY_GOODS, SPICES, OIL_VINEGAR, BEVERAGE, FROZEN, BAKERY, PACKAGING, CLEANING, OTHER`). Someone has to decide the mapping rules, including the genuinely ambiguous ones (does `"MISC CHARGES"` map to `OTHER`, or should misc-charge lines even become ingredients at all? Does `"Grocery/Storeroom"` mean `DRY_GOODS`? Does an unrecognized/unmapped header default to `OTHER` — same as today — or get flagged `needsReview` instead of silently guessing?).
+
+**What building this would take, if you want it:**
+1. Additive schema: a column to actually persist the AI's raw category text on `InvoiceLine` (e.g. `rawCategoryHint String?`) — would go in `PENDING_MIGRATIONS.sql`, not run, per your migration rule.
+2. Thread that value through from the extraction worker (currently computed, currently thrown away) into the persisted `InvoiceLine` row.
+3. A keyword/mapping table (raw vendor text → `IngredientCategory` enum) used at `confirm()`'s auto-create-ingredient step instead of the hardcoded `"OTHER"`.
+4. A decision on the fallback: keep defaulting genuinely-unmatched headers to `OTHER` (safe, matches today's behavior for the unmappable cases), or something else (e.g. surface a "needs category" review flag instead of silently picking one).
+
+I can build a first-pass mapping table from the vendor header examples already visible in the AI prompts as a starting point, but I don't want to invent the full rule set and ship it unattended — a wrong category assignment is a data-quality issue that's mildly annoying to fix per-ingredient later, but I'd rather you weigh in on the ambiguous cases (especially `MISC CHARGES`) before I build it. Let me know if you want this built and how you want the unmapped/ambiguous cases handled.
+
+---
