@@ -10,8 +10,11 @@ interface Recipe {
   id: string;
   name: string;
   portionsYielded: number | null;
-  cachedCostMicrocents: string | null;
-  salePriceCents: number | null;
+  // Omitted from the API response entirely (not sent as null) for roles
+  // without financial visibility -- see redactEventFinancials() in
+  // events.service.ts.
+  cachedCostMicrocents?: string | null;
+  salePriceCents?: number | null;
 }
 
 interface MenuItem {
@@ -19,9 +22,10 @@ interface MenuItem {
   recipeId: string;
   portions: number;
   displayOrder: number;
-  unitPriceCentsAtAdd: number | null;
-  unitPriceCentsOverride: number | null;
   recipe: Recipe;
+  // Same as above -- omitted, not nulled, for Chef/Staff.
+  unitPriceCentsAtAdd?: number | null;
+  unitPriceCentsOverride?: number | null;
 }
 
 interface AvailableRecipe {
@@ -39,6 +43,7 @@ interface Props {
   markupPct: number;
   quotedTotalOverrideCents: number | null;
   isPaid: boolean;
+  canSeeFinancials: boolean;
 }
 
 export function MenuSection({
@@ -47,6 +52,7 @@ export function MenuSection({
   markupPct: initialMarkupPct,
   quotedTotalOverrideCents: initialQuoteTotalOverride,
   isPaid,
+  canSeeFinancials,
 }: Props) {
   const [items, setItems] = useState<MenuItem[]>(initialItems);
   const [markupPct, setMarkupPct] = useState(initialMarkupPct);
@@ -134,51 +140,55 @@ export function MenuSection({
         </div>
       )}
 
-      {/* Quote Summary */}
-      <div className="mx-5 mb-4 rounded-md border border-bg-border bg-bg-inset p-4 space-y-2">
-        <div className="text-[10px] uppercase tracking-wider text-text-tertiary font-medium">Quote Summary</div>
-        <div className="flex justify-between text-sm">
-          <span className="text-text-secondary">Subtotal (menu lines)</span>
-          <span className="font-mono tabular-nums">{formatCents(subtotalCents)}</span>
-        </div>
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-text-secondary">Markup %</span>
-          {isPaid ? (
-            <span className="font-mono tabular-nums">{markupPct}%</span>
-          ) : (
-            <MarkupInput value={markupPct} onSave={handleMarkupSave} />
-          )}
-        </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-text-secondary">Markup amount</span>
-          <span className="font-mono tabular-nums">{formatCents(markupAmount)}</span>
-        </div>
-        <div className="border-t border-bg-border pt-2 flex items-center justify-between text-sm font-semibold">
-          <span>Total quote</span>
-          {isPaid ? (
-            <span className="font-mono tabular-nums text-accent-400">{formatCents(displayTotal)}</span>
-          ) : (
-            <TotalOverrideInput
-              computedTotal={computedTotal}
-              override={quoteTotalOverride}
-              onSave={handleTotalOverrideSave}
-            />
-          )}
-        </div>
-        {quoteTotalOverride !== null && (
-          <div className="text-[10px] text-text-tertiary flex items-center gap-2">
-            <span>Manual override active · computed was {formatCents(computedTotal)}</span>
-            {!isPaid && (
-              <button
-                onClick={() => handleTotalOverrideSave(null)}
-                className="underline hover:no-underline text-accent-400"
-              >
-                Reset
-              </button>
+      {/* Quote Summary -- omitted entirely (not dashed out) for roles
+          without financial visibility; every figure in this box is
+          revenue/pricing, none of it operational. */}
+      {canSeeFinancials && (
+        <div className="mx-5 mb-4 rounded-md border border-bg-border bg-bg-inset p-4 space-y-2">
+          <div className="text-[10px] uppercase tracking-wider text-text-tertiary font-medium">Quote Summary</div>
+          <div className="flex justify-between text-sm">
+            <span className="text-text-secondary">Subtotal (menu lines)</span>
+            <span className="font-mono tabular-nums">{formatCents(subtotalCents)}</span>
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-text-secondary">Markup %</span>
+            {isPaid ? (
+              <span className="font-mono tabular-nums">{markupPct}%</span>
+            ) : (
+              <MarkupInput value={markupPct} onSave={handleMarkupSave} />
             )}
           </div>
-        )}
-      </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-text-secondary">Markup amount</span>
+            <span className="font-mono tabular-nums">{formatCents(markupAmount)}</span>
+          </div>
+          <div className="border-t border-bg-border pt-2 flex items-center justify-between text-sm font-semibold">
+            <span>Total quote</span>
+            {isPaid ? (
+              <span className="font-mono tabular-nums text-accent-400">{formatCents(displayTotal)}</span>
+            ) : (
+              <TotalOverrideInput
+                computedTotal={computedTotal}
+                override={quoteTotalOverride}
+                onSave={handleTotalOverrideSave}
+              />
+            )}
+          </div>
+          {quoteTotalOverride !== null && (
+            <div className="text-[10px] text-text-tertiary flex items-center gap-2">
+              <span>Manual override active · computed was {formatCents(computedTotal)}</span>
+              {!isPaid && (
+                <button
+                  onClick={() => handleTotalOverrideSave(null)}
+                  className="underline hover:no-underline text-accent-400"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {items.length === 0 ? (
         <CardBody>
@@ -190,8 +200,12 @@ export function MenuSection({
             <tr>
               <th className="text-left px-5 py-2 font-medium">Recipe</th>
               <th className="text-right px-5 py-2 font-medium">Portions</th>
-              <th className="text-right px-5 py-2 font-medium">Unit price</th>
-              <th className="text-right px-5 py-2 font-medium">Line total</th>
+              {canSeeFinancials && (
+                <>
+                  <th className="text-right px-5 py-2 font-medium">Unit price</th>
+                  <th className="text-right px-5 py-2 font-medium">Line total</th>
+                </>
+              )}
               {!isPaid && <th className="px-5 py-2" />}
             </tr>
           </thead>
@@ -199,7 +213,11 @@ export function MenuSection({
             {items.map((mi) => {
               const unitPrice = mi.unitPriceCentsOverride ?? mi.unitPriceCentsAtAdd ?? 0;
               const lineTotal = unitPrice * mi.portions;
-              const hasOverride = mi.unitPriceCentsOverride !== null;
+              // canSeeFinancials guard first: unitPriceCentsOverride is
+              // omitted (undefined), not nulled, for Chef/Staff -- without
+              // the guard, `undefined !== null` is true and every item
+              // would falsely show "overridden".
+              const hasOverride = canSeeFinancials && mi.unitPriceCentsOverride != null;
 
               return (
                 <tr key={mi.id}>
@@ -232,30 +250,34 @@ export function MenuSection({
                     )}
                   </td>
 
-                  <td className="px-5 py-2 text-right tabular-nums text-text-secondary">
-                    {!isPaid && editingPrice === mi.id ? (
-                      <InlinePriceInput
-                        currentCents={unitPrice}
-                        snapshotCents={mi.unitPriceCentsAtAdd}
-                        liveCents={mi.recipe.salePriceCents}
-                        onSave={(v) => handleUpdatePrice(mi.id, v)}
-                        onReset={() => handleUpdatePrice(mi.id, null)}
-                        onCancel={() => setEditingPrice(null)}
-                      />
-                    ) : (
-                      <span
-                        className={isPaid ? "" : "cursor-pointer hover:text-accent-400"}
-                        onClick={() => !isPaid && setEditingPrice(mi.id)}
-                        title={mi.unitPriceCentsAtAdd != null ? `Snapshot at add: ${formatCents(mi.unitPriceCentsAtAdd)}` : undefined}
-                      >
-                        {formatCents(unitPrice)}
-                      </span>
-                    )}
-                  </td>
+                  {canSeeFinancials && (
+                    <td className="px-5 py-2 text-right tabular-nums text-text-secondary">
+                      {!isPaid && editingPrice === mi.id ? (
+                        <InlinePriceInput
+                          currentCents={unitPrice}
+                          snapshotCents={mi.unitPriceCentsAtAdd ?? null}
+                          liveCents={mi.recipe.salePriceCents ?? null}
+                          onSave={(v) => handleUpdatePrice(mi.id, v)}
+                          onReset={() => handleUpdatePrice(mi.id, null)}
+                          onCancel={() => setEditingPrice(null)}
+                        />
+                      ) : (
+                        <span
+                          className={isPaid ? "" : "cursor-pointer hover:text-accent-400"}
+                          onClick={() => !isPaid && setEditingPrice(mi.id)}
+                          title={mi.unitPriceCentsAtAdd != null ? `Snapshot at add: ${formatCents(mi.unitPriceCentsAtAdd)}` : undefined}
+                        >
+                          {formatCents(unitPrice)}
+                        </span>
+                      )}
+                    </td>
+                  )}
 
-                  <td className="px-5 py-2 text-right tabular-nums font-medium">
-                    {formatCents(lineTotal)}
-                  </td>
+                  {canSeeFinancials && (
+                    <td className="px-5 py-2 text-right tabular-nums font-medium">
+                      {formatCents(lineTotal)}
+                    </td>
+                  )}
 
                   {!isPaid && (
                     <td className="px-5 py-2 text-right">

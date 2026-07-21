@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
+import { canViewFinancials } from "@ibirdos/permissions";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { StatusBadge } from "@/components/common/status-badge";
 import { formatCents, formatPct, formatDateTime, formatDate } from "@/lib/format";
@@ -17,17 +18,19 @@ interface MenuItem {
   recipeId: string;
   portions: number;
   displayOrder: number;
-  unitPriceCentsAtAdd: number | null;
-  unitPriceCentsOverride: number | null;
   recipe: {
     id: string;
     name: string;
     portionsYielded: number | null;
-    cachedCostMicrocents: string | null;
-    salePriceCents: number | null;
     prepTimeMin: number | null;
     cookTimeMin: number | null;
+    // Omitted from the API response entirely (not sent as null) for roles
+    // without financial visibility -- see redactEventFinancials().
+    cachedCostMicrocents?: string | null;
+    salePriceCents?: number | null;
   };
+  unitPriceCentsAtAdd?: number | null;
+  unitPriceCentsOverride?: number | null;
 }
 
 interface KitchenTask {
@@ -47,9 +50,11 @@ interface Shortage {
   shortCanonical: number;
   canonicalUnit: string;
   preferredDisplayUnit: string | null;
-  vendorId: string | null;
-  lastUnitPriceCents: number | null;
-  estCostCents: number | null;
+  // Omitted from the API response entirely (not sent as null) for roles
+  // without financial visibility -- see redactEventFinancials().
+  vendorId?: string | null;
+  lastUnitPriceCents?: number | null;
+  estCostCents?: number | null;
 }
 
 interface EventDetail {
@@ -65,19 +70,9 @@ interface EventDetail {
   prepStartsAt: string | null;
   guestCount: number;
   portionMultiplier: number;
-  quotedPriceCents: number | null;
-  computedFoodCostCents: number | null;
-  computedLaborCostCents: number | null;
-  computedMarginPct: number | null;
-  laborTotalCents: number;
   notes: string | null;
   frozenAt: string | null;
-  frozenRecipeCostsCents: Record<string, number> | null;
-  frozenIngredientPricesCents: Record<string, number> | null;
-  // New fields
   paymentStatus: string;
-  markupPct: number;
-  quotedTotalOverrideCents: number | null;
   inventoryCheckedAt: string | null;
   inventoryShortages: Shortage[] | null;
   shortageAcknowledged: boolean;
@@ -86,11 +81,25 @@ interface EventDetail {
     id: string;
     role: string;
     hours: number;
-    hourlyRateCents: number;
     user: { id: string; username: string; displayName: string | null } | null;
+    // Omitted from the API response entirely (not sent as null) for roles
+    // without financial visibility -- see redactEventFinancials().
+    hourlyRateCents?: number;
   }>;
   kitchenPacket: { id: string; generatedAt: string } | null;
   kitchenTasks: KitchenTask[];
+  // Financial fields below are all omitted from the API response entirely
+  // (not sent as null) for roles without financial visibility -- see
+  // canViewFinancials()/redactEventFinancials() in events.service.ts.
+  quotedPriceCents?: number | null;
+  computedFoodCostCents?: number | null;
+  computedLaborCostCents?: number | null;
+  computedMarginPct?: number | null;
+  laborTotalCents?: number;
+  frozenRecipeCostsCents?: Record<string, number> | null;
+  frozenIngredientPricesCents?: Record<string, number> | null;
+  markupPct?: number;
+  quotedTotalOverrideCents?: number | null;
 }
 
 interface IngredientRequirement {
@@ -117,6 +126,7 @@ export default async function EventDetailPage({
   const { workspace, id } = await params;
   const user = await requireSession();
   const c = await cookies();
+  const canSeeFinancials = canViewFinancials(user.role);
 
   const [eventRes, reqRes] = await Promise.all([
     api.get<EventDetail>(`/events/${id}`, { cookies: c }),
@@ -134,10 +144,10 @@ export default async function EventDetailPage({
   // (laborTotalCents is set at event creation via laborHoursEstimate × laborRateCentsPerHour,
   //  and is what sendQuote uses for the customer-facing total — margin must match)
   const staffLaborCents = event.staff.reduce(
-    (sum, s) => sum + Math.round(Number(s.hours) * s.hourlyRateCents),
+    (sum, s) => sum + Math.round(Number(s.hours) * (s.hourlyRateCents ?? 0)),
     0,
   );
-  const totalLaborCents = staffLaborCents || event.laborTotalCents;
+  const totalLaborCents = staffLaborCents || (event.laborTotalCents ?? 0);
   const shortItems = requirements.filter((r) => r.isShort);
 
   // Live food cost from menu items (used when computedFoodCostCents is not yet set)
@@ -236,46 +246,52 @@ export default async function EventDetailPage({
           eventId={event.id}
           shortages={shortages}
           alreadyAcknowledged={event.shortageAcknowledged}
+          canSeeFinancials={canSeeFinancials}
         />
       )}
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      {/* KPI row -- Revenue/Food cost/Labor cost/Profit/Margin are omitted
+          entirely (not dashed out) for roles without financial visibility. */}
+      <div className={canSeeFinancials ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4" : "grid grid-cols-2 gap-4"}>
         <KpiCard label="Guests" value={event.guestCount.toString()} />
-        <KpiCard
-          label="Revenue"
-          value={revenueCents != null ? formatCents(revenueCents) : "—"}
-          {...(revenueCents == null ? { sub: "No quote yet" } : {})}
-        />
-        <KpiCard
-          label={event.frozenAt ? "Food cost (frozen)" : "Food cost"}
-          value={formatCents(foodCostCents)}
-          {...(revenueCents && foodCostCents
-            ? { sub: `${formatPct((foodCostCents / revenueCents) * 100)} of revenue` }
-            : {})}
-        />
-        <KpiCard
-          label="Labor cost"
-          value={formatCents(totalLaborCents)}
-          {...(revenueCents && totalLaborCents > 0
-            ? { sub: `${formatPct((totalLaborCents / revenueCents) * 100)} of revenue` }
-            : {})}
-        />
-        <KpiCard
-          label="Profit"
-          value={profitCents != null ? formatCents(profitCents) : "—"}
-          tone={profitCents != null && profitBaseCents != null
-            ? (profitCents < 0 ? "danger" : profitCents < profitBaseCents * 0.2 ? "warning" : "default")
-            : "default"}
-          {...(profitCents == null ? { sub: "Set quote first" } : {})}
-        />
-        <KpiCard
-          label="Margin %"
-          value={marginPct != null ? formatPct(marginPct) : "—"}
-          tone={marginPct != null
-            ? marginPct < 25 ? "danger" : marginPct < 45 ? "warning" : "default"
-            : "default"}
-        />
+        {canSeeFinancials && (
+          <>
+            <KpiCard
+              label="Revenue"
+              value={revenueCents != null ? formatCents(revenueCents) : "—"}
+              {...(revenueCents == null ? { sub: "No quote yet" } : {})}
+            />
+            <KpiCard
+              label={event.frozenAt ? "Food cost (frozen)" : "Food cost"}
+              value={formatCents(foodCostCents)}
+              {...(revenueCents && foodCostCents
+                ? { sub: `${formatPct((foodCostCents / revenueCents) * 100)} of revenue` }
+                : {})}
+            />
+            <KpiCard
+              label="Labor cost"
+              value={formatCents(totalLaborCents)}
+              {...(revenueCents && totalLaborCents > 0
+                ? { sub: `${formatPct((totalLaborCents / revenueCents) * 100)} of revenue` }
+                : {})}
+            />
+            <KpiCard
+              label="Profit"
+              value={profitCents != null ? formatCents(profitCents) : "—"}
+              tone={profitCents != null && profitBaseCents != null
+                ? (profitCents < 0 ? "danger" : profitCents < profitBaseCents * 0.2 ? "warning" : "default")
+                : "default"}
+              {...(profitCents == null ? { sub: "Set quote first" } : {})}
+            />
+            <KpiCard
+              label="Margin %"
+              value={marginPct != null ? formatPct(marginPct) : "—"}
+              tone={marginPct != null
+                ? marginPct < 25 ? "danger" : marginPct < 45 ? "warning" : "default"
+                : "default"}
+            />
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -291,6 +307,7 @@ export default async function EventDetailPage({
             markupPct={Number(event.markupPct ?? 0)}
             quotedTotalOverrideCents={event.quotedTotalOverrideCents ?? null}
             isPaid={isPaid}
+            canSeeFinancials={canSeeFinancials}
           />
 
           {/* Kitchen tasks — shown after PAID */}
@@ -359,7 +376,7 @@ export default async function EventDetailPage({
                     <th className="text-right px-5 py-2 font-medium">Need</th>
                     <th className="text-right px-5 py-2 font-medium">Have</th>
                     <th className="text-right px-5 py-2 font-medium">Gap</th>
-                    <th className="text-right px-5 py-2 font-medium">Last price</th>
+                    {canSeeFinancials && <th className="text-right px-5 py-2 font-medium">Last price</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-bg-border">
@@ -384,9 +401,11 @@ export default async function EventDetailPage({
                           <span className="text-success text-xs">OK</span>
                         )}
                       </td>
-                      <td className="px-5 py-2 text-right tabular-nums text-text-tertiary text-xs">
-                        {req.lastUnitPriceCents ? formatCents(req.lastUnitPriceCents) : "—"}
-                      </td>
+                      {canSeeFinancials && (
+                        <td className="px-5 py-2 text-right tabular-nums text-text-tertiary text-xs">
+                          {req.lastUnitPriceCents ? formatCents(req.lastUnitPriceCents) : "—"}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -410,14 +429,19 @@ export default async function EventDetailPage({
                     </div>
                     <div className="text-xs text-text-secondary">
                       {s.role.replace(/_/g, " ").toLowerCase()} ·{" "}
-                      {Number(s.hours).toFixed(1)}h @ {formatCents(s.hourlyRateCents)}/h ={" "}
-                      {formatCents(Math.round(Number(s.hours) * s.hourlyRateCents))}
+                      {Number(s.hours).toFixed(1)}h
+                      {canSeeFinancials && s.hourlyRateCents != null && (
+                        <> @ {formatCents(s.hourlyRateCents)}/h ={" "}
+                          {formatCents(Math.round(Number(s.hours) * s.hourlyRateCents))}</>
+                      )}
                     </div>
                   </div>
                 ))}
-                <div className="pt-2 border-t border-bg-border text-xs text-text-secondary">
-                  Total labor: <span className="font-mono">{formatCents(totalLaborCents)}</span>
-                </div>
+                {canSeeFinancials && (
+                  <div className="pt-2 border-t border-bg-border text-xs text-text-secondary">
+                    Total labor: <span className="font-mono">{formatCents(totalLaborCents)}</span>
+                  </div>
+                )}
               </div>
             )}
           </Card>

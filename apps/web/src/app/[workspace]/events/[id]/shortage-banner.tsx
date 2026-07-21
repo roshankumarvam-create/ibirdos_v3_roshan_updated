@@ -13,18 +13,23 @@ interface Shortage {
   shortCanonical: number;
   canonicalUnit: string;
   preferredDisplayUnit: string | null;
-  vendorId: string | null;
-  lastUnitPriceCents: number | null;
-  estCostCents: number | null;
+  // Omitted from the API response entirely (not sent as null) for roles
+  // without financial visibility -- see redactEventFinancials() in
+  // events.service.ts. Quantity/gap fields above stay visible for kitchen
+  // prep; vendor and $ cost of the shortage do not.
+  vendorId?: string | null;
+  lastUnitPriceCents?: number | null;
+  estCostCents?: number | null;
 }
 
 interface Props {
   eventId: string;
   shortages: Shortage[];
   alreadyAcknowledged: boolean;
+  canSeeFinancials: boolean;
 }
 
-export function ShortageBanner({ eventId, shortages, alreadyAcknowledged }: Props) {
+export function ShortageBanner({ eventId, shortages, alreadyAcknowledged, canSeeFinancials }: Props) {
   const [acknowledged, setAcknowledged] = useState(alreadyAcknowledged);
   const [saving, setSaving] = useState(false);
 
@@ -63,7 +68,7 @@ export function ShortageBanner({ eventId, shortages, alreadyAcknowledged }: Prop
             <th className="text-right py-1 font-medium">Needed</th>
             <th className="text-right py-1 font-medium">Have</th>
             <th className="text-right py-1 font-medium">Short</th>
-            <th className="text-right py-1 font-medium">Est. cost to order</th>
+            {canSeeFinancials && <th className="text-right py-1 font-medium">Est. cost to order</th>}
           </tr>
         </thead>
         <tbody className="divide-y divide-danger/10">
@@ -79,9 +84,11 @@ export function ShortageBanner({ eventId, shortages, alreadyAcknowledged }: Prop
               <td className="py-1.5 text-right tabular-nums text-danger font-medium">
                 {formatStock(s.shortCanonical, s.canonicalUnit, s.preferredDisplayUnit)}
               </td>
-              <td className="py-1.5 text-right tabular-nums text-text-secondary">
-                {s.estCostCents != null ? formatCents(s.estCostCents) : "—"}
-              </td>
+              {canSeeFinancials && (
+                <td className="py-1.5 text-right tabular-nums text-text-secondary">
+                  {s.estCostCents != null ? formatCents(s.estCostCents) : "—"}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
