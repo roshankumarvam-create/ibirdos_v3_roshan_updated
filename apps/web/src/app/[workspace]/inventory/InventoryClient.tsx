@@ -47,7 +47,13 @@ interface IngredientStock {
 type Tab = "stock" | "history";
 type FilterParam = "out" | "low" | "needs-attention" | null;
 
-function InventoryContent({ canSeeFinancials }: { canSeeFinancials: boolean }) {
+interface InventoryContentProps {
+  canSeeFinancials: boolean;
+  canAdjustInventory: boolean;
+  canAccessAdjustPage: boolean;
+}
+
+function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjustPage }: InventoryContentProps) {
   const { workspace } = useParams<{ workspace: string }>();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -135,9 +141,15 @@ function InventoryContent({ canSeeFinancials }: { canSeeFinancials: boolean }) {
           </p>
         </div>
         <div className="flex gap-2">
-          <Link href={`/${workspace}/inventory/adjust` as any}>
-            <Button>+ Manual adjustment</Button>
-          </Link>
+          {/* Server-side already blocks receive/write-off/recount for roles
+              without inventory.adjust or waste.create -- hidden here so a
+              blocked role isn't led to a page (or a 403) with nothing they
+              can do. */}
+          {canAccessAdjustPage && (
+            <Link href={`/${workspace}/inventory/adjust` as any}>
+              <Button>+ Manual adjustment</Button>
+            </Link>
+          )}
         </div>
       </header>
 
@@ -383,14 +395,20 @@ function InventoryContent({ canSeeFinancials }: { canSeeFinancials: boolean }) {
                         {tx.sourceRef ?? tx.sourceKind}
                       </td>
                       <td className="px-5 py-3 text-right">
-                        <button
-                          disabled={reversing === tx.id}
-                          onClick={() => handleReverse(tx.id)}
-                          className="text-[10px] text-text-tertiary hover:text-warning uppercase tracking-wider disabled:opacity-40"
-                          title="Reverse this transaction"
-                        >
-                          {reversing === tx.id ? "…" : "Reverse"}
-                        </button>
+                        {/* Reverse always goes through inventory.adjust server-side
+                            regardless of the transaction's own kind (even reversing
+                            a WASTE-kind entry) -- gated on that permission specifically,
+                            not the broader canAccessAdjustPage. */}
+                        {canAdjustInventory && (
+                          <button
+                            disabled={reversing === tx.id}
+                            onClick={() => handleReverse(tx.id)}
+                            className="text-[10px] text-text-tertiary hover:text-warning uppercase tracking-wider disabled:opacity-40"
+                            title="Reverse this transaction"
+                          >
+                            {reversing === tx.id ? "…" : "Reverse"}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -404,10 +422,14 @@ function InventoryContent({ canSeeFinancials }: { canSeeFinancials: boolean }) {
   );
 }
 
-export function InventoryClient({ canSeeFinancials }: { canSeeFinancials: boolean }) {
+export function InventoryClient({ canSeeFinancials, canAdjustInventory, canAccessAdjustPage }: InventoryContentProps) {
   return (
     <Suspense fallback={<div className="text-text-secondary py-8">Loading…</div>}>
-      <InventoryContent canSeeFinancials={canSeeFinancials} />
+      <InventoryContent
+        canSeeFinancials={canSeeFinancials}
+        canAdjustInventory={canAdjustInventory}
+        canAccessAdjustPage={canAccessAdjustPage}
+      />
     </Suspense>
   );
 }

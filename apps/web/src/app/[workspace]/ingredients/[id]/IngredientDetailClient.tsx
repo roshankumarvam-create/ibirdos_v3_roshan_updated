@@ -48,9 +48,14 @@ interface Props {
   workspace: string;
   id: string;
   canSeeFinancials: boolean;
+  canEditIngredient: boolean;
+  canDeleteIngredient: boolean;
+  canAccessAdjustPage: boolean;
 }
 
-export function IngredientDetailClient({ workspace, id, canSeeFinancials }: Props) {
+export function IngredientDetailClient({
+  workspace, id, canSeeFinancials, canEditIngredient, canDeleteIngredient, canAccessAdjustPage,
+}: Props) {
   const router = useRouter();
 
   const [ing, setIng] = useState<IngredientDetail | null>(null);
@@ -120,17 +125,28 @@ export function IngredientDetailClient({ workspace, id, canSeeFinancials }: Prop
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
-          <Link href={`/${workspace}/inventory/adjust?ingredientId=${id}` as any}>
-            <Button variant="secondary" size="sm">Adjust stock</Button>
-          </Link>
-          <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
-          <Button
-            variant="secondary"
-            onClick={() => setShowDeleteModal(true)}
-            className="text-danger border-danger/30 hover:bg-danger/10"
-          >
-            Delete
-          </Button>
+          {/* Server-side already blocks all three of these for roles that
+              lack the matching permission (ingredient.update/delete,
+              inventory.adjust/waste.create) -- hiding them here closes the
+              "button shown, action 403s" UX gap, it's not the enforcement
+              itself. */}
+          {canAccessAdjustPage && (
+            <Link href={`/${workspace}/inventory/adjust?ingredientId=${id}` as any}>
+              <Button variant="secondary" size="sm">Adjust stock</Button>
+            </Link>
+          )}
+          {canEditIngredient && (
+            <Button variant="secondary" onClick={() => setEditing(true)}>Edit</Button>
+          )}
+          {canDeleteIngredient && (
+            <Button
+              variant="secondary"
+              onClick={() => setShowDeleteModal(true)}
+              className="text-danger border-danger/30 hover:bg-danger/10"
+            >
+              Delete
+            </Button>
+          )}
         </div>
       </header>
 
