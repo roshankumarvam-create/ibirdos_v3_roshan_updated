@@ -2,6 +2,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
+import { canViewFinancials } from "@ibirdos/permissions";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { formatCents, formatPct } from "@/lib/format";
 
@@ -11,19 +12,20 @@ interface RecipeListItem {
   category: string | null;
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   portionsYielded: number | null;
-  salePriceCents: number | null;
-  // Live cost — always current; source of truth
-  liveCostCents: number;
-  livePerPortionCostCents: number | null;
-  liveFoodCostPct: number | null;
-  liveMarginPct: number | null;
-  liveStaleness: "FRESH" | "MISSING_PRICE" | "MISSING_INGREDIENT";
   autoReprice: boolean;
-  // Cached — backup, may lag briefly after ingredient price changes
-  cachedCostCents: number | null;
-  cachedCostUpdatedAt: string | null;
-  costStaleness: string;
   ingredientCount: number;
+  // Financial fields are omitted from the API response entirely (not sent
+  // as null) for roles without financial visibility -- see
+  // canViewFinancials()/toListDTO() in recipes.service.ts.
+  salePriceCents?: number | null;
+  liveCostCents?: number | null;
+  livePerPortionCostCents?: number | null;
+  liveFoodCostPct?: number | null;
+  liveMarginPct?: number | null;
+  liveStaleness?: "FRESH" | "MISSING_PRICE" | "MISSING_INGREDIENT";
+  cachedCostCents?: number | null;
+  cachedCostUpdatedAt?: string | null;
+  costStaleness?: string;
 }
 
 function MarginBadge({ pct }: { pct: number | null | undefined }) {
@@ -43,7 +45,7 @@ function MarginBadge({ pct }: { pct: number | null | undefined }) {
   return <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-danger/10 text-danger border border-danger/20">HIGH</span>;
 }
 
-function fmtRelTime(iso: string | null) {
+function fmtRelTime(iso: string | null | undefined) {
   if (!iso) return null;
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 60_000) return "just now";
@@ -66,6 +68,10 @@ export default async function RecipesPage({ searchParams }: { searchParams: Prom
   const items = res.data?.items ?? [];
 
   const canCreate = user.role !== "STAFF";
+  // Same signal the API redaction is built on -- Chef/Staff get the
+  // operational columns (name, category, status, portions) with the
+  // cost/sale/margin columns omitted entirely, not dashed out.
+  const canSeeFinancials = canViewFinancials(user.role);
 
   return (
     <div className="space-y-6">
@@ -119,9 +125,13 @@ export default async function RecipesPage({ searchParams }: { searchParams: Prom
                 <th className="text-left px-5 py-3 font-medium">Category</th>
                 <th className="text-left px-5 py-3 font-medium">Status</th>
                 <th className="text-right px-5 py-3 font-medium">Portions</th>
-                <th className="text-right px-5 py-3 font-medium">Live cost</th>
-                <th className="text-right px-5 py-3 font-medium">Sale</th>
-                <th className="text-right px-5 py-3 font-medium">Margin</th>
+                {canSeeFinancials && (
+                  <>
+                    <th className="text-right px-5 py-3 font-medium">Live cost</th>
+                    <th className="text-right px-5 py-3 font-medium">Sale</th>
+                    <th className="text-right px-5 py-3 font-medium">Margin</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-bg-border">
@@ -134,8 +144,8 @@ export default async function RecipesPage({ searchParams }: { searchParams: Prom
                         <Link href={`/${user.workspaceSlug}/recipes/${r.id}` as any} className="text-text-primary hover:text-accent-500">
                           {r.name}
                         </Link>
-                        <MarginBadge pct={r.liveFoodCostPct} />
-                        {!r.autoReprice && r.liveFoodCostPct != null && r.liveFoodCostPct > 35 && (
+                        {canSeeFinancials && <MarginBadge pct={r.liveFoodCostPct} />}
+                        {canSeeFinancials && !r.autoReprice && r.liveFoodCostPct != null && r.liveFoodCostPct > 35 && (
                           <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-bg-inset text-text-tertiary border border-bg-border">LOCKED</span>
                         )}
                         {r.liveStaleness === "MISSING_PRICE" && (
@@ -150,19 +160,23 @@ export default async function RecipesPage({ searchParams }: { searchParams: Prom
                       </Badge>
                     </td>
                     <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{r.portionsYielded ?? "—"}</td>
-                    <td className="px-5 py-3 text-right tabular-nums">
-                      <span title={cacheTs ? `Cache updated ${cacheTs}` : undefined}>
-                        {formatCents(r.liveCostCents)}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(r.salePriceCents)}</td>
-                    <td className="px-5 py-3 text-right tabular-nums">
-                      <span className={r.liveMarginPct == null ? "text-text-tertiary" :
-                        r.liveMarginPct < 30 ? "text-danger" :
-                        r.liveMarginPct < 50 ? "text-warning" : "text-success"}>
-                        {r.liveMarginPct != null ? `${r.liveMarginPct.toFixed(1)}%` : "—"}
-                      </span>
-                    </td>
+                    {canSeeFinancials && (
+                      <>
+                        <td className="px-5 py-3 text-right tabular-nums">
+                          <span title={cacheTs ? `Cache updated ${cacheTs}` : undefined}>
+                            {formatCents(r.liveCostCents)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(r.salePriceCents)}</td>
+                        <td className="px-5 py-3 text-right tabular-nums">
+                          <span className={r.liveMarginPct == null ? "text-text-tertiary" :
+                            r.liveMarginPct < 30 ? "text-danger" :
+                            r.liveMarginPct < 50 ? "text-warning" : "text-success"}>
+                            {r.liveMarginPct != null ? `${r.liveMarginPct.toFixed(1)}%` : "—"}
+                          </span>
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
