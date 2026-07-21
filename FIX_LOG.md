@@ -995,4 +995,74 @@ This is a real, multi-file, security-sensitive feature — not a bug fix. Not bu
 **Commit:** `23454b6`
 **Verification:** `pnpm typecheck` (all 9 packages) clean. New tests pass. Live backtest against production confirmed exact reported numbers. **Live test for Roshan**: open a paid event with labor cost, confirm the same total shows on the create-page-equivalent view and the saved Quote Summary; check Dashboard revenue reflects the labor-inclusive total for any event paid after this deploys.
 
+### P1-A — shortage estimated cost was ~1000x too small — FIXED
+
+Root cause: the shortage-cost calc in `markAsPaid()` divided by 1,000,000 to go from microcents to cents, but this codebase's actual convention (confirmed in `ingredients.service.ts`'s `updatePrice()` and `insights-generator.worker.ts`) is 1 cent = 1000 microcents. Reproduces the exact report (9 cases × $43.78 showing as $0.39; 2 lb × $7.26 showing as $0.01 instead of ~$14.52) — dividing by 1000x too much destroys nearly all precision before `Math.round()` ever sees the real number.
+
+**Fix:** divide by `1_000` instead of `1_000_000`.
+
+**Live-backtested against production** (isolated `roshantest`, cleaned up after): an ingredient priced at $7.26/lb with a computed shortage — the old formula would show $0.02 (799x too small, same error class as reported); the fixed formula correctly computes $15.98, verified against the raw math (997.9032g × 1601 microcents/g ÷ 1000 = 1597.6 → rounds to 1598 cents).
+
+**Files changed:** `apps/api/src/events/events.service.ts`
+**Commit:** `4daa4f9`
+**Verification:** `pnpm typecheck` clean. Full API suite unaffected. **Live test for Roshan**: create an event with a real ingredient shortage, confirm the "Est. cost to order" figure on the shortage banner is a plausible dollar amount (roughly `shortage quantity × unit price`), not near-zero.
+
+---
+
+### P1-B — Ingredient categories default to OTHER — INVESTIGATED, decision needed (see `NEEDS_ROSHAN.md`)
+
+Not a simple bug: the only place ingredient category gets assigned automatically (`InvoicesService.confirm()`'s auto-create-unmatched-ingredient path) hardcodes `"OTHER"`. The AI extraction **already detects** a category (the vendor invoice's own section headers — "DAIRY", "MEATS", "PRODUCE", etc.) but it's currently used only for an internal QA reconciliation check and is never persisted or passed through to ingredient creation. Wiring this up needs a genuinely new mapping layer (raw, non-standardized vendor header text → the app's fixed 11-value `IngredientCategory` enum) plus a decision on ambiguous/unmapped cases (e.g. `"MISC CHARGES"`). Full writeup, including what building it would take, in `NEEDS_ROSHAN.md`.
+
+**Files changed:** none — investigation only.
+
+---
+
+### P1-C — Price history dated by invoice date, not upload date; invoice # and previous price now shown — FIXED
+
+Root cause: `IngredientsService.updatePrice()` had no way to specify when a price took effect — `effectiveAt` always fell back to `@default(now())`, so every invoice-sourced price change was dated by whenever it happened to get confirmed in the app, not the invoice's own printed date (already available at the one call site, just never passed through).
+
+**Fix:** `updatePrice()` takes an optional `effectiveAt`; `confirm()` passes `invoice.invoiceDate`. Also addressed the rest of the ask: `IngredientsService.get()` now resolves each `INVOICE`-sourced row's `sourceRef` (an opaque invoice id) to that invoice's actual `invoiceNumber`, and computes each row's previous price from the next-older row. Frontend shows "$X/unit → $Y/unit" and an Invoice # column (vendor and unit were already shown).
+
+**Live-backtested against production** (isolated `roshantest`, cleaned up after): confirmed an invoice with printed date 2026-05-10 (run on 2026-07-21) — the resulting price history row is dated 2026-05-10, with the correct invoice number and `null` previous price (first entry); a second invoice with a different date/price correctly threads `previousPrice` to the prior real price and uses its own date.
+
+**Files changed:** `apps/api/src/ingredients/ingredients.service.ts`, `apps/api/src/invoices/invoices.service.ts`, `apps/web/src/app/[workspace]/ingredients/[id]/IngredientDetailClient.tsx`
+**Commit:** `7fa6983`
+**Verification:** `pnpm typecheck` clean. **Live test for Roshan**: confirm an invoice, check the ingredient's price history shows the invoice's printed date (not today's date) and the invoice number.
+
+---
+
+### P1-D — Price alerts showed wrong dollar amounts (10x too small) and raw canonical units, no vendor/invoice context — FIXED
+
+Same bug family as P1-A: `detectVendorPriceChange()` converted microcents to dollars via `/1_000_000` instead of the correct `/1000/100`, showing every price alert 10x too small. Also always showed the raw per-canonical-unit price (e.g. per-gram) instead of the ingredient's preferred display unit (e.g. per-lb), and never mentioned which vendor/invoice triggered it.
+
+**Fix:** added a `toDisplayUnitCents()` helper (reuses `toCanonical()` from `@ibirdos/types`, the same conversion pattern already used elsewhere in this codebase) for correct dollars-per-display-unit; alert body now reads e.g. "$5.00/lb to $7.00/lb" and appends "— Vendor Name, invoice #X" when available.
+
+**Noted, not touched:** `detectPriceSpikes()` in `insights-generator.worker.ts` (the other price-alert generator, period-over-period trend detection) already had the correct `/1000/100` conversion — only `detectVendorPriceChange()` had the wrong divisor. It does have a cruder hardcoded gram→lb conversion rather than the ingredient's actual `preferredDisplayUnit`; flagged as a smaller follow-up, not fixed since it wasn't reported broken.
+
+**Live-backtested the full pipeline against production** (isolated `roshantest`, cleaned up after): two invoices for the same ingredient with a 40% price jump produced an insight body reading exactly `"... increased from $5.00/lb to $7.00/lb (40.0% increase) — P1D Backtest Vendor, invoice #P1D-002."`
+
+**Files changed:** `apps/api/src/insights/rules/vendor-price-change.rule.ts`, `apps/api/src/insights/rules/vendor-price-change.rule.spec.ts` (4 new tests, 6 existing updated), `apps/api/src/invoices/invoices.service.ts`
+**Commit:** `6e78ca8`
+**Verification:** `pnpm typecheck` clean. 10/10 tests pass in the updated spec file. **Live test for Roshan**: confirm two invoices for the same ingredient with a >15% price jump, check the resulting price-change alert shows a correct dollar amount in the ingredient's display unit, with vendor and invoice # mentioned.
+
+---
+
+### BUG 5 — public quote page — BUILT (schema pending, feature inert until migration runs)
+
+Full build per the decision to proceed: schema (additive, NOT applied — see `PENDING_MIGRATIONS.sql`), a `@Public()` rate-limited API route, a public Next.js page outside the `[workspace]` auth layout, and updated `sendQuote()`/"Copy quote & link" to use it.
+
+**Why the schema change isn't in `schema.prisma` yet, even though it's additive:** Railway's build step runs `prisma generate` on every deploy, and Prisma's generated client issues an explicit column list per query (not `SELECT *`) — adding `quoteToken` to `schema.prisma` before the column exists in the actual database would break **every** query against `Event`, not just quote-token ones, the moment this deploys. So the new `quote-token.service.ts` accesses this column via raw SQL only, and treats a query failure (column missing) as "feature not enabled yet." This makes the whole feature genuinely inert until the migration runs — confirmed live against production (below), not just reasoned about.
+
+**Security model, proven not just asserted:** `quoteToken` is a 256-bit crypto-random hex string (same generation as this app's own CSRF tokens), resolved by exact-equality lookup only. `quote-token.service.spec.ts` (8 tests, simulated two-tenant table) proves: token A resolves only to event A's data, token B only to event B's; a well-formed-but-unregistered token returns null, not another event's data; a strict prefix of a real token does NOT match (proves exact equality, not `LIKE`/`startsWith`); an empty/short token is rejected before ever querying the database; a workspaceId/eventId mismatch cannot mint or fetch another workspace's token. The public route itself scopes every downstream query (menu items, workspace name) by the already-resolved single event's own id/workspaceId — never by request input.
+
+**Dead-link handling:** a cancelled event's quote returns the same 404 as an unrecognized token (no distinction leaked).
+
+**Live-verified against real production** (isolated `roshantest` workspace): confirmed the graceful-degradation path actually fires today — Postgres error `42703` ("column quote_token does not exist"), caught, returns `null`, event data left completely untouched. This is proof the feature is inert right now, not just inert-in-theory.
+
+**Incidental fix:** discovered and fixed a pre-existing gap in `apps/api/vitest.config.ts` — the `@ibirdos/config` alias pointed at a directory with no `index.ts` (unlike every other aliased package), so any spec file importing it had always been broken under vitest; this session's changes were just the first to actually exercise that import path. Pointed the alias at the one file the package has (`env.ts`).
+
+**Files changed:** `PENDING_MIGRATIONS.sql` (new), `apps/api/src/events/{quote-token.service.ts, quote-token.service.spec.ts, public-quote.controller.ts}` (new), `apps/api/src/events/{events.service.ts, events.controller.ts, events.module.ts}`, `apps/api/vitest.config.ts`, `apps/web/src/app/quote/[token]/page.tsx` (new), `apps/web/src/app/[workspace]/events/[id]/send-quote-button.tsx`
+**Commit:** `0626f4d`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. Full API suite 136/139 (same 3 pre-existing unrelated failures). `quote-token.service.spec.ts` 8/8 pass. **NOT deployed. Schema migration NOT run** — this needs Roshan to (1) run the SQL in `PENDING_MIGRATIONS.sql`, (2) add the noted field to `schema.prisma` and re-run `prisma generate` as a follow-up for cleaner typed access, (3) deploy, (4) live test: mark an event's quote as sent (or click "Copy quote & link"), open the resulting `/quote/{token}` link in an incognito window with no session, confirm it shows only that event's quote with no login prompt.
+
 ---
