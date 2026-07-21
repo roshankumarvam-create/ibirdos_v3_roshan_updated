@@ -2,6 +2,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
+import { canViewFinancials } from "@ibirdos/permissions";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { StatusBadge } from "@/components/common/status-badge";
 import { formatCents, formatPct, formatDate, formatDateTime } from "@/lib/format";
@@ -14,12 +15,15 @@ interface EventListItem {
   customerName: string | null;
   startsAt: string;
   guestCount: number;
-  quotedPriceCents: number | null;
-  computedFoodCostCents: number | null;
-  computedLaborCostCents: number | null;
-  laborTotalCents: number;
-  computedMarginPct: number | null;
   _count?: { menuItems: number; staff: number };
+  // Financial fields are omitted from the API response entirely (not sent
+  // as null) for roles without financial visibility -- see
+  // canViewFinancials()/redactEventFinancials() in events.service.ts.
+  quotedPriceCents?: number | null;
+  computedFoodCostCents?: number | null;
+  computedLaborCostCents?: number | null;
+  laborTotalCents?: number;
+  computedMarginPct?: number | null;
 }
 
 const STATUS_TONE: Record<string, "neutral" | "info" | "success" | "warning" | "danger"> = {
@@ -40,6 +44,7 @@ export default async function EventsPage({ searchParams }: { searchParams: Promi
   const res = await api.get<{ items: EventListItem[] }>(`/events?${qs.toString()}`, { cookies: c });
   const items = res.data?.items ?? [];
   const canCreate = user.role === "OWNER" || user.role === "MANAGER";
+  const canSeeFinancials = canViewFinancials(user.role);
 
   return (
     <div className="space-y-6">
@@ -71,10 +76,14 @@ export default async function EventsPage({ searchParams }: { searchParams: Promi
                 <th className="text-left px-5 py-3 font-medium">When</th>
                 <th className="text-left px-5 py-3 font-medium">Service</th>
                 <th className="text-right px-5 py-3 font-medium">Guests</th>
-                <th className="text-right px-5 py-3 font-medium">Revenue</th>
-                <th className="text-right px-5 py-3 font-medium">Food</th>
-                <th className="text-right px-5 py-3 font-medium">Labor</th>
-                <th className="text-right px-5 py-3 font-medium">Margin</th>
+                {canSeeFinancials && (
+                  <>
+                    <th className="text-right px-5 py-3 font-medium">Revenue</th>
+                    <th className="text-right px-5 py-3 font-medium">Food</th>
+                    <th className="text-right px-5 py-3 font-medium">Labor</th>
+                    <th className="text-right px-5 py-3 font-medium">Margin</th>
+                  </>
+                )}
                 <th className="text-left px-5 py-3 font-medium">Status</th>
               </tr>
             </thead>
@@ -90,16 +99,20 @@ export default async function EventsPage({ searchParams }: { searchParams: Promi
                   <td className="px-5 py-3 text-text-secondary text-xs">{formatDateTime(e.startsAt)}</td>
                   <td className="px-5 py-3 text-text-secondary text-xs">{e.serviceType.replace(/_/g, " ").toLowerCase()}</td>
                   <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{e.guestCount}</td>
-                  <td className="px-5 py-3 text-right tabular-nums">{formatCents(e.quotedPriceCents)}</td>
-                  <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(e.computedFoodCostCents)}</td>
-                  <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(e.laborTotalCents ?? e.computedLaborCostCents)}</td>
-                  <td className="px-5 py-3 text-right tabular-nums">
-                    <span className={e.computedMarginPct == null ? "text-text-tertiary" :
-                      e.computedMarginPct < 25 ? "text-danger" :
-                      e.computedMarginPct < 45 ? "text-warning" : "text-success"}>
-                      {formatPct(e.computedMarginPct)}
-                    </span>
-                  </td>
+                  {canSeeFinancials && (
+                    <>
+                      <td className="px-5 py-3 text-right tabular-nums">{formatCents(e.quotedPriceCents)}</td>
+                      <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(e.computedFoodCostCents)}</td>
+                      <td className="px-5 py-3 text-right tabular-nums text-text-secondary">{formatCents(e.laborTotalCents ?? e.computedLaborCostCents)}</td>
+                      <td className="px-5 py-3 text-right tabular-nums">
+                        <span className={e.computedMarginPct == null ? "text-text-tertiary" :
+                          e.computedMarginPct < 25 ? "text-danger" :
+                          e.computedMarginPct < 45 ? "text-warning" : "text-success"}>
+                          {formatPct(e.computedMarginPct)}
+                        </span>
+                      </td>
+                    </>
+                  )}
                   <td className="px-5 py-3"><StatusBadge label={e.status.toLowerCase().replace(/_/g, " ")} tone={STATUS_TONE[e.status] ?? "neutral"} /></td>
                 </tr>
               ))}
