@@ -127,8 +127,20 @@ export class KitchenService {
     });
     await this.publishUpdate(ctx.workspaceId, { kind: "task_updated", taskId, status: updated.status });
 
-    // Auto-CONSUME inventory when transitioning to DONE
-    if (patch.status === "DONE" && task.status !== "DONE" && task.recipeId && task.targetPortions) {
+    // Auto-CONSUME inventory when transitioning to DONE. PREP-only: every
+    // menu item generates BOTH a PREP task and a SERVICE task for the same
+    // recipeId + targetPortions (events.service.ts, kitchen task
+    // generation). Ingredients are consumed once, when the recipe is
+    // actually prepped; SERVICE represents plating/serving already-prepped
+    // food and must NOT re-trigger consumption. Before this check, marking
+    // BOTH tasks DONE (the normal, expected PREP -> SERVICE workflow)
+    // deducted the same ingredients twice -- confirmed live in production
+    // data (P0-2: Tofu/Asparagus each had two CONSUME rows, sourceKind
+    // "KitchenTask", one from the PREP task and one from the SERVICE task,
+    // 39 seconds apart). Each task's own per-task idempotency guard below
+    // correctly prevented itself from double-firing, but nothing stopped
+    // two *different* tasks for the same recipe from each firing once.
+    if (patch.status === "DONE" && task.status !== "DONE" && task.recipeId && task.targetPortions && task.taskType !== "SERVICE") {
       await this.consumeIngredients(ctx, task.recipeId, task.targetPortions, taskId, task.eventId).catch((err) =>
         log.warn({ err: err.message, taskId }, "inventory consume encountered errors — partial consume applied"),
       );
@@ -150,11 +162,33 @@ export class KitchenService {
     taskId: string,
     eventId: string | null,
   ) {
-    // Idempotency guard: this task's consumption already ran (e.g. the task
+    // Idempotency guard 1: this task's consumption already ran (e.g. the task
     // was marked DONE, reverted, and marked DONE again). Without this, every
     // re-completion deducts the recipe's ingredients from stock again.
     if (await this.inventory.hasTransactionFor(ctx, "KitchenTask", taskId, "CONSUME")) {
       log.info({ taskId }, "kitchen task inventory already consumed — skipping duplicate auto-consume");
+      return;
+    }
+
+    // Idempotency guard 2 (P0-2 fix): the event-level bulk consume
+    // (EventsService.consumeInventoryForCompletedEvent, fires on event
+    // status -> COMPLETED) already deducted the ENTIRE menu's ingredients
+    // for this event, including this task's recipe. Both triggers share the
+    // same per-event idempotency key ("Event" / eventId) via
+    // hasTransactionFor() -- whichever of the two paths runs first wins and
+    // writes the CONSUME rows; the other finds them here and skips. Without
+    // this check, completing a kitchen task AFTER the event was already
+    // marked COMPLETED double-deducted stock (the reported Tofu/Asparagus
+    // bug) -- the reverse ordering was already guarded on the event side
+    // but not here.
+    if (eventId && await this.inventory.hasTransactionFor(ctx, "Event", eventId, "CONSUME")) {
+      log.info({ taskId, eventId }, "event-level inventory consume already ran for this event — skipping kitchen-task-level auto-consume");
+      await writeAudit(ctx, {
+        action: "kitchen.inventory_consume_skipped",
+        entityType: "KitchenTask",
+        entityId: taskId,
+        metadata: { eventId, reason: "event_level_consumption_already_occurred" },
+      });
       return;
     }
 
