@@ -13,6 +13,8 @@ import { RecipesService } from "../recipes/recipes.service";
 import { NotificationsService } from "../notifications/notifications.service";
 import { InventoryService } from "../inventory/inventory.service";
 import { canViewFinancials } from "@ibirdos/permissions";
+import { env } from "@ibirdos/config";
+import { getOrCreateQuoteToken } from "./quote-token.service";
 
 const log = moduleLogger("EventsService");
 
@@ -1187,6 +1189,22 @@ export class EventsService {
   }
 
   // -----------------------------------------------------------------
+  // BUG 5: public, no-login quote link -- backs the "Copy quote & link"
+  // fallback button (previously copied the internal, login-walled URL).
+  // -----------------------------------------------------------------
+
+  async getQuoteLink(ctx: TenantContext, eventId: string): Promise<{ url: string | null }> {
+    const event = await prisma.event.findFirst({
+      where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+
+    const token = await getOrCreateQuoteToken(ctx.workspaceId, eventId);
+    return { url: token ? `${env.WEB_URL}/quote/${token}` : null };
+  }
+
+  // -----------------------------------------------------------------
   // Send quote email to client
   // -----------------------------------------------------------------
 
@@ -1223,6 +1241,12 @@ export class EventsService {
       return `<tr><td style="padding:6px 12px">${mi.recipe.name}</td><td style="padding:6px 12px;text-align:right">${mi.portions}</td><td style="padding:6px 12px;text-align:right">$${(unitPrice / 100).toFixed(2)}</td><td style="padding:6px 12px;text-align:right">$${(lineTotal / 100).toFixed(2)}</td></tr>`;
     }).join("");
 
+    // BUG 5: a public, no-login link to this same quote -- null if the
+    // quote-token migration hasn't run yet (see quote-token.service.ts),
+    // in which case the email just omits this section, same as today.
+    const quoteToken = await getOrCreateQuoteToken(ctx.workspaceId, eventId);
+    const publicQuoteUrl = quoteToken ? `${env.WEB_URL}/quote/${quoteToken}` : null;
+
     const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;color:#1a1a1a;max-width:600px;margin:0 auto;padding:24px">
 <h2 style="margin:0 0 4px">${event.name}</h2>
 <p style="color:#666;font-size:14px;margin:0 0 24px">
@@ -1248,6 +1272,7 @@ export class EventsService {
   </tr>
 </table>
 ${event.notes ? `<p style="font-size:13px;color:#666;margin-top:24px"><strong>Notes:</strong> ${event.notes}</p>` : ""}
+${publicQuoteUrl ? `<p style="margin-top:24px"><a href="${publicQuoteUrl}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-size:14px">View this quote online</a></p>` : ""}
 <p style="font-size:12px;color:#999;margin-top:32px;border-top:1px solid #e5e5e5;padding-top:16px">
   This quote was prepared by IBirdOS · Reply to this email with questions.
 </p>

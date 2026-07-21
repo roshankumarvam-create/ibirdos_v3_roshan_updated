@@ -33,7 +33,14 @@ export function SendQuoteButton({ eventId, clientEmail, eventName }: Props) {
   };
 
   const copyToClipboard = async () => {
-    const url = window.location.href;
+    // BUG 5 fix: this used to copy window.location.href -- the internal,
+    // login-walled workspace URL, which a client with no account can't
+    // open. Now fetches the public, no-login quote link instead. Falls
+    // back to the internal link only if the public-quote migration
+    // hasn't run yet (url comes back null) -- same behavior as before
+    // this fix, not a regression for anyone not yet on the new feature.
+    const res = await api.post<{ url: string | null }>(`/events/${eventId}/quote-link`, {});
+    const url = res.data?.url ?? window.location.href;
     await navigator.clipboard.writeText(
       `Quote for: ${eventName}\nClient: ${clientEmail ?? "(no email set)"}\nEvent link: ${url}\n\nTo confirm this quote, reply to this message or contact us.`,
     );

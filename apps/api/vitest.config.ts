@@ -13,7 +13,7 @@ export default defineConfig({
     alias: {
       "@ibirdos/types":       path.resolve(__dirname, "../../packages/types/src"),
       "@ibirdos/permissions": path.resolve(__dirname, "../../packages/permissions/src"),
-      "@ibirdos/config":      path.resolve(__dirname, "../../packages/config/src"),
+      "@ibirdos/config":      path.resolve(__dirname, "../../packages/config/src/env"),
       "@ibirdos/logger":      path.resolve(__dirname, "../../packages/logger/src"),
       "@ibirdos/db":          path.resolve(__dirname, "../../packages/db/src"),
     },

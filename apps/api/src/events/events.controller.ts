@@ -166,6 +166,12 @@ export class EventsController {
     return this.svc.sendQuote(ctx, id).then(ok);
   }
 
+  // BUG 5: backs the "Copy quote & link" fallback button.
+  @Post(":id/quote-link") @RequirePermission("event.update") @HttpCode(HttpStatus.OK)
+  getQuoteLink(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.getQuoteLink(ctx, id).then(ok);
+  }
+
   @Get(":id/ingredient-requirements") @RequirePermission("event.read")
   ingredientRequirements(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
     return this.svc.ingredientRequirements(ctx, id).then(ok);
