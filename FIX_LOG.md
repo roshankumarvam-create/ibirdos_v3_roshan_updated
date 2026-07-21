@@ -716,3 +716,54 @@ Both values were individually correct for what they represent ("when was this ac
 **Verification:** `pnpm typecheck` (all 9 packages) clean. **Needs live verification**: open the "smith" event detail page, confirm the Frozen-quote badge and Packet-generated line now both show the event's real date (Nov 10) alongside their respective action date, and that the header, prep list, and service list all still agree with each other.
 
 ---
+
+## P0-2 — duplicate inventory consumption: backtested with real production data, real root cause was NOT the hypothesized one
+
+**You asked me to prove this with actual data before and after fixing it, not just reason about the code. Here's the evidence.**
+
+### Part 1 — proving the bug with real data
+
+Queried production `inventory_transactions` directly (via `railway run` against the public Postgres proxy) for the client-reported ingredients. Found the duplicate live, in `cafe-71`, against an event called "Test Event" (`cmrs4hn1500jf9uv8ywaqe6wn`, status DRAFT):
+
+| Ingredient | Txn 1 | Txn 2 (duplicate) |
+|---|---|---|
+| Tofu, Extra Firm Org/C | `−11339.8 g`, `sourceKind=KitchenTask`, `sourceRef=cmrs4niyy00jo9uv8nwukmduu`, 18:30:09 | `−11339.8 g`, `sourceKind=KitchenTask`, `sourceRef=cmrs4niyy00jp9uv8twulytqm`, 18:30:48 |
+| Asparagus, Large (Contract) | `−2267.96 g`, same `sourceRef` as above | `−2267.96 g`, same `sourceRef` as above |
+
+**This disproves the hypothesis I reported after the code-only investigation.** Both rows have `sourceKind: "KitchenTask"` — neither is `sourceKind: "Event"`. This was never an event-confirm-vs-kitchen-task-completion race. Pulling the two `KitchenTask` rows behind those `sourceRef`s showed the real mechanism: `cmrs4niyy00jo...` is `"PREP: Grilled Tofu & Asparagus Bowl"` (`taskType: "PREP"`) and `cmrs4niyy00jp...` is `"SERVICE: Grilled Tofu & Asparagus Bowl"` (`taskType: "SERVICE"`) — same `recipeId`, same `targetPortions: 50`, both marked `DONE` 39 seconds apart. `EventsService`'s kitchen-task generation (inside `markAsPaid()`) creates **both** a PREP and a SERVICE task per menu item, always. `KitchenService.updateTask()`'s auto-consume fired on **any** task reaching `DONE` with a `recipeId` + `targetPortions`, with no `taskType` check — so completing the normal, expected PREP → SERVICE workflow deducted the same ingredients twice, every time, for every event. This is a much more consistently-reproducible bug than the theorized race condition — it doesn't need unusual ordering, it happens on the default happy path.
+
+The asymmetric event-vs-kitchen-task guard gap identified in the earlier code-only investigation (Issue 2 session) is real too, just not what produced this specific incident — see Part 3 below, it's separately confirmed fixed.
+
+### Part 2 — the fix (adjusted to match the confirmed cause)
+
+`apps/api/src/kitchen/kitchen.service.ts`, `updateTask()`: added `&& task.taskType !== "SERVICE"` to the auto-consume trigger condition. SERVICE tasks represent plating/serving already-prepped food, not raw-ingredient consumption; only PREP (or any non-SERVICE task type) should trigger `consumeIngredients()`.
+
+Also kept the guard already added earlier this turn (before the backtest): `consumeIngredients()` now also checks `hasTransactionFor(ctx, "Event", eventId, "CONSUME")` before deducting, so if the event-level bulk consume already ran (e.g. event marked COMPLETED before any kitchen task), a kitchen task completed afterward correctly skips instead of re-deducting. This addresses the separate, rarer asymmetric-ordering gap found during the Issue 2 code investigation — real, but not the cause of the Tofu/Asparagus incident.
+
+### Part 3 — backtesting the fix with real data
+
+Could not use a staging environment (none exists). Instead: imported the actual `EventsService`/`KitchenService`/`InventoryService` classes via `tsx`, connected them to the real production Postgres/Redis (public proxy URLs), and ran them against an isolated test workspace (`roshantest`) so no client data was touched. Created a throwaway ingredient/recipe/event per test, called the real `markAsPaid()`/`updateStatus()`/`updateTask()` methods exactly as the API would, and deleted everything afterward (confirmed via a final query — no residue left).
+
+**Test A — PREP done, then SERVICE done (the actual production scenario):**
+- After PREP marked DONE: 1 CONSUME row, stock 1000g → 890g (110g = 100g recipe requirement × 1.10 default portion multiplier).
+- After SERVICE marked DONE: still 1 CONSUME row, stock still 890g. **PASS — no second deduction.**
+
+**Test B — event marked COMPLETED first (bulk consume), then a kitchen task marked DONE:**
+- After event COMPLETED: 1 CONSUME row (`sourceKind: "Event"`), stock 1000g → 890g.
+- After kitchen task marked DONE afterward: still 1 CONSUME row, stock still 890g. **PASS — the `hasTransactionFor(ctx, "Event", ...)` guard added this turn stops the reverse-order gap.**
+
+**Test C — kitchen task done first, then event marked COMPLETED (reverse of B, exercises the pre-existing guard):**
+- After PREP marked DONE: 1 CONSUME row, stock 1000g → 890g.
+- After event marked COMPLETED: still 1 CONSUME row, stock still 890g. **PASS — confirms the guard that already existed in production before this session still works.**
+
+All three PASS. Full transaction-by-transaction output captured during the session; not reproduced in full here for length, available on request.
+
+### Part 4 — reversing the existing duplicated data
+
+Wrote (not run) the exact SQL to reverse the Tofu/Asparagus duplicate found in Part 1, as a compensating `ADJUST` transaction (not a delete — keeps the audit trail intact) plus the matching `ingredients.current_stock_canonical` update, with a `WHERE current_stock_canonical = <expected>` safety guard on each `UPDATE`. See `NEEDS_ROSHAN.md`, "P0-2 — safe SQL to reverse the existing duplicated Tofu/Asparagus consumption."
+
+**Files changed:** `apps/api/src/kitchen/kitchen.service.ts`
+**Commit:** `96431b7`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. `pnpm --filter @ibirdos/api test -- --run` — 103/106, same 3 pre-existing failures (unrelated). Live-backtested against real production data in an isolated test workspace (`roshantest`) as described above — all 3 scenarios PASS. **Live test steps for you to re-confirm on a real event once deployed:** create an event with a menu item, mark it paid (generates PREP + SERVICE kitchen tasks), mark the PREP task DONE, check `/inventory/transactions` for that ingredient (expect exactly one new CONSUME row), then mark the SERVICE task DONE and check again (expect the same count, no new row, stock unchanged).
+
+---

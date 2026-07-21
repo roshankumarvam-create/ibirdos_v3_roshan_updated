@@ -204,3 +204,60 @@ Wiring this needs a decision, because `DailySales` isn't just a number — it's 
 I'd lean toward option 3 (least risk to the live POS-reconciliation feature, most explicit), but that's a real product call — does this workspace even use the Daily Sales / POS feature for anything besides catering, or is `cafe-71` catering-only, in which case option 1 or 2 might be exactly right and simpler. Let me know which direction and I'll build it.
 
 ---
+
+## P0-2 — safe SQL to reverse the existing duplicated Tofu/Asparagus consumption
+
+**Not run.** This is a live production data correction — you asked for the SQL, not for me to execute it. Verified against the current state of `cafe-71` (workspace `cmq8woxqi0007q0u7zxgfab5q`) as of the backtest that confirmed this bug, re-checked immediately before writing this section — nothing has changed since (current `ingredients.current_stock_canonical` for both rows still exactly matches the *second* (duplicate) CONSUME transaction's `balance_after_canonical`, and no transaction of any kind exists after it), so it's safe to reverse with simple arithmetic, no reconstruction needed.
+
+**The two duplicate pairs** (both against event "Test Event", `id=cmrs4hn1500jf9uv8ywaqe6wn`, status `DRAFT` — this is the same event the investigation traced the bug to, not the client's real "smith" event):
+
+| Ingredient | Legitimate txn (PREP task, keep) | Duplicate txn (SERVICE task, reverse) | Current stock | Corrected stock |
+|---|---|---|---|---|
+| Tofu, Extra Firm Org/C (`cmrs1s21j00gc9uv8a3uj07m4`) | `cmrs4ryij00jz9uv8n51u4tgo`, −11339.8 g, balance 15875.72 g | `cmrs4ssyx00kd9uv88qu2fb66`, −11339.8 g, balance 4535.92 g | 4535.92 g | **15875.72 g** |
+| Asparagus, Large (Contract) (`cmrs1s26a00hw9uv85iflyp6h`) | `cmrs4ryix00k39uv8vf4rwox2`, −2267.96 g, balance 2721.552 g | `cmrs4ssz600kh9uv85kcrebth`, −2267.96 g, balance 453.592 g | 453.592 g | **2721.552 g** |
+
+Net correction: **+11339.8 g Tofu, +2267.96 g Asparagus** — i.e. add back exactly what the SERVICE-task duplicate wrongly subtracted a second time.
+
+**Recommended approach — insert a compensating `ADJUST` transaction, don't delete history.** Deleting the duplicate `CONSUME` row would erase the audit trail of what actually happened (a real bug did real damage; that should stay visible). Inserting a positive `ADJUST` transaction that references the row it's correcting keeps a clean, honest ledger. Run both statements from one `psql` session (or wrap in `BEGIN; ... COMMIT;`) so the transaction row and the balance update land atomically — this mirrors exactly what `InventoryService.recordTransaction` does in code, just by hand:
+
+```sql
+BEGIN;
+
+-- Tofu: reverse the SERVICE-task duplicate (cmrs4ssyx00kd9uv88qu2fb66)
+INSERT INTO inventory_transactions
+  (id, workspace_id, ingredient_id, kind, quantity_canonical, balance_after_canonical,
+   source_kind, source_ref, notes, created_at, created_by_id)
+VALUES
+  (gen_random_uuid()::text, 'cmq8woxqi0007q0u7zxgfab5q', 'cmrs1s21j00gc9uv8a3uj07m4', 'ADJUST',
+   11339.8, 15875.72, 'Manual', 'cmrs4ssyx00kd9uv88qu2fb66',
+   'P0-2 correction: reversing duplicate CONSUME cmrs4ssyx00kd9uv88qu2fb66 (SERVICE-task double-fire on same recipe as PREP task cmrs4ryij00jz9uv8n51u4tgo, event cmrs4hn1500jf9uv8ywaqe6wn) -- see FIX_LOG.md P0-2',
+   now(), NULL);
+
+UPDATE ingredients
+  SET current_stock_canonical = 15875.72, updated_at = now()
+  WHERE id = 'cmrs1s21j00gc9uv8a3uj07m4' AND current_stock_canonical = 4535.92;
+
+-- Asparagus: reverse the SERVICE-task duplicate (cmrs4ssz600kh9uv85kcrebth)
+INSERT INTO inventory_transactions
+  (id, workspace_id, ingredient_id, kind, quantity_canonical, balance_after_canonical,
+   source_kind, source_ref, notes, created_at, created_by_id)
+VALUES
+  (gen_random_uuid()::text, 'cmq8woxqi0007q0u7zxgfab5q', 'cmrs1s26a00hw9uv85iflyp6h', 'ADJUST',
+   2267.96, 2721.552, 'Manual', 'cmrs4ssz600kh9uv85kcrebth',
+   'P0-2 correction: reversing duplicate CONSUME cmrs4ssz600kh9uv85kcrebth (SERVICE-task double-fire on same recipe as PREP task cmrs4ryix00k39uv8vf4rwox2, event cmrs4hn1500jf9uv8ywaqe6wn) -- see FIX_LOG.md P0-2',
+   now(), NULL);
+
+UPDATE ingredients
+  SET current_stock_canonical = 2721.552, updated_at = now()
+  WHERE id = 'cmrs1s26a00hw9uv85iflyp6h' AND current_stock_canonical = 453.592;
+
+COMMIT;
+```
+
+Notes:
+- The `WHERE current_stock_canonical = <expected current value>` guard on both `UPDATE`s is a safety check — if the stock has moved since I last verified it (someone else did something in between), the `UPDATE` affects 0 rows instead of silently overwriting a stock level it didn't account for. **Check `ROW COUNT` after each `UPDATE` before `COMMIT` — if either is 0, `ROLLBACK` and re-derive the numbers against the then-current state instead of forcing it through.**
+- `created_by_id: NULL` — there's no real user performing this correction; if your audit tooling prefers a real user id for provenance, substitute your own membership's `user.id` in `cafe-71`.
+- `gen_random_uuid()::text` for the new row's `id` produces a valid unique string primary key but won't look like the app's usual `cuid()` format — harmless (the column is just `text`, Postgres doesn't enforce cuid shape), flagging only so it doesn't look like a typo if you're scanning the table later. Confirmed `gen_random_uuid()` is built into Postgres 18 (the image this project runs), no extension needed.
+- This only touches `cafe-71`'s "Test Event" data (the event the bug was diagnosed against). If the client's real "smith" event or other real catering events also show duplicate `CONSUME` rows once you check, the same pattern applies — I only reversed the two rows I found and verified; I did not go looking for other affected ingredients/events beyond what this investigation surfaced.
+
+---
