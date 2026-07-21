@@ -5,6 +5,7 @@ vi.mock("@ibirdos/logger", () => ({
 }));
 
 const mockEventFindFirst = vi.fn();
+const mockEventFindMany = vi.fn();
 const mockEventUpdate = vi.fn();
 const mockWriteAudit = vi.fn().mockResolvedValue(undefined);
 
@@ -12,6 +13,7 @@ vi.mock("@ibirdos/db", () => ({
   prisma: {
     event: {
       findFirst: (...args: any[]) => mockEventFindFirst(...args),
+      findMany: (...args: any[]) => mockEventFindMany(...args),
       update: (...args: any[]) => mockEventUpdate(...args),
     },
   },
@@ -80,6 +82,47 @@ describe("EventsService.delete", () => {
 
     expect(mockEventFindFirst.mock.calls[0]![0].where.workspaceId).toBe("ws-other");
     expect(mockEventUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("EventsService.list — BUG 2: Upcoming/Past tabs must be mutually exclusive", () => {
+  let svc: EventsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
+    mockEventFindMany.mockResolvedValue([]);
+  });
+
+  it("upcoming=true filters startsAt >= now", async () => {
+    await svc.list(ctx, { upcoming: true });
+    const where = mockEventFindMany.mock.calls[0]![0].where;
+    expect(where.startsAt).toEqual({ gte: expect.any(Date) });
+  });
+
+  it("upcoming=false filters startsAt < now -- this was the bug: previously no filter at all was applied here, so every event (including future ones) matched the Past tab", async () => {
+    await svc.list(ctx, { upcoming: false });
+    const where = mockEventFindMany.mock.calls[0]![0].where;
+    expect(where.startsAt).toEqual({ lt: expect.any(Date) });
+  });
+
+  it("upcoming and !upcoming filters can never both match the same event", async () => {
+    await svc.list(ctx, { upcoming: true });
+    const upcomingFilter = mockEventFindMany.mock.calls[0]![0].where.startsAt;
+    await svc.list(ctx, { upcoming: false });
+    const pastFilter = mockEventFindMany.mock.calls[1]![0].where.startsAt;
+
+    // Same instant reference point in both -- gte X and lt X can never both
+    // be true for the same startsAt value.
+    expect(upcomingFilter.gte.getTime()).toBeCloseTo(pastFilter.lt.getTime(), -2);
+    expect("gte" in upcomingFilter).toBe(true);
+    expect("lt" in pastFilter).toBe(true);
+  });
+
+  it("omitting upcoming entirely applies no date filter (unchanged behavior for other callers)", async () => {
+    await svc.list(ctx, {});
+    const where = mockEventFindMany.mock.calls[0]![0].where;
+    expect(where.startsAt).toBeUndefined();
   });
 });
 

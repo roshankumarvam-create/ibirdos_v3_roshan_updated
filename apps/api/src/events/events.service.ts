@@ -329,7 +329,16 @@ export class EventsService {
     const limit = Math.min(opts.limit ?? 50, 100);
     const where: any = { workspaceId: ctx.workspaceId, deletedAt: null };
     if (opts.status) where.status = opts.status;
-    if (opts.upcoming) where.startsAt = { gte: new Date() };
+    // BUG 2 fix: the Past tab (upcoming=false) previously fell through this
+    // truthy-only check with NO date filter at all -- `if (opts.upcoming)`
+    // is false for both `false` and `undefined`, so "Past" silently
+    // returned every event regardless of date, including future ones,
+    // which is why the same event could appear in both tabs. Not a
+    // timezone/boundary bug -- the false branch was just never handled.
+    // `undefined` (caller didn't specify at all) still gets no filter,
+    // preserving existing behavior for any caller that isn't the two tabs.
+    if (opts.upcoming === true) where.startsAt = { gte: new Date() };
+    else if (opts.upcoming === false) where.startsAt = { lt: new Date() };
     const items = await prisma.event.findMany({
       where, take: limit + 1,
       ...(opts.cursor ? { skip: 1, cursor: { id: opts.cursor } } : {}),
