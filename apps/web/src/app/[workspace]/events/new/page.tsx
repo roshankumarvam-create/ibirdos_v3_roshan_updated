@@ -331,6 +331,18 @@ function AddRecipeModal({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+// BUG 4 fix: `min` for the datetime-local input, so most browsers block
+// picking an earlier date/time directly in the picker UI. This is a
+// courtesy, not the real enforcement -- handleSubmit's own check (and the
+// server-side Zod refine) are what actually block a backdated submit,
+// since a datetime-local value can still be typed by hand.
+function todayLocalMin(): string {
+  const now = new Date();
+  now.setSeconds(0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
 export default function NewEventPage() {
   const router = useRouter();
   const params = useParams<{ workspace: string }>();
@@ -414,7 +426,21 @@ export default function NewEventPage() {
   const handleSubmit = async () => {
     const errs: Record<string, string> = {};
     if (!name.trim()) errs.name = "Event name is required";
-    if (!startsAt) errs.startsAt = "Start date & time is required";
+    if (!startsAt) {
+      errs.startsAt = "Start date & time is required";
+    } else {
+      // BUG 4 fix: compare calendar dates in the browser's own local time
+      // (what the datetime-local input actually represents to the user),
+      // not exact instants -- picking "right now" and submitting a few
+      // seconds later must not be rejected as "in the past".
+      const picked = new Date(startsAt);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      picked.setHours(0, 0, 0, 0);
+      if (picked.getTime() < today.getTime()) {
+        errs.startsAt = "Event start date must be today or in the future";
+      }
+    }
     const guests = parseInt(guestCount, 10);
     if (isNaN(guests) || guests < 1) errs.guestCount = "Must be at least 1";
 
@@ -494,6 +520,7 @@ export default function NewEventPage() {
               <input
                 type="datetime-local"
                 value={startsAt}
+                min={todayLocalMin()}
                 onChange={(e) => setStartsAt(e.target.value)}
                 className={inputCls}
               />

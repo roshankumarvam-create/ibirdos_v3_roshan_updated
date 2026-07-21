@@ -8,14 +8,30 @@ import { RequirePermission } from "../common/decorators/require-permission.decor
 import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 import { EventsService } from "./events.service";
 
-const CreateEventSchema = z.object({
+// BUG 4 fix: compare calendar dates (UTC), not exact instants -- an event
+// dated "today" but earlier than the current second must not be rejected
+// just because a few seconds passed between picking the time and
+// submitting. Rejects anything whose UTC calendar date is strictly before
+// today's UTC calendar date (i.e. genuinely backdated, like the reported
+// "Jun 10 when today is Jul 21"), not clock-skew edge cases.
+export function isTodayOrFutureUTC(iso: string): boolean {
+  const d = new Date(iso);
+  const now = new Date();
+  const dDate = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const nowDate = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return dDate >= nowDate;
+}
+
+export const CreateEventSchema = z.object({
   name: z.string().min(1).max(160),
   status: z.enum(["DRAFT", "CONFIRMED", "PREP_IN_PROGRESS", "IN_SERVICE", "COMPLETED", "CANCELLED"]).optional(),
   serviceType: z.enum(["BUFFET", "PLATED", "FAMILY_STYLE", "COCKTAIL", "BOXED", "DROP_OFF", "OTHER"]).optional(),
   customerName: z.string().max(120).optional(),
   customerContact: z.string().max(200).optional(),
   venueAddress: z.string().max(500).optional(),
-  startsAt: z.string().datetime(),
+  startsAt: z.string().datetime().refine(isTodayOrFutureUTC, {
+    message: "Event start date must be today or in the future",
+  }),
   endsAt: z.string().datetime().optional(),
   prepStartsAt: z.string().datetime().optional(),
   guestCount: z.number().int().positive(),
