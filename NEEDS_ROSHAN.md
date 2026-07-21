@@ -2,13 +2,9 @@
 
 ---
 
-## P0-1 follow-up — "Chef, and per client also Manager where applicable"
+## P0-1 follow-up — "Chef, and per client also Manager where applicable" — RESOLVED
 
-Your instruction for the remove-columns UX pass said financial visibility should be restricted for "Chef, and per client also Manager where applicable." I implemented the whole pass (recipe list/detail, ingredients list/detail, inventory, events list/detail) using `canViewFinancials(role)` — the existing, already-audited signal that's `true` for OWNER **and MANAGER**, `false` for CHEF/STAFF/CUSTOMER. I did not restrict Manager anywhere.
-
-Why I didn't guess at this: every permission check this session — including runtime startup assertions in `packages/permissions/src/index.ts` that throw if the matrix is ever changed to let CHEF hold cost-write permissions — treats MANAGER identically to OWNER for financial visibility. MANAGER explicitly holds `analytics.read`, `ingredient.update_cost`, `recipe.update_cost`, `invoice.confirm`, etc. Restricting Manager on any of these pages would be a real, security-relevant change to a currently-working role, not a UI tweak, and "where applicable" doesn't tell me which surfaces the client meant (all of them? just one? a specific report?).
-
-If the client does want Manager restricted somewhere, I need specifics: which page(s), and whether it's the same "remove the column" treatment or something else (e.g. Manager sees ingredient/recipe cost for kitchen-adjacent decisions but not event revenue/margin, or vice versa). Let me know and I'll scope it precisely rather than broadly flip the signal, which would touch far more than intended (billing, invoice confirmation, inventory adjustments, ingredient cost writes — all currently Manager-accessible by design).
+**Resolved 2026-07-21: no change needed.** Confirmed with Roshan — the client's scope only specified Chef and Staff for financial restriction, not Manager. The implementation shipped (`canViewFinancials(role)`, true for OWNER/MANAGER, false for CHEF/STAFF/CUSTOMER) is exactly correct as-is. Manager keeps full financial access across recipes, ingredients, inventory, and events, same as Owner.
 
 ---
 
