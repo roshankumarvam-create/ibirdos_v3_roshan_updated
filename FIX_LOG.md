@@ -583,3 +583,84 @@ Applied `canViewFinancials(role)` (same signal every backend redaction this sess
 **Verification:** `pnpm typecheck` (all 9 packages) clean after every commit. No automated frontend test coverage exists for any of these pages (no existing test infra for `apps/web` beyond typecheck) — **needs live verification**: log in as Chef, visit each page above, confirm the listed columns/cards are absent (not present-with-dashes) in both the rendered UI and the raw component tree; log in as Owner or Manager on the same pages, confirm every figure still renders exactly as before.
 
 ---
+
+## BUG B — Financial fields leaked on recipe edit/create pages
+
+**Two layers, both fixed.**
+
+**Layer 1 (real security bug, not just UI):** investigating the reported UI leak surfaced that `recipes.service.ts` `create()` and `update()` accepted and wrote `salePriceCents`/`goalFoodCostPct`/`targetMarginPct`/`paperCostCents`/`autoReprice` straight from the request body with **zero permission check**, even though the permission matrix has a dedicated `recipe.update_cost` permission built exactly for this (CHEF is asserted at startup to never hold it, and `POST /:id/recost` already uses it to gate its response). The controller only requires `recipe.update`/`recipe.create` — which CHEF legitimately holds to edit steps/ingredients — so nothing downstream ever checked whether the caller could touch the 5 financial fields specifically. This meant hiding the UI fields alone would have been cosmetic: a Chef could still `PATCH`/`POST` these fields directly (browser devtools, curl) and the values would persist, even though every read path already correctly hid the result.
+
+**Fix:** both methods now check `can(ctx.role, "recipe.update_cost")` and silently drop the 5 fields when the caller doesn't hold it, rather than rejecting the whole request — a Chef's legitimate name/ingredient/procedure edit in the same call still succeeds. Also checked `ingredients.service.ts`'s general `update()` for the same class of bug — it doesn't accept a cost field at all (cost changes only go through the separately-gated `POST /ingredients/:id/price`), so no equivalent gap there.
+
+**Files changed:** `apps/api/src/recipes/recipes.service.ts`
+**Commit:** `7d2933c`
+
+**Layer 2 (the reported UI bug):** both pages were 100% `"use client"` with no server-side role access (create page used `useParams()`, edit page used React's `use(params)`) — same pattern as the ingredient-detail/inventory pages fixed earlier this session. Split each into a thin server wrapper (`page.tsx`, calls `requireSession()`) and the existing interactive component (renamed `NewRecipeClient.tsx` / `EditRecipeClient.tsx`), passing `canSeeFinancials` down as a prop.
+
+Omitted entirely for Chef/Staff (not shown as "—"):
+- The whole "Cost summary" card: Total ingredient cost, Paper cost input, Total recipe cost, Portion cost, Goal food cost % input, Sell price, Actual food cost %, Margin per portion.
+- The whole "Pricing strategy" card: auto-reprice toggle, target margin %.
+- "Line cost" column in the ingredients table, and the cost hint in the ingredient search-result dropdown.
+- Layout narrows from 3-column (2 + sticky sidebar) to a single full-width column when the sidebar is hidden, with the Save button surfaced standalone.
+
+Also stopped the frontend from even attempting to send the 5 financial fields in the request body for these roles — the API already drops them regardless (Layer 1), so there's no reason to pretend submitting them would do anything.
+
+**Untouched:** name, author, category, description, portions, prep/cook time, ingredients + quantities + % utilized, procedure, photos, video — exactly what Chef/Staff need to actually edit a recipe.
+
+**Files changed:**
+- `apps/web/src/app/[workspace]/recipes/new/page.tsx` (rewritten), `NewRecipeClient.tsx` (new)
+- `apps/web/src/app/[workspace]/recipes/[id]/edit/page.tsx` (rewritten), `EditRecipeClient.tsx` (new)
+
+**Commit:** `f029e8e`
+
+**Verification:** `pnpm typecheck` (all 9 packages) clean. `pnpm --filter @ibirdos/api test` — 103/106, same 3 pre-existing failures. **Needs live verification**: as Chef, open both pages, confirm Cost summary / Pricing strategy / Line cost are absent; save a recipe with a name change and confirm the response doesn't echo a changed `salePriceCents`/etc.; as Owner or Manager, confirm both pages are unchanged and cost fields still save correctly.
+
+---
+
+## BUG C — Chef/Staff could still see (and were shown UI for) ingredient edit/delete and inventory adjust
+
+**Investigated first, as asked. Answer: server-side was already fully protected. The bug was UI-only — buttons rendered unconditionally, and one page had zero gating of any kind.**
+
+Re-verified current guards directly (not assumed from an earlier pass):
+- `PATCH /ingredients/:id` → `ingredient.update` — CHEF/STAFF don't hold it.
+- `DELETE /ingredients/:id` → `ingredient.delete` — CHEF/STAFF don't hold it.
+- `POST /ingredients/:id/price` → `ingredient.update_cost` — CHEF/STAFF don't hold it.
+- `POST /inventory/ingredients/:id/adjust`, `POST /inventory/import-csv`, `POST /inventory/transactions/:id/reverse` → all `inventory.adjust` — CHEF/STAFF don't hold it.
+
+All already correctly 403 for Chef/Staff, unchanged by this fix. What was actually broken:
+- Ingredient detail: Edit and Delete buttons rendered unconditionally regardless of role.
+- Inventory list: "+ Manual adjustment" and per-transaction "Reverse" rendered unconditionally.
+- `/inventory/adjust`: **zero gating of any kind, server or client.** A Chef (or Staff) navigating there directly got the full Receive/Write-off/Recount form and only found out they were blocked after clicking submit.
+
+**Fix:** hid the buttons/pages using the same permission checks the API already enforces (`can(role, "...")`), not new authorization logic. Split `/inventory/adjust` into a server wrapper (redirects to `/403` if the caller holds neither `inventory.adjust` nor `waste.create`) and the existing form (renamed `AdjustClient.tsx`).
+
+**A nuance surfaced during investigation, not guessed at — logged to `NEEDS_ROSHAN.md`:** the adjust page bundles three actions under one "Manual adjustment" umbrella, but they map to two different permissions. Receive and Recount require `inventory.adjust` (Chef/Staff don't hold it — fully blocked, matching the bug report). Write-off routes to `POST /yield-waste/waste`, gated by `waste.create` — which **CHEF does hold**, matching this same session's earlier P1 item "Visible Record Waste/Yield action for Chef." Implemented the permission-accurate version: Chef keeps write-off access, loses receive/recount; Staff (holds neither) is blocked from the page entirely.
+
+**Files changed:**
+- `apps/web/src/app/[workspace]/ingredients/[id]/IngredientDetailClient.tsx`, `page.tsx`
+- `apps/web/src/app/[workspace]/inventory/InventoryClient.tsx`, `page.tsx`
+- `apps/web/src/app/[workspace]/inventory/adjust/page.tsx` (rewritten), `AdjustClient.tsx` (new)
+
+**Commit:** `514a7ce`
+
+**Verification:** `pnpm typecheck` (all 9 packages) clean. **Needs live verification**: as Chef, confirm Edit/Delete are absent on ingredient detail, "Reverse" is absent on inventory transactions, "+ Manual adjustment" leads to a form offering only Write-off; as Staff, confirm navigating directly to `/inventory/adjust` redirects to `/403`; as Owner or Manager, confirm all three surfaces are unchanged.
+
+---
+
+## BUG D — Event date/time shown inconsistently across views
+
+**Investigated first, as asked — see full root-cause writeup in the conversation log. Summary:**
+
+`Event.startsAt` has exactly one write site (`EventsService.create()`, correctly converts local input to UTC via `.toISOString()`) and every frontend view reads it fresh (`cache: "no-store"`, no stale-data risk) through the same shared `formatDate`/`formatDateTime` — those are mutually consistent by construction. The actual inconsistency: `events.service.ts` independently formatted the same `event.startsAt` via raw `new Date(...).toLocaleDateString()` with no timezone specified, in two places (new-event notification text, quote-confirmation email HTML) — running in the **API's** Node process (Railway), a different runtime than the **web app** (Vercel) that renders every other screen. Neither side specified an explicit timezone, so each fell back independently to its own container's ambient default.
+
+Also confirmed: **no per-workspace timezone setting exists anywhere in the codebase** (grepped) — that's the separate, already-logged P1 item ("Event timezone: 5 AM shows as 12 PM"), which explains why the *absolute* time can be wrong. This fix is narrower: making every view agree with every other view, which doesn't require that larger feature.
+
+**Fix:** pinned `timeZone: "UTC"` explicitly on both sides — the two shared frontend formatters and the two backend call sites — so every renderer computes from the same fixed reference regardless of which of the two independent runtimes does the formatting.
+
+**Honesty check, not fully resolved with certainty:** could not reproduce the exact magnitude of the reported example (a different *month*, not just hours) from code alone — every mechanism found explains at most a day-level shift near midnight. Flagged to `NEEDS_ROSHAN.md` — if this doesn't fully resolve what's seen live, it points to a real data issue not yet found, worth a fresh side-by-side comparison with the fix live.
+
+**Files changed:** `apps/web/src/lib/format.ts`, `apps/api/src/events/events.service.ts`
+**Commit:** `a119f9d`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. `pnpm --filter @ibirdos/api test` — 103/106, same 3 pre-existing failures. **Needs live verification**: open the same event's detail page, kitchen prep list, kitchen service list, and events list side by side, confirm identical date/time; check a "new event" notification and a quote email for the same event, confirm they match too.
+
+---

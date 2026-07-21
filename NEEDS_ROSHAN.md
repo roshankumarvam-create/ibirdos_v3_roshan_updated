@@ -2,6 +2,29 @@
 
 ---
 
+## BUG C — Should Chef be able to log inventory write-offs at all?
+
+Your bug report listed "adjust/receive/write-off inventory" together as things Chef/Staff should be blocked from. I implemented the permission-accurate version instead of blocking all three uniformly, because it's not one uniform action underneath:
+
+- **Receive** and **Recount** go through `inventory.adjust` — Chef/Staff don't hold it, fully blocked, matches your report exactly.
+- **Write-off** goes through a *different* permission, `waste.create` — which **Chef legitimately holds**, and which matches a standing item from earlier in this same session's backlog: "Visible Record Waste/Yield action for Chef." Blocking write-off too would reverse that.
+
+What's live now: Chef sees `/inventory/adjust` but with only the "Write-off (spoilage/waste)" option available (Receive/Recount hidden). Staff, who holds neither permission, is blocked from the page entirely (redirects to `/403`).
+
+**If you actually want write-off blocked for Chef too** (overriding the earlier waste-logging request), that's a real product decision, not a bug fix — let me know and I'll gate it the same way as the other two. Didn't want to silently remove a capability that was explicitly asked for earlier without you confirming the change.
+
+---
+
+## BUG D — Fix applied, but I couldn't fully reproduce your exact example from code
+
+I found and fixed one concrete, verified inconsistency: the API (Railway) and web app (Vercel) are two separate processes, and the API was independently formatting `event.startsAt` for notification/email text with no explicit timezone — while the web app also had no explicit timezone. If those two containers' ambient defaults ever differed, the same timestamp could render differently between "a notification/email" and "the actual web pages." Pinned both sides to explicit UTC, which structurally guarantees they now agree.
+
+**What I can't confirm:** your example was a full date/month difference ("Nov 10, 8:42 PM" vs "7/20/2026"), and every mechanism I found in the code only explains up to a ~1-day shift near midnight, not months. I don't have a way to reproduce the "smith" event's actual data to check further.
+
+**Please re-check live once this is deployed** — pull up the same event's detail page, kitchen prep list, kitchen service list, and events list side by side. If they now all agree, the fix covered it. If they still don't, that's a genuine data issue I haven't found (possibly something specific to that one event's data, or a bug outside what I checked) — send me the exact event and the two screens/URLs you're comparing and I'll dig further with real repro info instead of guessing at mechanisms.
+
+---
+
 ## P0-1 follow-up — "Chef, and per client also Manager where applicable" — RESOLVED
 
 **Resolved 2026-07-21: no change needed.** Confirmed with Roshan — the client's scope only specified Chef and Staff for financial restriction, not Manager. The implementation shipped (`canViewFinancials(role)`, true for OWNER/MANAGER, false for CHEF/STAFF/CUSTOMER) is exactly correct as-is. Manager keeps full financial access across recipes, ingredients, inventory, and events, same as Owner.
