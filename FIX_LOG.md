@@ -868,3 +868,31 @@ Re-confirmed: `DailySales` has no `eventId`/link column in the schema, and grepp
 **Verification:** Every claim above is backed by literally running the real service method against real production data for `cafe-71`, not inference. **Live test for you to do once you're back**: open the Dashboard for `cafe-71` and confirm the $312.50 event now shows; check `/reports/vendor-price-changes` and confirm the Tofu/Charlie's-Produce entry appears; check `/reports/vendor-aging` and confirm Alki Bakery shows $128.29 while Charlie's Produce/Sysco still show $0 (expected, until the P0-3 backfill runs); confirm Daily Sales and the 5 daily-sales-fed reports still show nothing for this event (expected, pending your call on the 3 options already in `NEEDS_ROSHAN.md`).
 
 ---
+
+## P0-3 — backfill executed: 16/16 stuck CONFIRMED invoices corrected, fully re-verified
+
+The backfill SQL proposed in `NEEDS_ROSHAN.md` (P0-3 section) was executed against production, with Roshan's explicit go-ahead, in two passes:
+
+**Pass 1 (via Roshan running the SQL in Railway's dashboard query box, one statement at a time as instructed):** only 1 of 16 statements actually applied (`cmrt5lxw200lm9uv8ov74hbvs`) — confirmed the other 15 were untouched (`updatedAt` unchanged) via a full re-verification pass. Root cause: Railway's web query box does not reliably execute a full pasted multi-statement batch; it appears to have run only one of the 16 lines submitted.
+
+**Pass 2 (Roshan asked me to execute the remaining 15 directly against prod):** re-recomputed all 15 invoices' correct `subtotal_cents`/`total_cents` fresh from their *current* line items (not the earlier snapshot — the two had not drifted, but recomputed live to be certain), then ran all 15 as a single Prisma `$transaction` (one real connection/session, atomic) with the same per-row `WHERE id = ... AND workspace_id = ... AND total_cents = <expected>` guards as the original proposal. All 15 reported exactly 1 row affected, no unexpected 0s or multi-row matches.
+
+**Final verification, all 16 invoices (15 just backfilled + the 1 from the partial Railway run):** every one now has `subtotalCents === totalCents === (fresh sum of its current non-excluded lines)`. The three cafe-71 invoices specifically:
+
+| Invoice | Before | After |
+|---|---|---|
+| Sysco 935708 | subtotal $1,585.55, total **$0.00** | subtotal **$1,588.16**, total **$1,588.16** |
+| Charlie's Produce 120624947 | subtotal $1,042.80, total **$0.00** | subtotal **$363.33**, total **$363.33** |
+| Charlie's Produce TEST-TOFU-002 (the client's literal reported invoice) | subtotal/total both **null** | subtotal **$150.00**, total **$150.00** |
+
+Confirmed the flagged `INV-1001` (`cmqjg1nd6005xji3ulby3cesi`) remains untouched as intended (`subtotalCents: 60100, totalCents: null`) — still needs a human look, not included in the backfill.
+
+Swept for any other invoice still at null/0 total: 22 remain (23 minus `INV-1001`), **all `PENDING_REVIEW`, none `CONFIRMED`** — these were deliberately excluded from the backfill from the start (see the original P0-3 re-verification entry) because they aren't locked records; the fixed `confirm()` logic will correctly auto-fill or block them the next time anyone actually confirms one. No further backfill action needed for those.
+
+**P0-3 is now fully closed**: code fix live in production (confirmed via live backtest), all 16 backfillable stuck-CONFIRMED invoices corrected and re-verified against real data, only the one genuinely-anomalous invoice (`INV-1001`, lines sum to $0) still needs Roshan's manual look.
+
+**Files changed:** none (data-only production fix, no code).
+**Commit:** this entry only (docs).
+**Verification:** Full before/after re-query against production for all 16 backfilled rows plus a fresh full-table sweep, both shown above.
+
+---
