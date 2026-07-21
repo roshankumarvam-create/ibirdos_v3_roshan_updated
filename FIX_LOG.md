@@ -664,3 +664,29 @@ Also confirmed: **no per-workspace timezone setting exists anywhere in the codeb
 **Verification:** `pnpm typecheck` (all 9 packages) clean. `pnpm --filter @ibirdos/api test` — 103/106, same 3 pre-existing failures. **Needs live verification**: open the same event's detail page, kitchen prep list, kitchen service list, and events list side by side, confirm identical date/time; check a "new event" notification and a quote email for the same event, confirm they match too.
 
 ---
+
+## ISSUE 1 — Chef could still DELETE recipes (Edit was already correctly blocked)
+
+**Reported from live Chef-role testing on the "smith" event**: Chef could still see and use a working "Delete recipe" button; suspected Edit might also be exposed.
+
+**Root cause, confirmed before fixing:** `recipe.delete` existed in the `PERMISSIONS` catalog (`packages/permissions/src/index.ts`) but was **never granted to any role** in `ROLE_PERMISSIONS` — not even MANAGER. `DELETE /recipes/:id` was gated by `@RequirePermission("recipe.update")` instead — a permission CHEF legitimately holds (to edit recipe steps/ingredients) — so CHEF could delete recipes purely by accident of the wrong check being used, with no dedicated delete permission ever having been wired up for anyone. The delete button's visibility followed the same (wrong) `canEdit` boolean on both the recipe detail page and the recipe edit page, so it was never separately hidden either.
+
+**Edit was investigated and confirmed NOT a bug:** `PATCH /recipes/:id` is correctly gated by `recipe.update`, which CHEF is intentionally meant to hold per the permissions file's own design comment ("Chefs propose recipes and log yield, but not commit cost changes"). The financial fields reachable through that same endpoint (`salePriceCents`, `goalFoodCostPct`, `targetMarginPct`, `paperCostCents`, `autoReprice`) were already blocked by the earlier `recipe.update_cost` check (BUG B, commit `7d2933c`, prior session). No change made to Edit's gating — it was correct already.
+
+**Fix:**
+- Added `recipe.delete` to MANAGER's permission set (MANAGER already held explicit delete rights on every other resource — ingredients, vendors, events, daily sales — but was missing it for recipes specifically; granting it here avoids regressing MANAGER's currently-working delete capability, which was not reported as broken).
+- Changed `DELETE /recipes/:id` to check `@RequirePermission("recipe.delete")` instead of `recipe.update`.
+- Added a startup assertion in `packages/permissions` that throws if CHEF is ever granted `recipe.delete`, matching the existing pattern for `recipe.update_cost`/`ingredient.update_cost`.
+- Frontend: recipe detail page — split the single `canEdit`-gated header block so the Edit link stays gated on `canEdit` but `DeleteRecipeButton` is now gated on a new `canDelete = can(role, "recipe.delete")`. Recipe edit page — added a `canDelete` prop (computed server-side, same check) threaded into `EditRecipeClient`, gating its header "Delete" button.
+
+**Files changed:**
+- `packages/permissions/src/index.ts`
+- `apps/api/src/recipes/recipes.controller.ts`
+- `apps/web/src/app/[workspace]/recipes/[id]/page.tsx`
+- `apps/web/src/app/[workspace]/recipes/[id]/edit/page.tsx`
+- `apps/web/src/app/[workspace]/recipes/[id]/edit/EditRecipeClient.tsx`
+
+**Commits:** `2f15e2b` (backend + permission matrix), `ccf81ab` (frontend button gating)
+**Verification:** `pnpm typecheck` (all 9 packages) clean, both commits. `pnpm --filter @ibirdos/api test -- --run` — 103/106, same 3 pre-existing failures (unrelated). **Needs live verification**: as Chef, confirm the Delete button is absent on both the recipe detail page and the recipe edit page, and that `DELETE /recipes/:id` returns 403 if called directly; as Manager/Owner, confirm delete still works.
+
+---
