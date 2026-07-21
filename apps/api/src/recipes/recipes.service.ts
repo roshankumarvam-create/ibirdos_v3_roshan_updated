@@ -33,7 +33,7 @@ import {
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { computeLiveRecipeCost } from "./recipe-cost.helper";
 import { parseXLSX } from "./recipe-spreadsheet-parser";
-import { canViewFinancials, type Role } from "@ibirdos/permissions";
+import { can, canViewFinancials, type Role } from "@ibirdos/permissions";
 
 const log = moduleLogger("RecipesService");
 
@@ -134,7 +134,13 @@ export class RecipesService {
     const portionsYielded = input.totalPortions ?? input.portionsYielded ?? null;
     const prepTimeMin = input.prepTimeMinutes ?? input.prepTimeMin ?? null;
     const cookTimeMin = input.cookTimeMinutes ?? input.cookTimeMin ?? null;
-    const salePriceCents = input.actualSellPriceCents ?? input.salePriceCents ?? null;
+    // recipe.create is held by CHEF (they propose recipes) but must not let
+    // a caller set cost/price/margin fields at creation either -- same gap
+    // and same fix as update() below: recipe.update_cost is the permission
+    // that's supposed to govern this, so drop these fields for a caller who
+    // doesn't hold it rather than silently writing whatever was submitted.
+    const canSetFinancials = can(ctx.role, "recipe.update_cost");
+    const salePriceCents = canSetFinancials ? (input.actualSellPriceCents ?? input.salePriceCents ?? null) : null;
     const instructionsMd = input.procedure ?? input.instructionsMd ?? null;
 
     // Phase A: resolve ingredient IDs — auto-create when only a name is supplied.
@@ -212,10 +218,10 @@ export class RecipesService {
         totalYieldCanonical: input.totalYieldCanonical ?? null,
         totalYieldDimension: input.totalYieldDimension ?? null,
         salePriceCents,
-        goalFoodCostPct: input.goalFoodCostPct ?? null,
-        targetMarginPct: input.targetMarginPct ?? null,
-        paperCostCents: input.paperCostCents ?? null,
-        autoReprice: input.autoReprice ?? true,
+        goalFoodCostPct: canSetFinancials ? (input.goalFoodCostPct ?? null) : null,
+        targetMarginPct: canSetFinancials ? (input.targetMarginPct ?? null) : null,
+        paperCostCents: canSetFinancials ? (input.paperCostCents ?? null) : null,
+        autoReprice: canSetFinancials ? (input.autoReprice ?? true) : true,
         photoUrl: input.photoUrl ?? null,
         prepPhotoUrl: input.prepPhotoUrl ?? null,
         finalPhotoUrl: input.finalPhotoUrl ?? null,
@@ -387,7 +393,20 @@ export class RecipesService {
     });
     if (!existing) throw new NotFoundException({ code: "not_found", message: "Recipe not found" });
 
-    const salePriceCents = input.actualSellPriceCents !== undefined ? input.actualSellPriceCents : input.salePriceCents;
+    // recipe.update (held by CHEF, to edit steps/ingredients) must not let a
+    // caller write cost/price/margin fields -- that's what the separate
+    // recipe.update_cost permission exists for (CHEF is asserted at startup
+    // to never hold it). This was previously ungated: any PATCH body
+    // containing salePriceCents/goalFoodCostPct/targetMarginPct/
+    // paperCostCents/autoReprice was written regardless of caller role --
+    // the response-level redaction elsewhere in this file hid the *result*
+    // from Chef, but never stopped Chef from *setting* it via this endpoint
+    // (or a direct API call bypassing the UI entirely). Silently drop these
+    // fields rather than reject the whole request, so a Chef's legitimate
+    // name/ingredient/procedure edit still succeeds.
+    const canSetFinancials = can(ctx.role, "recipe.update_cost");
+    const salePriceCentsRaw = input.actualSellPriceCents !== undefined ? input.actualSellPriceCents : input.salePriceCents;
+    const salePriceCents = canSetFinancials ? salePriceCentsRaw : undefined;
     const portionsYielded = input.totalPortions ?? input.portionsYielded;
     const prepTimeMin = input.prepTimeMinutes ?? input.prepTimeMin;
     const cookTimeMin = input.cookTimeMinutes ?? input.cookTimeMin;
@@ -409,10 +428,10 @@ export class RecipesService {
         ...(input.totalYieldCanonical !== undefined ? { totalYieldCanonical: input.totalYieldCanonical } : {}),
         ...(input.totalYieldDimension !== undefined ? { totalYieldDimension: input.totalYieldDimension } : {}),
         ...(salePriceCents !== undefined ? { salePriceCents } : {}),
-        ...(input.goalFoodCostPct !== undefined ? { goalFoodCostPct: input.goalFoodCostPct } : {}),
-        ...(input.targetMarginPct !== undefined ? { targetMarginPct: input.targetMarginPct } : {}),
-        ...(input.paperCostCents !== undefined ? { paperCostCents: input.paperCostCents } : {}),
-        ...(input.autoReprice !== undefined ? { autoReprice: input.autoReprice } : {}),
+        ...(canSetFinancials && input.goalFoodCostPct !== undefined ? { goalFoodCostPct: input.goalFoodCostPct } : {}),
+        ...(canSetFinancials && input.targetMarginPct !== undefined ? { targetMarginPct: input.targetMarginPct } : {}),
+        ...(canSetFinancials && input.paperCostCents !== undefined ? { paperCostCents: input.paperCostCents } : {}),
+        ...(canSetFinancials && input.autoReprice !== undefined ? { autoReprice: input.autoReprice } : {}),
         ...(input.photoUrl !== undefined ? { photoUrl: input.photoUrl } : {}),
         ...(input.prepPhotoUrl !== undefined ? { prepPhotoUrl: input.prepPhotoUrl } : {}),
         ...(input.finalPhotoUrl !== undefined ? { finalPhotoUrl: input.finalPhotoUrl } : {}),
