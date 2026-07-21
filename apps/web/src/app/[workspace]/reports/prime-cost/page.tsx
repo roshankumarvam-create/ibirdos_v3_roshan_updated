@@ -10,7 +10,11 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 interface PrimeCostData {
   foodCost: number;
   laborCost: number;
+  posLaborCost: number;
+  eventLaborCost: number;
   primeCost: number;
+  posNetSales: number;
+  eventRevenue: number;
   netSales: number;
   primeCostPct: number | null;
 }
@@ -40,20 +44,47 @@ export default function PrimeCostReportPage() {
     <ReportLayout title="Prime Cost" backHref={`/${ws}/reports`} onRangeChange={setRange}>
       {() => (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {[
-              { label: "Food Cost", value: data ? `$${data.foodCost.toFixed(2)}` : "—" },
-              { label: "Labor Cost", value: data ? `$${data.laborCost.toFixed(2)}` : "—" },
-              { label: "Prime Cost", value: data ? `$${data.primeCost.toFixed(2)}` : "—" },
-              { label: "Prime Cost %", value: isLoading ? "—" : data?.primeCostPct != null ? `${data.primeCostPct}%` : "N/A" },
-            ].map((kpi) => (
-              <Card key={kpi.label}>
-                <CardBody>
-                  <div className="text-xs text-text-tertiary uppercase tracking-wider">{kpi.label}</div>
-                  <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : kpi.value}</div>
-                </CardBody>
-              </Card>
-            ))}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+            <Card>
+              <CardBody>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Food Cost</div>
+                <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : `$${(data?.foodCost ?? 0).toFixed(2)}`}</div>
+              </CardBody>
+            </Card>
+            <Card>
+              <CardBody>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Labor Cost</div>
+                <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : `$${(data?.laborCost ?? 0).toFixed(2)}`}</div>
+                {!isLoading && data && (
+                  <div className="mt-1 text-[11px] text-text-tertiary">
+                    ${data.posLaborCost.toFixed(2)} Shifts + ${data.eventLaborCost.toFixed(2)} Events
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+            <Card>
+              <CardBody>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Prime Cost</div>
+                <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : `$${(data?.primeCost ?? 0).toFixed(2)}`}</div>
+              </CardBody>
+            </Card>
+            <Card>
+              <CardBody>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Net Sales</div>
+                <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : `$${(data?.netSales ?? 0).toFixed(2)}`}</div>
+                {!isLoading && data && (
+                  <div className="mt-1 text-[11px] text-text-tertiary">
+                    ${data.posNetSales.toFixed(2)} POS + ${data.eventRevenue.toFixed(2)} Events
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+            <Card>
+              <CardBody>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Prime Cost %</div>
+                <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : data?.primeCostPct != null ? `${data.primeCostPct}%` : "N/A"}</div>
+              </CardBody>
+            </Card>
           </div>
           {data && data.netSales > 0 && (
             <Card>

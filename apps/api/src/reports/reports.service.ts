@@ -17,11 +17,62 @@ function sumNetSales(rows: Array<{ netSales: any }>): number {
   return rows.reduce((s, r) => s + Number(r.netSales), 0);
 }
 
+/** Bucket key matching the granularity logic already used by getSalesByPeriod. */
+function periodKey(date: Date, granularity: "day" | "week" | "month"): string {
+  if (granularity === "day") return date.toISOString().slice(0, 10);
+  if (granularity === "month") return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  // ISO week: Monday of the week
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  const monday = new Date(d.setDate(diff));
+  return monday.toISOString().slice(0, 10);
+}
+
 @Injectable()
 export class ReportsService {
+  /**
+   * Event-sourced revenue for a date range -- same filter as the Dashboard's
+   * AnalyticsService.eventStats() (paymentStatus PAID, not CANCELLED,
+   * startsAt in range) so this never disagrees with what the Dashboard
+   * already counts. Kept as its own small query here (rather than injecting
+   * AnalyticsService) since it's a 4-line filter, not worth a cross-module
+   * dependency for.
+   *
+   * Per P0-4 Option 3: DailySales and Events stay two genuinely separate
+   * revenue streams at the data layer (no schema change, no risk to the
+   * existing POS-reconciliation/variance feature) -- this only combines
+   * them at the report layer.
+   */
+  private async getEventRevenueForRange(workspaceId: string, from: Date, to: Date) {
+    const events = await prisma.event.findMany({
+      where: { workspaceId, deletedAt: null, paymentStatus: "PAID", status: { not: "CANCELLED" }, startsAt: { gte: from, lte: to } },
+      select: { quotedPriceCents: true, computedFoodCostCents: true, computedLaborCostCents: true },
+    });
+    return {
+      revenueCents: events.reduce((s, e) => s + (e.quotedPriceCents ?? 0), 0),
+      foodCostCents: events.reduce((s, e) => s + (e.computedFoodCostCents ?? 0), 0),
+      laborCostCents: events.reduce((s, e) => s + (e.computedLaborCostCents ?? 0), 0),
+    };
+  }
+
+  /** Same as getEventRevenueForRange, bucketed by day/week/month for getSalesByPeriod. */
+  private async getEventRevenueByPeriod(workspaceId: string, granularity: "day" | "week" | "month", from: Date, to: Date) {
+    const events = await prisma.event.findMany({
+      where: { workspaceId, deletedAt: null, paymentStatus: "PAID", status: { not: "CANCELLED" }, startsAt: { gte: from, lte: to } },
+      select: { startsAt: true, quotedPriceCents: true },
+    });
+    const buckets = new Map<string, number>();
+    for (const e of events) {
+      const key = periodKey(e.startsAt, granularity);
+      buckets.set(key, (buckets.get(key) ?? 0) + (e.quotedPriceCents ?? 0));
+    }
+    return buckets;
+  }
+
   async getFoodCostVsSales(ctx: TenantContext, range: DateRange) {
     const { workspaceId } = ctx;
-    const [invoices, sales] = await Promise.all([
+    const [invoices, sales, eventRevenue] = await Promise.all([
       prisma.invoice.findMany({
         where: { workspaceId, status: "CONFIRMED", confirmedAt: { gte: range.from, lte: range.to }, deletedAt: null },
         select: {
@@ -35,21 +86,29 @@ export class ReportsService {
         where: { workspaceId, saleDate: { gte: range.from, lte: range.to } },
         select: { netSales: true },
       }),
+      this.getEventRevenueForRange(workspaceId, range.from, range.to),
     ]);
 
+    // Food cost stays revenue-only on the sales side -- invoices already
+    // cover ingredient purchases regardless of which revenue channel
+    // (catering or walk-in) consumed them, so there's no gap on the cost
+    // side here (unlike labor, see getLaborCostVsSales).
     const foodCostCents = invoices.flatMap((i) => i.lines).reduce((s, l) => s + Number(l.extendedPriceCents), 0);
-    const netSalesCents = sumNetSales(sales) * 100;
+    const posNetSalesCents = parseFloat((sumNetSales(sales) * 100).toFixed(0));
+    const netSalesCents = posNetSalesCents + eventRevenue.revenueCents;
 
     return {
       foodCostCents,
-      netSalesCents: parseFloat(netSalesCents.toFixed(0)),
+      posNetSalesCents,
+      eventRevenueCents: eventRevenue.revenueCents,
+      netSalesCents,
       foodCostPct: pct(foodCostCents, netSalesCents),
     };
   }
 
   async getLaborCostVsSales(ctx: TenantContext, range: DateRange) {
     const { workspaceId } = ctx;
-    const [labor, sales] = await Promise.all([
+    const [labor, sales, eventRevenue] = await Promise.all([
       prisma.laborEntry.findMany({
         where: { workspaceId, workDate: { gte: range.from, lte: range.to } },
         select: { laborCost: true },
@@ -58,14 +117,28 @@ export class ReportsService {
         where: { workspaceId, saleDate: { gte: range.from, lte: range.to } },
         select: { netSales: true },
       }),
+      this.getEventRevenueForRange(workspaceId, range.from, range.to),
     ]);
 
-    const laborCost = labor.reduce((s, r) => s + Number(r.laborCost), 0);
-    const netSales = sumNetSales(sales);
+    // Labor DOES need both sides combined: LaborEntry (regular shift labor)
+    // and Event.computedLaborCostCents (per-event staff assignments) are
+    // separate tables -- event staffing isn't reflected in LaborEntry at
+    // all. Adding event revenue to the denominator without event labor
+    // cost in the numerator would understate labor cost %.
+    const posLaborCost = parseFloat(labor.reduce((s, r) => s + Number(r.laborCost), 0).toFixed(2));
+    const eventLaborCost = parseFloat((eventRevenue.laborCostCents / 100).toFixed(2));
+    const laborCost = parseFloat((posLaborCost + eventLaborCost).toFixed(2));
+    const posNetSales = parseFloat(sumNetSales(sales).toFixed(2));
+    const eventRevenueDollars = parseFloat((eventRevenue.revenueCents / 100).toFixed(2));
+    const netSales = parseFloat((posNetSales + eventRevenueDollars).toFixed(2));
 
     return {
-      laborCost: parseFloat(laborCost.toFixed(2)),
-      netSales: parseFloat(netSales.toFixed(2)),
+      posLaborCost,
+      eventLaborCost,
+      laborCost,
+      posNetSales,
+      eventRevenue: eventRevenueDollars,
+      netSales,
       laborCostPct: pct(laborCost, netSales),
     };
   }
@@ -76,7 +149,7 @@ export class ReportsService {
     const from = new Date(year, mon - 1, 1);
     const to = new Date(year, mon, 0); // last day of month
 
-    const [rent, sales] = await Promise.all([
+    const [rent, sales, eventRevenue] = await Promise.all([
       prisma.fixedCost.aggregate({
         where: { workspaceId, category: "RENT", active: true },
         _sum: { monthlyAmount: true },
@@ -85,80 +158,90 @@ export class ReportsService {
         where: { workspaceId, saleDate: { gte: from, lte: to } },
         select: { netSales: true },
       }),
+      this.getEventRevenueForRange(workspaceId, from, to),
     ]);
 
-    const rentCost = Number(rent._sum.monthlyAmount ?? 0);
-    const netSales = sumNetSales(sales);
+    const rentCost = parseFloat(Number(rent._sum.monthlyAmount ?? 0).toFixed(2));
+    const posNetSales = parseFloat(sumNetSales(sales).toFixed(2));
+    const eventRevenueDollars = parseFloat((eventRevenue.revenueCents / 100).toFixed(2));
+    const netSales = parseFloat((posNetSales + eventRevenueDollars).toFixed(2));
 
     return {
       month,
-      rentCost: parseFloat(rentCost.toFixed(2)),
-      netSales: parseFloat(netSales.toFixed(2)),
+      rentCost,
+      posNetSales,
+      eventRevenue: eventRevenueDollars,
+      netSales,
       rentPct: pct(rentCost, netSales),
     };
   }
 
   async getPrimeCost(ctx: TenantContext, range: DateRange) {
     const { workspaceId } = ctx;
-    const [food, labor, sales] = await Promise.all([
+    const [food, labor] = await Promise.all([
       this.getFoodCostVsSales(ctx, range),
       this.getLaborCostVsSales(ctx, range),
-      prisma.dailySales.findMany({
-        where: { workspaceId, saleDate: { gte: range.from, lte: range.to } },
-        select: { netSales: true },
-      }),
     ]);
 
-    const netSales = sumNetSales(sales);
+    // Reuse the two calls above rather than a third separate netSales/event
+    // query -- both already combine POS + event revenue identically, so
+    // they agree with each other by construction.
+    const netSales = labor.netSales;
+    const posNetSales = labor.posNetSales;
+    const eventRevenue = labor.eventRevenue;
     const foodCost = food.foodCostCents / 100;
     const laborCost = labor.laborCost;
-    const primeCost = foodCost + laborCost;
+    const primeCost = parseFloat((foodCost + laborCost).toFixed(2));
 
     return {
       foodCost: parseFloat(foodCost.toFixed(2)),
       laborCost: parseFloat(laborCost.toFixed(2)),
-      primeCost: parseFloat(primeCost.toFixed(2)),
-      netSales: parseFloat(netSales.toFixed(2)),
+      posLaborCost: labor.posLaborCost,
+      eventLaborCost: labor.eventLaborCost,
+      primeCost,
+      posNetSales,
+      eventRevenue,
+      netSales,
       primeCostPct: pct(primeCost, netSales),
     };
   }
 
   async getSalesByPeriod(ctx: TenantContext, granularity: "day" | "week" | "month", range: DateRange) {
     const { workspaceId } = ctx;
-    const sales = await prisma.dailySales.findMany({
-      where: { workspaceId, saleDate: { gte: range.from, lte: range.to } },
-      select: { saleDate: true, netSales: true, grossSales: true },
-      orderBy: { saleDate: "asc" },
-    });
+    const [sales, eventBuckets] = await Promise.all([
+      prisma.dailySales.findMany({
+        where: { workspaceId, saleDate: { gte: range.from, lte: range.to } },
+        select: { saleDate: true, netSales: true, grossSales: true },
+        orderBy: { saleDate: "asc" },
+      }),
+      this.getEventRevenueByPeriod(workspaceId, granularity, range.from, range.to),
+    ]);
 
-    if (granularity === "day") {
-      return sales.map((s) => ({
-        period: s.saleDate.toISOString().slice(0, 10),
-        netSales: Number(s.netSales),
-        grossSales: Number(s.grossSales),
-      }));
-    }
-
-    // Aggregate by week or month
-    const buckets = new Map<string, { netSales: number; grossSales: number }>();
+    const buckets = new Map<string, { posNetSales: number; grossSales: number }>();
     for (const s of sales) {
-      const d = new Date(s.saleDate);
-      let key: string;
-      if (granularity === "month") {
-        key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      } else {
-        // ISO week: get Monday of the week
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-        const monday = new Date(d.setDate(diff));
-        key = monday.toISOString().slice(0, 10);
-      }
-      const existing = buckets.get(key) ?? { netSales: 0, grossSales: 0 };
-      existing.netSales += Number(s.netSales);
+      const key = periodKey(s.saleDate, granularity);
+      const existing = buckets.get(key) ?? { posNetSales: 0, grossSales: 0 };
+      existing.posNetSales += Number(s.netSales);
       existing.grossSales += Number(s.grossSales);
       buckets.set(key, existing);
     }
-    return Array.from(buckets.entries()).map(([period, v]) => ({ period, ...v }));
+
+    // Union of both key sets -- a period with an event but no manual Daily
+    // Sales entry must still produce a row (previously such a day/week/
+    // month wouldn't appear at all).
+    const allKeys = new Set([...buckets.keys(), ...eventBuckets.keys()]);
+    return Array.from(allKeys).sort().map((period) => {
+      const pos = buckets.get(period) ?? { posNetSales: 0, grossSales: 0 };
+      const eventRevenueCents = eventBuckets.get(period) ?? 0;
+      const eventRevenue = eventRevenueCents / 100;
+      return {
+        period,
+        posNetSales: parseFloat(pos.posNetSales.toFixed(2)),
+        grossSales: parseFloat(pos.grossSales.toFixed(2)),
+        eventRevenue: parseFloat(eventRevenue.toFixed(2)),
+        netSales: parseFloat((pos.posNetSales + eventRevenue).toFixed(2)),
+      };
+    });
   }
 
   async getLowMarginEvents(ctx: TenantContext, threshold: number) {

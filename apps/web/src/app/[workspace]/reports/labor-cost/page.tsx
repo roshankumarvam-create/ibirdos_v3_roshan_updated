@@ -8,7 +8,11 @@ import { useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
 
 interface LaborData {
+  posLaborCost: number;
+  eventLaborCost: number;
   laborCost: number;
+  posNetSales: number;
+  eventRevenue: number;
   netSales: number;
   laborCostPct: number | null;
 }
@@ -36,18 +40,34 @@ export default function LaborCostReportPage() {
       {() => (
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-4">
-            {[
-              { label: "Labor Cost", value: data ? `$${data.laborCost.toFixed(2)}` : "—" },
-              { label: "Net Sales", value: data ? `$${data.netSales.toFixed(2)}` : "—" },
-              { label: "Labor %", value: isLoading ? "—" : data?.laborCostPct != null ? `${data.laborCostPct}%` : "N/A" },
-            ].map((kpi) => (
-              <Card key={kpi.label}>
-                <CardBody>
-                  <div className="text-xs text-text-tertiary uppercase tracking-wider">{kpi.label}</div>
-                  <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : kpi.value}</div>
-                </CardBody>
-              </Card>
-            ))}
+            <Card>
+              <CardBody>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Labor Cost</div>
+                <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : `$${(data?.laborCost ?? 0).toFixed(2)}`}</div>
+                {!isLoading && data && (
+                  <div className="mt-1 text-[11px] text-text-tertiary">
+                    ${data.posLaborCost.toFixed(2)} Shifts + ${data.eventLaborCost.toFixed(2)} Events
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+            <Card>
+              <CardBody>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Net Sales</div>
+                <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : `$${(data?.netSales ?? 0).toFixed(2)}`}</div>
+                {!isLoading && data && (
+                  <div className="mt-1 text-[11px] text-text-tertiary">
+                    ${data.posNetSales.toFixed(2)} POS + ${data.eventRevenue.toFixed(2)} Events
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+            <Card>
+              <CardBody>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Labor %</div>
+                <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : data?.laborCostPct != null ? `${data.laborCostPct}%` : "N/A"}</div>
+              </CardBody>
+            </Card>
           </div>
           <Card>
             <CardBody>

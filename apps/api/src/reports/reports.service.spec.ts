@@ -27,6 +27,11 @@ describe("ReportsService", () => {
   beforeEach(() => {
     service = new ReportsService();
     vi.clearAllMocks();
+    // Default: no PAID events in range, so every pre-existing test (written
+    // before P0-4 Option 3 combined event revenue into these reports) keeps
+    // its original expected numbers unchanged. Tests below that DO want
+    // event revenue override this per-test.
+    vi.mocked(prisma.event.findMany).mockResolvedValue([]);
   });
 
   describe("getFoodCostVsSales", () => {
@@ -177,9 +182,9 @@ describe("ReportsService", () => {
 
   describe("getPrimeCost", () => {
     it("combines food and labor costs correctly", async () => {
-      // getFoodCostVsSales uses invoice.findMany + dailySales.findMany
-      // getLaborCostVsSales uses laborEntry.findMany + dailySales.findMany
-      // getPrimeCost calls both + dailySales.findMany again
+      // getFoodCostVsSales uses invoice.findMany + dailySales.findMany + event.findMany
+      // getLaborCostVsSales uses laborEntry.findMany + dailySales.findMany + event.findMany
+      // getPrimeCost reuses both results rather than a third dailySales query
       vi.mocked(prisma.invoice.findMany).mockResolvedValue([
         { lines: [{ extendedPriceCents: 10_000 }] }, // food cost = $100
       ] as any);
@@ -199,4 +204,134 @@ describe("ReportsService", () => {
       expect(result.primeCostPct).toBe(37.5);
     });
   });
+
+  // ---------------------------------------------------------------------
+  // P0-4 Option 3 -- event revenue (and, for labor, event cost) combined
+  // with DailySales at the report layer. Same PAID/not-CANCELLED/startsAt
+  // filter as AnalyticsService.eventStats() (the Dashboard fix).
+  // ---------------------------------------------------------------------
+
+  describe("getFoodCostVsSales — event revenue combined into net sales", () => {
+    it("adds PAID event revenue to net sales but NOT to food cost", async () => {
+      vi.mocked(prisma.invoice.findMany).mockResolvedValue([
+        { lines: [{ extendedPriceCents: 10_000 }] }, // food cost = $100
+      ] as any);
+      vi.mocked(prisma.dailySales.findMany).mockResolvedValue([{ netSales: 200 }] as any); // $200 POS
+      vi.mocked(prisma.event.findMany).mockResolvedValue([
+        { quotedPriceCents: 31250, computedFoodCostCents: 20307, computedLaborCostCents: 0 }, // $312.50 event
+      ] as any);
+
+      const result = await service.getFoodCostVsSales(ctx, range);
+
+      expect(result.foodCostCents).toBe(10_000); // unchanged -- invoices already cover ingredients
+      expect(result.posNetSalesCents).toBe(20_000);
+      expect(result.eventRevenueCents).toBe(31_250);
+      expect(result.netSalesCents).toBe(51_250); // 20,000 POS + 31,250 event
+      expect(result.foodCostPct).toBe(pctOf(10_000, 51_250));
+    });
+
+    it("queries events with the same paymentStatus/status/startsAt filter as the Dashboard", async () => {
+      vi.mocked(prisma.invoice.findMany).mockResolvedValue([]);
+      vi.mocked(prisma.dailySales.findMany).mockResolvedValue([]);
+
+      await service.getFoodCostVsSales(ctx, range);
+
+      expect(vi.mocked(prisma.event.findMany).mock.calls[0]![0]).toMatchObject({
+        where: {
+          workspaceId: "ws1",
+          paymentStatus: "PAID",
+          status: { not: "CANCELLED" },
+          startsAt: { gte: range.from, lte: range.to },
+        },
+      });
+    });
+  });
+
+  describe("getLaborCostVsSales — event revenue AND event labor cost both combined", () => {
+    it("folds event labor cost into the numerator, not just event revenue into the denominator", async () => {
+      vi.mocked(prisma.laborEntry.findMany).mockResolvedValue([{ laborCost: 100 }] as any); // $100 shift labor
+      vi.mocked(prisma.dailySales.findMany).mockResolvedValue([{ netSales: 300 }] as any); // $300 POS
+      vi.mocked(prisma.event.findMany).mockResolvedValue([
+        { quotedPriceCents: 20000, computedFoodCostCents: 0, computedLaborCostCents: 5000 }, // $200 revenue, $50 event labor
+      ] as any);
+
+      const result = await service.getLaborCostVsSales(ctx, range);
+
+      expect(result.posLaborCost).toBe(100);
+      expect(result.eventLaborCost).toBe(50);
+      expect(result.laborCost).toBe(150); // $100 shift + $50 event -- NOT revenue-only
+      expect(result.posNetSales).toBe(300);
+      expect(result.eventRevenue).toBe(200);
+      expect(result.netSales).toBe(500);
+      expect(result.laborCostPct).toBe(30); // 150 / 500
+    });
+  });
+
+  describe("getRentVsSales — event revenue combined for the month", () => {
+    it("adds event revenue in the derived month range to net sales", async () => {
+      vi.mocked(prisma.fixedCost.aggregate).mockResolvedValue({ _sum: { monthlyAmount: 1000 } } as any);
+      vi.mocked(prisma.dailySales.findMany).mockResolvedValue([{ netSales: 4000 }] as any);
+      vi.mocked(prisma.event.findMany).mockResolvedValue([{ quotedPriceCents: 100000, computedFoodCostCents: 0, computedLaborCostCents: 0 }] as any);
+
+      const result = await service.getRentVsSales(ctx, "2024-01");
+
+      expect(result.posNetSales).toBe(4000);
+      expect(result.eventRevenue).toBe(1000);
+      expect(result.netSales).toBe(5000);
+      expect(result.rentPct).toBe(20); // 1000 / 5000
+    });
+  });
+
+  describe("getPrimeCost — inherits combined revenue/labor from its sub-calls", () => {
+    it("prime cost % reflects combined net sales and combined labor cost", async () => {
+      vi.mocked(prisma.invoice.findMany).mockResolvedValue([{ lines: [{ extendedPriceCents: 10_000 }] }] as any); // food = $100
+      vi.mocked(prisma.laborEntry.findMany).mockResolvedValue([{ laborCost: 50 }] as any); // shift labor = $50
+      vi.mocked(prisma.dailySales.findMany).mockResolvedValue([{ netSales: 200 }] as any); // $200 POS
+      vi.mocked(prisma.event.findMany).mockResolvedValue([
+        { quotedPriceCents: 20000, computedFoodCostCents: 0, computedLaborCostCents: 3000 }, // $200 revenue, $30 event labor
+      ] as any);
+
+      const result = await service.getPrimeCost(ctx, range);
+
+      expect(result.foodCost).toBe(100);
+      expect(result.laborCost).toBe(80); // $50 shift + $30 event
+      expect(result.primeCost).toBe(180);
+      expect(result.netSales).toBe(400); // $200 POS + $200 event
+      expect(result.primeCostPct).toBe(45); // 180 / 400
+    });
+  });
+
+  describe("getSalesByPeriod — event revenue merged per bucket, including event-only periods", () => {
+    it("merges event revenue into a day that already has a DailySales row", async () => {
+      vi.mocked(prisma.dailySales.findMany).mockResolvedValue([
+        { saleDate: new Date("2024-01-05T00:00:00Z"), netSales: 100, grossSales: 110 },
+      ] as any);
+      vi.mocked(prisma.event.findMany).mockResolvedValue([
+        { startsAt: new Date("2024-01-05T18:00:00Z"), quotedPriceCents: 5000 },
+      ] as any);
+
+      const result = await service.getSalesByPeriod(ctx, "day", range);
+
+      expect(result).toEqual([
+        { period: "2024-01-05", posNetSales: 100, grossSales: 110, eventRevenue: 50, netSales: 150 },
+      ]);
+    });
+
+    it("produces a period row for a day with an event but NO DailySales entry at all", async () => {
+      vi.mocked(prisma.dailySales.findMany).mockResolvedValue([]);
+      vi.mocked(prisma.event.findMany).mockResolvedValue([
+        { startsAt: new Date("2024-01-10T12:00:00Z"), quotedPriceCents: 31250 },
+      ] as any);
+
+      const result = await service.getSalesByPeriod(ctx, "day", range);
+
+      expect(result).toEqual([
+        { period: "2024-01-10", posNetSales: 0, grossSales: 0, eventRevenue: 312.5, netSales: 312.5 },
+      ]);
+    });
+  });
 });
+
+function pctOf(numerator: number, denominator: number): number {
+  return parseFloat(((numerator / denominator) * 100).toFixed(2));
+}

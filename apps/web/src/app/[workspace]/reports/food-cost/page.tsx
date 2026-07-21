@@ -11,6 +11,8 @@ import {
 
 interface FoodCostData {
   foodCostCents: number;
+  posNetSalesCents: number;
+  eventRevenueCents: number;
   netSalesCents: number;
   foodCostPct: number | null;
 }
@@ -52,6 +54,11 @@ export default function FoodCostReportPage() {
                 <div className="mt-1 text-2xl font-semibold">
                   {isLoading ? "—" : `$${((data?.netSalesCents ?? 0) / 100).toFixed(2)}`}
                 </div>
+                {!isLoading && data && (
+                  <div className="mt-1 text-[11px] text-text-tertiary">
+                    ${(data.posNetSalesCents / 100).toFixed(2)} POS + ${(data.eventRevenueCents / 100).toFixed(2)} Events
+                  </div>
+                )}
               </CardBody>
             </Card>
             <Card>
