@@ -34,22 +34,28 @@ interface RecipeDetail {
   portionVolumeMl: number | null;
   prepTimeMin: number | null;
   cookTimeMin: number | null;
-  goalFoodCostPct: number | null;
-  paperCostCents: number | null;
-  salePriceCents: number | null;
+  // Financial fields below are all optional, not just nullable: the API
+  // omits them from the response entirely (rather than sending null) for
+  // roles without financial visibility (Chef/Staff) -- see
+  // canViewFinancials()/stripFinancialFields() in recipes.service.ts. Every
+  // read site must handle "key absent" (undefined), not just "key present
+  // with a null value".
+  goalFoodCostPct?: number | null;
+  paperCostCents?: number | null;
+  salePriceCents?: number | null;
   // Live cost fields (source of truth)
-  liveCostCents: number;
-  livePerPortionCostCents: number | null;
-  liveFoodCostPct: number | null;
-  liveMarginPct: number | null;
-  liveStaleness: "FRESH" | "MISSING_PRICE" | "MISSING_INGREDIENT";
-  liveBreakdown: LiveBreakdownLine[];
+  liveCostCents?: number | null;
+  livePerPortionCostCents?: number | null;
+  liveFoodCostPct?: number | null;
+  liveMarginPct?: number | null;
+  liveStaleness?: "FRESH" | "MISSING_PRICE" | "MISSING_INGREDIENT";
+  liveBreakdown?: LiveBreakdownLine[];
   // Cached (may lag by recost debounce window)
-  cachedCostCents: number | null;
-  cachedCostUpdatedAt: string | null;
+  cachedCostCents?: number | null;
+  cachedCostUpdatedAt?: string | null;
   // Legacy — kept for backwards compat with non-upgraded clients
-  cachedCostMicrocents: number | null;
-  cachedCostPerPortionMicrocents: number | null;
+  cachedCostMicrocents?: number | null;
+  cachedCostPerPortionMicrocents?: number | null;
   photoUrl: string | null;
   prepPhotoUrl: string | null;
   finalPhotoUrl: string | null;
@@ -60,12 +66,12 @@ interface RecipeDetail {
   updatedAt: string;
 }
 
-function fmtCents(cents: number | null) {
+function fmtCents(cents: number | null | undefined) {
   if (cents == null) return "—";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 
-function fmtPct(pct: number | null) {
+function fmtPct(pct: number | null | undefined) {
   if (pct == null) return "—";
   return `${pct.toFixed(1)}%`;
 }
@@ -103,8 +109,13 @@ export default async function RecipeDetailPage({
     ? new Date(recipe.cachedCostUpdatedAt).toLocaleString()
     : null;
 
-  function FoodCostBadge({ pct }: { pct: number | null }) {
-    if (pct === null) {
+  function FoodCostBadge({ pct }: { pct: number | null | undefined }) {
+    // Loose check: catches both `null` (field genuinely has no value) and
+    // `undefined` (field was stripped from the API response entirely
+    // because this role can't see financials -- see canViewFinancials).
+    // A strict `=== null` check here missed the undefined case and crashed
+    // on `pct.toFixed(1)` below for Chef/Staff.
+    if (pct == null) {
       return (
         <div className="rounded-lg border border-bg-border bg-bg-inset px-4 py-2 text-center">
           <div className="text-[10px] uppercase tracking-wider text-text-tertiary">Food cost</div>
