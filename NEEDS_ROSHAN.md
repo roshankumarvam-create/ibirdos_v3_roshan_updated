@@ -339,7 +339,13 @@ Let me know if you want these run as-is, want the flagged `INV-1001`/`vendor1` i
 
 ---
 
-## BUG 3 — Does the customer's quote total include labor, or is labor purely an internal cost?
+## BUG 3 — Does the customer's quote total include labor, or is labor purely an internal cost? — RESOLVED
+
+**Resolved: labor IS billed to the customer.** Fixed in all 3 code paths (see `FIX_LOG.md` for the overnight-batch entry) — `computeLiveQuoteTotalCents()`, the saved event detail page's Quote Summary (`MenuSection`), and the frontend Profit/Margin fallback calc all now include labor, matching the create-event page and the actual `sendQuote()` customer email, which already did. See the new section below for the backfill needed on already-paid events.
+
+<details><summary>Original question (kept for history)</summary>
+
+
 
 Three places in the code disagree, and this isn't cosmetic — it decides what counts as real revenue.
 
@@ -355,6 +361,31 @@ So `sendQuote()` and `computeLiveQuoteTotalCents()` — one downstream of the ot
 - If labor should **NOT** be revenue: the create-event page and `sendQuote()`'s customer email are the ones that need fixing (strip labor out), and any already-sent quote/invoice that included labor may have overbilled a real client — a conversation with affected clients might be needed, not just a code fix.
 
 Either direction is a quick, mechanical code change once you tell me which one is correct — I just don't want to guess at something that changes what a customer is billed or how revenue is reported.
+
+</details>
+
+---
+
+## BUG 3 — backfill SQL for the 1 already-PAID event undercounted by the labor bug
+
+**Not run.** Now that labor is correctly included in `computeLiveQuoteTotalCents()` (see `FIX_LOG.md`), any event paid *before* this fix has a `quotedPriceCents` frozen without its labor amount. Swept all `PAID` events workspace-wide for `laborTotalCents > 0` with a frozen `quotedPriceCents`: **only one** is affected.
+
+| Event | Workspace | Current `quotedPriceCents` | `laborTotalCents` | Corrected |
+|---|---|---|---|---|
+| `cmruvq0p9000i9tkt1x1gpy5v` ("zdvs") | `cmrt5jccr00l79uv86uqao2vv` | $3,789.00 | $250.00 | **$4,039.00** |
+
+Total revenue undercounted across all of production: **$250.00**, on this one event.
+
+**Not in scope of this backfill, flagging separately:** the frontend's Profit/Margin calc actually prefers `EventStaffAssignment`-derived labor (`staffLaborCents`) over the simple `laborTotalCents` estimate when staff assignments exist (`staffLaborCents || event.laborTotalCents`). `computeLiveQuoteTotalCents()` — and this backfill — only ever look at `laborTotalCents`, matching the create-page/`sendQuote()` formula exactly as those two already worked. If you also want staff-assignment-based labor billed as part of the customer's quote total (a different, bigger question — should the customer's bill reflect actual assigned staff-hours rather than the simple estimate?), that's a separate decision, not guessed at here.
+
+```sql
+-- zdvs (cmruvq0p9000i9tkt1x1gpy5v) -- guarded by current quotedPriceCents so
+-- this is a no-op if anything has changed since this was checked.
+UPDATE events SET quoted_price_cents = 403900, updated_at = now()
+  WHERE id = 'cmruvq0p9000i9tkt1x1gpy5v' AND workspace_id = 'cmrt5jccr00l79uv86uqao2vv' AND quoted_price_cents = 378900;
+```
+
+Run this the same way as the P0-3 invoice backfill (single connection, check "1 row affected", `ROLLBACK`/investigate if it shows 0 — means the event changed since I checked). After running, the Dashboard/Reports for that event's workspace will show $250 more revenue and correspondingly different margin for that one event.
 
 ---
 

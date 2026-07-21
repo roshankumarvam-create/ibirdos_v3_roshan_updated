@@ -972,3 +972,27 @@ This is a real, multi-file, security-sensitive feature — not a bug fix. Not bu
 **Overall verification for this batch:** `pnpm typecheck` (all 9 packages) clean after every commit. Full API suite 120/123 pass (same 3 pre-existing unrelated failures throughout). Bugs 1 and 2 additionally live-backtested against real production data in an isolated test workspace. Nothing deployed — Roshan will deploy and live-test.
 
 ---
+
+## Overnight batch — BUG 3 (decision applied), P1 quick wins, BUG 5 (public quote page)
+
+### BUG 3 — labor now included in the quote total everywhere — FIXED
+
+**Decision applied (made by Roshan): labor IS billed to the customer.** Fixed all 3 conflicting code paths from the prior investigation:
+
+- `computeLiveQuoteTotalCents()` (`apps/api/src/events/events.service.ts`) — the function that freezes `Event.quotedPriceCents` (= revenue for Dashboard/Reports) at `markAsPaid()` time. Added a `laborTotalCents` parameter (defaults to 0, backward compatible), added to the total. `markAsPaid()` now passes `event.laborTotalCents`.
+- `MenuSection` (the saved event detail page's "Quote Summary") — previously received **no labor prop at all**; `computedTotal` was menu subtotal + markup only. This was the exact reported bug ($4,414 at creation vs. $3,789 saved). Now takes `laborTotalCents`, includes it in the total, and shows a "Labor" line in the breakdown when > 0.
+- `events/[id]/page.tsx`'s `liveQuoteTotalCents` (the Profit/Margin fallback when no persisted revenue exists yet) — same fix.
+
+**Double-count check, done deliberately:** revenue now includes billed labor, and `profit = revenue - foodCost - laborCost` still subtracts the real labor cost exactly once — this is correct "bill for a service, then subtract what it cost to deliver" accounting, not a double-count. Verified this reasoning against `computeMarginPct`'s existing formula, unchanged.
+
+**Live-backtested against production** (isolated `roshantest` workspace, cleaned up after): created an event with a $3,789 menu item, $625 labor, 0% markup — `markAsPaid()` now freezes `quotedPriceCents = $4,414.00`, reproducing the client's exact reported numbers.
+
+**Backfill needed for already-paid events:** swept every `PAID` event workspace-wide for `laborTotalCents > 0` with a frozen `quotedPriceCents` — **exactly 1 affected in all of production** (`cmruvq0p9000i9tkt1x1gpy5v`, "zdvs"), undercounted by $250.00 ($3,789.00 → should be $4,039.00). Guarded backfill SQL (not run) in `NEEDS_ROSHAN.md`.
+
+**Flagged, not in scope:** the frontend's Profit/Margin calc prefers `EventStaffAssignment`-derived labor over the simple `laborTotalCents` estimate when staff assignments exist. This fix and its backfill only touch `laborTotalCents`, matching exactly what the create-page/`sendQuote()` already used. Whether staff-assignment-based labor should *also* be billed to the customer is a separate, bigger question, not guessed at here.
+
+**Files changed:** `apps/api/src/events/events.service.ts`, `apps/api/src/events/events.service.spec.ts` (4 new tests), `apps/web/src/app/[workspace]/events/[id]/menu-section.tsx`, `apps/web/src/app/[workspace]/events/[id]/page.tsx`
+**Commit:** `23454b6`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. New tests pass. Live backtest against production confirmed exact reported numbers. **Live test for Roshan**: open a paid event with labor cost, confirm the same total shows on the create-page-equivalent view and the saved Quote Summary; check Dashboard revenue reflects the labor-inclusive total for any event paid after this deploys.
+
+---
