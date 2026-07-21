@@ -830,3 +830,41 @@ Three scenarios, all **PASS**:
 **Verification:** Live-backtested against real production data in an isolated test workspace (`roshantest`) as described above — all 3 scenarios PASS, matching every required behavior in the bug report. **Live test for you to do once you're back**: open one of the 22 still-`PENDING_REVIEW` stale invoices (e.g. `cmrq7e9ze00ft104ywzy6xz4z`) and confirm it — should now either succeed with a corrected total or block with a clear reconciliation message, never silently save at $0 again.
 
 ---
+
+## P0-4 re-verification — Dashboard fix confirmed working with real data; found and explained the two NEW report complaints; Daily Sales gap unchanged, still a decision
+
+**Asked to investigate fresh with real data, check what's already fixed vs still broken, and flag scope rather than rebuild reporting unattended. No code change was needed — this is a verification + root-cause report.**
+
+### Is the P0-4 Dashboard fix (`99ef0b3`) still in the code? Yes.
+
+`AnalyticsService.eventStats()` still filters `paymentStatus: "PAID"` / `status: { not: "CANCELLED" }`, and `EventsService.markAsPaid()` still calls `rollupCosts()` after freezing revenue. Both confirmed present and correct by reading the current files.
+
+### Real-data check — found the client's literal $312.50 event and ran the actual Dashboard query against it
+
+Event `cmrs4hn1500jf9uv8ywaqe6wn` ("Test Event", `cafe-71`) — `quotedPriceCents: 31250`, `computedFoodCostCents: 20307` — exactly $312.50 / $203.07, the client's reported numbers. Called `AnalyticsService.summary(ctx, 30)` for real (no mocks) against `cafe-71`:
+
+```json
+{ "eventCount": 1, "eventRevenueCents": 31250, "eventFoodCostCents": 20307, "eventLaborCostCents": 0, "eventMarginPct": 35.0176 }
+```
+
+**The Dashboard shows this event correctly right now** — $312.50 revenue, $203.07 food cost, 35.02% margin, matching the client's reported numbers almost exactly (their "35%" vs the precise 35.0176%). The fix works. Also noticed `AnalyticsService.summary()` computes `eventMarginPct` **live** from revenue/food-cost/labor-cost, not by reading the stored `Event.computedMarginPct` field — more robust than the original P0-4 writeup assumed, and it's why the Dashboard is correct here even though this specific event's stored `computedMarginPct` is still `null` (see below).
+
+### New finding — 2 PAID events (including this exact one) have a stale null `computedMarginPct`, same deploy-lag cause as P0-3
+
+This event's `frozenAt`/`createdAt` is 2026-07-19 — before the same ~2.4-day Railway deploy gap identified in the P0-3 re-verification (fix committed 2026-07-19, first live deploy 2026-07-21T05:57:02Z). `markAsPaid()`'s `rollupCosts()` call didn't exist in the *running* code yet when this event was paid, so `computedMarginPct` was never backfilled onto the row. Queried all PAID events: only **2** total have this staleness (`cmrs4hn1500jf9uv8ywaqe6wn` above, and `cmrrvqmj3004c9uv8t1cnjdj8` / "ans event" in another test workspace). Consequence: `ReportsService.getLowMarginEvents()` filters `computedMarginPct: { not: null }`, so these 2 events are **silently missing** from that one report specifically (Dashboard and `getCateringVsEventProfit` both compute margin live and are unaffected — verified both directly). Self-heals the moment either event's menu is edited again (two other call sites already trigger `rollupCosts()` on menu changes) — not filing this as a bug to fix, just flagging exactly what's affected: open + re-save either event's menu once to force the recompute, or wait for the next natural edit.
+
+### The two NEW client complaints not covered by the original P0-4 investigation — both traced to real root causes
+
+**"Vendor Price Changes showed no results"** — `ReportsService.getVendorPriceChangeReport()` requires **2+ price points** for the same (ingredient, vendor) pair to compute a % change (a single price is not a "change"). Called it for real against `cafe-71`: it returns a real result right now — Tofu, Charlie's Produce, $0.00964/g → $0.01102/g, **+14.32%**, 2 data points. **The report itself has no bug.** The client's "no results" almost certainly happened before this workspace had two confirmed invoices for the same ingredient/vendor yet — very plausibly *because of* P0-3 (an invoice stuck unconfirmed at $0 total never reaches `updatePrice()`, so it never creates a price-history point at all). This should already be resolved for the client now that P0-3's fix is live and more invoices are confirming successfully.
+
+**"Vendor Aging only showed the invoice whose total saved correctly"** — `ReportsService.getVendorAging()` requires `totalCents: { not: null }` but does *not* exclude `totalCents: 0`. Called it for real against `cafe-71`: **Alki Bakery** (a correctly-totaled invoice) shows a real $128.29 balance; **Charlie's Produce** and **Sysco** both appear in the list but show **$0** across every aging bucket — because their real confirmed invoices are exactly the P0-3 stale-total rows (`totalCents: 0`). **This is the same P0-3 root cause, not a separate bug in the aging report.** The 17-invoice backfill proposed in `NEEDS_ROSHAN.md` (P0-3 section) is what fixes this too — once those totals are corrected, their real balances will appear here automatically, no change needed to `getVendorAging()` itself.
+
+### Daily Sales / 5-of-8 reports — unchanged, still correctly flagged as a decision, not rebuilt
+
+Re-confirmed: `DailySales` has no `eventId`/link column in the schema, and grepped every `dailySales.create`/`update`/`upsert` call site in `apps/api/src` — all live inside `daily-sales.service.ts`'s manual-entry flow only, nothing in `events.service.ts` writes to it. Structurally identical to what the prior P0-4 entry found; nothing has changed. Per your explicit instruction not to build large reporting rework unattended, this stays exactly as already documented in `NEEDS_ROSHAN.md` ("P0-4 — Daily Sales and most Reports are structurally disconnected from Events") — not touched, not guessed at.
+
+**Files changed:** none — investigation and direct real-data verification only (called the actual `AnalyticsService`/`ReportsService` methods via `tsx` against production, no mocks, read-only, no side effects to clean up).
+**Commit:** none (docs-only; see next commit).
+**Verification:** Every claim above is backed by literally running the real service method against real production data for `cafe-71`, not inference. **Live test for you to do once you're back**: open the Dashboard for `cafe-71` and confirm the $312.50 event now shows; check `/reports/vendor-price-changes` and confirm the Tofu/Charlie's-Produce entry appears; check `/reports/vendor-aging` and confirm Alki Bakery shows $128.29 while Charlie's Produce/Sysco still show $0 (expected, until the P0-3 backfill runs); confirm Daily Sales and the 5 daily-sales-fed reports still show nothing for this event (expected, pending your call on the 3 options already in `NEEDS_ROSHAN.md`).
+
+---
