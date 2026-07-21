@@ -2,6 +2,16 @@
 
 ---
 
+## P0-1 follow-up — "Chef, and per client also Manager where applicable"
+
+Your instruction for the remove-columns UX pass said financial visibility should be restricted for "Chef, and per client also Manager where applicable." I implemented the whole pass (recipe list/detail, ingredients list/detail, inventory, events list/detail) using `canViewFinancials(role)` — the existing, already-audited signal that's `true` for OWNER **and MANAGER**, `false` for CHEF/STAFF/CUSTOMER. I did not restrict Manager anywhere.
+
+Why I didn't guess at this: every permission check this session — including runtime startup assertions in `packages/permissions/src/index.ts` that throw if the matrix is ever changed to let CHEF hold cost-write permissions — treats MANAGER identically to OWNER for financial visibility. MANAGER explicitly holds `analytics.read`, `ingredient.update_cost`, `recipe.update_cost`, `invoice.confirm`, etc. Restricting Manager on any of these pages would be a real, security-relevant change to a currently-working role, not a UI tweak, and "where applicable" doesn't tell me which surfaces the client meant (all of them? just one? a specific report?).
+
+If the client does want Manager restricted somewhere, I need specifics: which page(s), and whether it's the same "remove the column" treatment or something else (e.g. Manager sees ingredient/recipe cost for kitchen-adjacent decisions but not event revenue/margin, or vice versa). Let me know and I'll scope it precisely rather than broadly flip the signal, which would touch far more than intended (billing, invoice confirmation, inventory adjustments, ingredient cost writes — all currently Manager-accessible by design).
+
+---
+
 ## P0-1 — Chef/Staff financial-visibility rule: full endpoint list for live Chef-account testing
 
 Applied your rule precisely: operational fields stay, financial fields (cost/price/margin/vendor/price-history/revenue/profit) are stripped from JSON for endpoints Chef legitimately calls, and purely-financial endpoints/pages stay 403'd. **No ambiguous cases came up this round** — every gap found was a clear "this field is a dollar amount, strip it" case, consistent with the redaction pattern already established elsewhere in the code, so nothing is being guessed at or deferred here.

@@ -534,3 +534,52 @@ Every fix below gates on `canViewFinancials(ctx.role)` — already-established, 
 **Commits:** `4006972`, `24d6610`, `d126779`, `65c867c`.
 
 ---
+
+## P0-1 ROUND 3 — frontend crash fix + remove-columns UX (two client-reported issues)
+
+**Issue 1 (bug): recipe detail page crashed ("Something went wrong", ref 474604855) for Chef/Staff.**
+
+Root cause: `FoodCostBadge` in `recipes/[id]/page.tsx` checked `pct === null` (strict), but the backend redaction (all prior rounds) omits stripped fields from the JSON response entirely rather than sending `null` — so `recipe.liveFoodCostPct` arrives as `undefined` for Chef/Staff, not `null`. `undefined === null` is `false`, so the null-guard never fired and execution fell through to `pct.toFixed(1)` on `undefined`.
+
+Investigated every page rendering financial data for the same bug class and found two more instances: `ingredients/[id]/page.tsx` had a **second real crash** (`ing.priceHistory.length` on an omitted-not-nulled array), and `recipes/page.tsx`'s `MarginBadge` had the identical strict-check bug (non-crashing here, but silently showed a false "HIGH" danger badge on every recipe row). Traced the event detail page's much heavier inline profit/margin arithmetic and confirmed it does NOT crash (already guarded throughout via `??`/ternaries) — it just shows misleading `$0.00`/`—` values, which Issue 2 addresses.
+
+Fixed all three with loose (`== null`) checks, widened every affected TS interface field from `T | null` to optional (`field?: T | null`) to match what the API actually sends, and widened the shared local `fmtCents`/`fmtPct` helpers to accept `undefined`.
+
+**Files changed:** `apps/web/src/app/[workspace]/recipes/[id]/page.tsx`, `apps/web/src/app/[workspace]/ingredients/[id]/page.tsx`, `apps/web/src/app/[workspace]/recipes/page.tsx`
+**Commits:** `82bb474`, `a2e7ac8`
+**Verification:** `pnpm typecheck` clean after each fix. Grepped the whole `apps/web` tree for the same `=== null` pattern on cost/price/margin-named variables both mid-pass and again at the end — no further instances found anywhere, including kitchen pages (which render no financial fields at all).
+
+**Issue 2 (UX): replace "—" with removing the column/field entirely for roles without financial visibility.**
+
+Applied `canViewFinancials(role)` (same signal every backend redaction this session is built on — OWNER/MANAGER `true`, CHEF/STAFF/CUSTOMER `false`) across every surface the client named plus events (explicitly requested "apply consistently... across recipes, ingredients, inventory, events, reports"):
+
+- **Recipes list** — Live cost/Sale/Margin `<th>`+`<td>` pairs, the inline margin badge, and the LOCKED indicator are omitted entirely, not rendered-then-hidden.
+- **Recipe detail** — the whole "Cost summary" sidebar card is omitted; grid layout goes full-width single-column instead of leaving an empty gap. `IngredientsEditor`'s "Line cost" column omitted (added a `canSeeFinancials` prop, same pattern as its existing `canEdit` prop).
+- **Ingredients list** — "Cost" column omitted.
+- **Ingredient detail** — split the page (was 100% `"use client"` with no server-side role access) into a server wrapper (`page.tsx`, calls `requireSession()`) and the existing interactive component (renamed `IngredientDetailClient.tsx`). "Current cost" key-stat box and the whole "Price history" card omitted. Also hid the Edit form's "Current price" input for the same roles — beyond the literal display-only ask, but Chef doesn't hold `ingredient.update_cost` either, so showing an editable price field that would 403 on save is a failure mode worth closing while already in this file for the same reason. Vendor has no standalone section in this page (only inside price-history rows), so hiding price history covers it.
+- **Inventory** — same server-wrapper split (`InventoryClient.tsx`). "Unit cost" column (Current stock tab) and "Cost" column (Transaction history tab) omitted.
+- **Events list** — Revenue/Food/Labor/Margin columns omitted.
+- **Event detail** — KPI row narrows from 6 cards to just "Guests" (grid adjusts from 6-column to plain 2-up instead of leaving 5 empty slots). `MenuSection`'s "Quote Summary" box and "Unit price"/"Line total" columns omitted. `ShortageBanner`'s "Est. cost to order" column omitted (quantity/gap columns needed for kitchen prep stay). Ingredient-requirements table's "Last price" column omitted. Staff card's hourly-rate and total-labor lines omitted (name/role/hours needed for coordination stay).
+- **Reports** — no change needed; Chef/Staff never reach `/reports` at all (existing server-side `requireRole` redirect from earlier this session).
+
+**Additional leak found and fixed while implementing this:** `event.staff[].hourlyRateCents` (employee pay rate) was never touched by `redactEventFinancials()` in any prior round — Chef could see coworkers' hourly wages on the event detail page. Fixed at the source (`events.service.ts`), not just hidden in the UI.
+
+**Also fixed a real correctness bug found along the way:** `MenuSection`'s `hasOverride = mi.unitPriceCentsOverride !== null` evaluated `true` for every menu item once the field started arriving as `undefined` (omitted) instead of `null` for Chef/Staff — every item falsely showed an "overridden" badge. Fixed to `canSeeFinancials && mi.unitPriceCentsOverride != null`.
+
+**Not restricted: Manager.** Your instruction said "Chef, and per client also Manager where applicable" — logged to `NEEDS_ROSHAN.md` rather than guessing which surfaces, since every permission check this session (including runtime assertions) treats Manager identically to Owner for financial visibility, and changing that is a security-relevant decision, not a UI tweak.
+
+**Files changed:**
+- `apps/api/src/events/events.service.ts` (hourlyRateCents redaction)
+- `apps/web/src/app/[workspace]/recipes/page.tsx`
+- `apps/web/src/app/[workspace]/recipes/[id]/page.tsx`, `IngredientsEditor.tsx`
+- `apps/web/src/app/[workspace]/ingredients/page.tsx`
+- `apps/web/src/app/[workspace]/ingredients/[id]/page.tsx` (rewritten), `IngredientDetailClient.tsx` (new)
+- `apps/web/src/app/[workspace]/inventory/page.tsx` (rewritten), `InventoryClient.tsx` (new)
+- `apps/web/src/app/[workspace]/events/page.tsx`
+- `apps/web/src/app/[workspace]/events/[id]/page.tsx`, `menu-section.tsx`, `shortage-banner.tsx`
+
+**Commits:** `b3e6d7a`, `7d86a26`, `b2d67f2`, `562ad03`, `10f033d`, `19b91fd`, `217b7ec`, `b58abb5`
+
+**Verification:** `pnpm typecheck` (all 9 packages) clean after every commit. No automated frontend test coverage exists for any of these pages (no existing test infra for `apps/web` beyond typecheck) — **needs live verification**: log in as Chef, visit each page above, confirm the listed columns/cards are absent (not present-with-dashes) in both the rendered UI and the raw component tree; log in as Owner or Manager on the same pages, confirm every figure still renders exactly as before.
+
+---
