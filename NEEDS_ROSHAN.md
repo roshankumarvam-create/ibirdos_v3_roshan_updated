@@ -2,6 +2,14 @@
 
 ---
 
+## Outstanding-shortage ledger — auto-resolve-on-receive fast-follow (not built, flagged not guessed)
+
+Built exactly as approved: immutable row per shortfall, manual "Mark resolved" action, live read-only "stock now sufficient" badge. Deliberately did NOT build auto-resolve-on-receive (a shortage row automatically clearing itself the moment enough stock arrives) — you flagged the risk yourself (recreating the exact recompute-and-lose-history trap this whole feature exists to avoid), and I agree it needs real design, not a quick hook.
+
+If/when you want it: the honest version isn't "hook `RECEIVE` transactions and auto-clear" (too blunt — a RECEIVE for a *different* event's needs shouldn't silently resolve *this* event's shortage, and partial receives need partial-resolve semantics) — it's closer to a small reconciliation job that, on each `RECEIVE`, checks unresolved rows for that ingredient ordered oldest-first and offers/auto-applies against them specifically, still leaving the row itself immutable (add a `stockReceivedCanonical` running counter rather than mutating `shortCanonical`). That's real design + a queue/worker touchpoint, not a fast patch — let me know if/when you want to scope it.
+
+---
+
 ## URGENT-1 — should shortage-consumption be allowed to go negative instead of deduct-to-zero?
 
 **Fixed the actual bug (kitchen tasks silently consuming nothing on shortage) without guessing on this part** — see `FIX_LOG.md` "URGENT-1". Current shipped behavior: on a shortage, consume whatever stock IS available and floor at zero, recording the shortfall in the transaction note and audit metadata. Stock never goes negative.
