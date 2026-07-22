@@ -12,6 +12,12 @@ import {
   Button, Badge,
 } from "@ibirdos/ui";
 
+const CATEGORIES = [
+  "PRODUCE", "PROTEIN", "DAIRY", "DRY_GOODS", "SPICES",
+  "OIL_VINEGAR", "BEVERAGE", "FROZEN", "BAKERY",
+  "PACKAGING", "CLEANING", "OTHER",
+] as const;
+
 interface PriceHistory {
   id: string;
   pricePerCanonicalMicrocents: number;
@@ -301,6 +307,7 @@ function EditForm({
   onError: (msg: string) => void;
 }) {
   const [name, setName] = useState(ing.name);
+  const [category, setCategory] = useState(ing.category);
   const [preferredDisplayUnit, setPreferredDisplayUnit] = useState(ing.preferredDisplayUnit ?? "");
   const [reorderThreshold, setReorderThreshold] = useState(
     ing.reorderThresholdCanonical != null ? String(ing.reorderThresholdCanonical) : "",
@@ -335,6 +342,7 @@ function EditForm({
     }
     const res = await api.patch<IngredientDetail>(`/ingredients/${ing.id}`, {
       name: name.trim() || undefined,
+      category,
       preferredDisplayUnit: preferredDisplayUnit.trim() || undefined,
       reorderThresholdCanonical: reorderThreshold ? parseFloat(reorderThreshold) : undefined,
       notes: notes.trim() || undefined,
@@ -359,6 +367,14 @@ function EditForm({
           <div>
             <label className={labelCls}>Name</label>
             <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div>
+            <label className={labelCls}>Category</label>
+            <select className={inputCls} value={category} onChange={(e) => setCategory(e.target.value)}>
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c.replace("_", " ").toLowerCase()}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className={labelCls}>Display unit</label>
