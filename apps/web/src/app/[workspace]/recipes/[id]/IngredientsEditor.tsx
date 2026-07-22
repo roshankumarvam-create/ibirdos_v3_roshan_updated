@@ -228,7 +228,13 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
               )}
             </td>
 
-            {/* % Utilized */}
+            {/* % Utilized -- blank/null here means "no override, costed at the
+                ingredient's own default yield %" (100% unless set otherwise),
+                NOT "no data". Left as a placeholder rather than pre-filling
+                100 deliberately: pre-filling would silently persist an
+                explicit 100% override the moment this field is blurred
+                without being touched, which could stop this line from
+                tracking a later change to the ingredient's own default. */}
             <td className="px-4 py-1.5 text-right">
               {canEdit ? (
                 <input
@@ -238,15 +244,19 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
                   max="200"
                   className="w-16 bg-transparent border-b border-transparent hover:border-bg-border focus:border-primary focus:outline-none text-sm text-right tabular-nums"
                   defaultValue={line.percentUtilized ?? ""}
-                  placeholder="—"
+                  placeholder="100"
+                  title="Blank = uses the ingredient's own default yield % (usually 100)"
                   onBlur={e => {
                     const v = e.target.value ? parseFloat(e.target.value) : null;
                     handleBlur(line.id, "percentUtilized", v);
                   }}
                 />
               ) : (
-                <span className="tabular-nums text-text-secondary">
-                  {line.percentUtilized != null ? `${line.percentUtilized}%` : "—"}
+                <span
+                  className="tabular-nums text-text-secondary"
+                  title="Blank = uses the ingredient's own default yield % (usually 100)"
+                >
+                  {line.percentUtilized != null ? `${line.percentUtilized}%` : "100% (default)"}
                 </span>
               )}
             </td>

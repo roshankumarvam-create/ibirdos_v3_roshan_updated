@@ -327,6 +327,14 @@ export class RecipesService {
     // prices; only the outbound response is stripped for non-financial roles.
     const live = computeLiveRecipeCost(r);
     const canSeeCost = canViewFinancials(ctx.role);
+    // live.breakdown is a SEPARATE array (liveBreakdown, below), keyed by
+    // ingredientId -- IngredientsEditor.tsx (the saved recipe page's inline
+    // editor) reads per-row lineCostCents directly off ingredients[], not
+    // liveBreakdown, so without this merge every row's Line cost column
+    // showed "—" regardless of whether the recipe actually costs anything
+    // (found investigating a reported regression that turned out to
+    // predate the P1-6/P1-7 fix -- see FIX_LOG.md).
+    const lineCostByIngredientId = new Map(live.breakdown.map(b => [b.ingredientId, b.lineCostCents]));
     return {
       ...r,
       ingredients: r.ingredients.map(row => {
@@ -334,6 +342,7 @@ export class RecipesService {
           ...row,
           percentUtilized: row.yieldPctOverride != null ? Number(row.yieldPctOverride) : null,
           prepNote: row.prepNote ?? row.notes ?? null,
+          lineCostCents: canSeeCost ? (lineCostByIngredientId.get(row.ingredientId) ?? null) : null,
         };
         if (!canSeeCost && mapped.ingredient) {
           const { currentCostMicrocents, ...restIngredient } = mapped.ingredient;
