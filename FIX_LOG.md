@@ -1245,3 +1245,12 @@ Frontend: kitchen board cards now show event name/time, due time, and assignee w
 **NOT deployed. Live test for Roshan**: open a kitchen task, assign it to a team member, confirm it shows up correctly on the board card and sticks on reload. Due-time picker will silently no-op until the migration runs — that's expected, not a bug, until you run `PENDING_MIGRATIONS.sql`.
 
 ---
+
+### P1-14 — reorder-threshold suggestions — BLOCKED ON DATA (investigated, correctly not built)
+
+Investigated what data exists to base a suggestion on, per instructions, before writing any formula. Queried real production: **3 ingredients out of 2,624** have ever had a `CONSUME` transaction, and all three are artifacts of this session's own backtests, not real usage — consumption only started recording correctly as of today's URGENT-1 fix. The standard reorder-point formula needs real usage-rate history that doesn't exist yet. Confirmed with Roshan: do not invent a formula from data this thin. Logged to `NEEDS_ROSHAN.md` as blocked on data (not a design decision), with the condition for revisiting (real usage accumulating post-URGENT-1) and a rougher purchase-quantity-based fallback noted as an option, not built.
+
+**Files changed:** none — investigation and `NEEDS_ROSHAN.md` entry only.
+**Status:** BLOCKED ON DATA.
+
+---
