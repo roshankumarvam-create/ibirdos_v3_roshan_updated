@@ -15,7 +15,7 @@ export default async function KitchenPage() {
           Completed tasks →
         </Link>
       </header>
-      <KitchenBoard workspaceSlug={user.workspaceSlug} />
+      <KitchenBoard workspaceSlug={user.workspaceSlug} workspaceTimeZone={user.workspaceTimeZone} />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { canViewFinancials } from "@ibirdos/permissions";
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { InventoryService } from "../inventory/inventory.service";
 import { recordShortage } from "../events/event-ingredient-shortage.service";
+import { getDueAtMap, setDueAt } from "./kitchen-task-due.service";
 
 const log = moduleLogger("KitchenService");
 
@@ -69,8 +70,49 @@ export class KitchenService {
     if (opts.eventId) where.eventId = opts.eventId;
     if (opts.station) where.station = opts.station;
     if (opts.assignedToMe) where.assignedUserId = ctx.userId;
-    return prisma.kitchenTask.findMany({
+    const items = await prisma.kitchenTask.findMany({
       where, orderBy: [{ status: "asc" }, { displayOrder: "asc" }, { scheduledStartAt: "asc" }],
+    });
+    return this.enrichTasks(ctx, items);
+  }
+
+  /**
+   * P1-12: attaches event name/start time, assignee display name, and due
+   * time (see kitchen-task-due.service.ts -- inert until its migration
+   * runs) to a list of tasks. KitchenTask has no Prisma relation to Event
+   * (eventId is a plain scalar FK), so this is a batched lookup rather
+   * than an `include`.
+   */
+  private async enrichTasks<T extends { id: string; eventId: string | null; assignedUserId: string | null }>(
+    ctx: TenantContext,
+    tasks: T[],
+  ): Promise<Array<T & { eventName: string | null; eventStartsAt: Date | null; assignedUserName: string | null; dueAt: Date | null }>> {
+    if (tasks.length === 0) return [];
+    const taskIds = tasks.map((t) => t.id);
+    const eventIds = [...new Set(tasks.map((t) => t.eventId).filter((id): id is string => !!id))];
+    const assigneeIds = [...new Set(tasks.map((t) => t.assignedUserId).filter((id): id is string => !!id))];
+
+    const [events, assignees, dueAtMap] = await Promise.all([
+      eventIds.length
+        ? prisma.event.findMany({ where: { id: { in: eventIds } }, select: { id: true, name: true, startsAt: true } })
+        : Promise.resolve([]),
+      assigneeIds.length
+        ? prisma.user.findMany({ where: { id: { in: assigneeIds } }, select: { id: true, displayName: true, username: true } })
+        : Promise.resolve([]),
+      getDueAtMap(ctx, taskIds),
+    ]);
+    const eventById = new Map(events.map((e) => [e.id, e]));
+    const assigneeNameById = new Map(assignees.map((a) => [a.id, a.displayName ?? a.username]));
+
+    return tasks.map((t) => {
+      const event = t.eventId ? eventById.get(t.eventId) : undefined;
+      return {
+        ...t,
+        eventName: event?.name ?? null,
+        eventStartsAt: event?.startsAt ?? null,
+        assignedUserName: t.assignedUserId ? assigneeNameById.get(t.assignedUserId) ?? null : null,
+        dueAt: dueAtMap.get(t.id) ?? null,
+      };
     });
   }
 
@@ -124,17 +166,10 @@ export class KitchenService {
       : [];
     const actorById = new Map(actors.map((a) => [a.id, a.displayName ?? a.username]));
 
-    // Event names, for display context (which event each task belonged to).
-    const eventIds = [...new Set(page.map((t) => t.eventId).filter((id): id is string => !!id))];
-    const events = eventIds.length
-      ? await prisma.event.findMany({ where: { id: { in: eventIds } }, select: { id: true, name: true } })
-      : [];
-    const eventNameById = new Map(events.map((e) => [e.id, e.name]));
-
+    const enriched = await this.enrichTasks(ctx, page);
     return {
-      items: page.map((t) => ({
+      items: enriched.map((t) => ({
         ...t,
-        eventName: t.eventId ? eventNameById.get(t.eventId) ?? null : null,
         completedByName: actorById.get(completedByTaskId.get(t.id)?.actorId ?? "") ?? null,
       })),
       nextCursor: hasNext ? page[page.length - 1]?.id ?? null : null,
@@ -184,7 +219,8 @@ export class KitchenService {
       }
     }
 
-    return { task, recipe };
+    const [enrichedTask] = await this.enrichTasks(ctx, [task]);
+    return { task: enrichedTask, recipe };
   }
 
   async updateTask(ctx: TenantContext, taskId: string, patch: {
@@ -193,16 +229,24 @@ export class KitchenService {
     assignedUserId?: string | null;
     station?: string;
     notes?: string;
+    dueAt?: string | null;
   }) {
     const task = await prisma.kitchenTask.findFirst({ where: { id: taskId, workspaceId: ctx.workspaceId } });
     if (!task) throw new NotFoundException({ code: "not_found", message: "Task not found" });
 
-    const data: any = { ...patch };
+    // dueAt is NOT a Prisma-known field yet (unmigrated column, see
+    // kitchen-task-due.service.ts) -- passing it to prisma.kitchenTask.update()
+    // would throw "Unknown field" at runtime. Handled separately below.
+    const { dueAt, ...patchWithoutDueAt } = patch;
+    const data: any = { ...patchWithoutDueAt };
     if (patch.status === "IN_PROGRESS" && !task.startedAt) data.startedAt = new Date();
     if (patch.status === "DONE" && !task.completedAt) data.completedAt = new Date();
     if (patch.status !== "BLOCKED") data.blockReason = null;
 
     const updated = await prisma.kitchenTask.update({ where: { id: taskId }, data });
+    if (dueAt !== undefined) {
+      await setDueAt(ctx, taskId, dueAt ? new Date(dueAt) : null);
+    }
     await writeAudit(ctx, {
       action: "kitchen.task_updated", entityType: "KitchenTask", entityId: taskId,
       metadata: { changes: Object.keys(patch), status: patch.status },
@@ -228,7 +272,8 @@ export class KitchenService {
       );
     }
 
-    return updated;
+    const [enriched] = await this.enrichTasks(ctx, [updated]);
+    return enriched;
   }
 
   /**

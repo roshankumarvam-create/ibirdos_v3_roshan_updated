@@ -126,3 +126,26 @@ CREATE INDEX event_ingredient_shortages_workspace_unresolved_idx
 --     @@index([eventId])
 --     @@map("event_ingredient_shortages")
 --   }
+
+-- =====================================================================
+-- P1-12 -- "due time" on kitchen tasks (2026-07-22). NOT run yet.
+--
+-- KitchenTask is queried via plain Prisma everywhere (listForBoard,
+-- getTask, updateTask, listHistory) -- adding this to schema.prisma
+-- before the column exists would break every one of those queries the
+-- moment this deploys (same reasoning as quote_token above). Instead
+-- apps/api/src/kitchen/kitchen-task-due.service.ts accesses this column
+-- via raw SQL only, treating "column does not exist" (Postgres 42703)
+-- as "feature not enabled yet" -- so due times are simply never shown/
+-- settable until this migration runs, everything else on the kitchen
+-- board keeps working exactly as today.
+
+ALTER TABLE kitchen_tasks ADD COLUMN due_at TIMESTAMP(3);
+
+-- Corresponding schema.prisma change to make once the above has run:
+--
+--   model KitchenTask {
+--     ...
+--     dueAt DateTime? @map("due_at")
+--     ...
+--   }

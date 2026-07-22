@@ -28,6 +28,17 @@ interface TaskDetail {
   completedAt: string | null;
   notes: string | null;
   blockReason: string | null;
+  assignedUserId: string | null;
+  assignedUserName: string | null;
+  dueAt: string | null;
+  eventName: string | null;
+  eventStartsAt: string | null;
+}
+
+interface AssignableUser {
+  id: string;
+  username: string;
+  displayName: string | null;
 }
 
 const STATUS_TONE = {
@@ -41,6 +52,7 @@ export function TaskPrepClient({
   recipe,
   prepLines,
   workspaceTimeZone,
+  assignableUsers,
 }: {
   workspace: string;
   taskId: string;
@@ -48,11 +60,19 @@ export function TaskPrepClient({
   recipe: RecipeSummary | null;
   prepLines: PrepLine[];
   workspaceTimeZone: string;
+  assignableUsers: AssignableUser[];
 }) {
   const router = useRouter();
   const [task, setTask] = useState(initialTask);
   const [updating, setUpdating] = useState(false);
   const [gathered, setGathered] = useState<Set<string>>(new Set());
+
+  async function patchTask(body: Record<string, unknown>) {
+    setUpdating(true);
+    const res = await api.patch<TaskDetail>(`/kitchen/tasks/${taskId}`, body);
+    setUpdating(false);
+    if (res.data) setTask(res.data);
+  }
 
   async function transitionTo(status: TaskDetail["status"], blockReason?: string) {
     setUpdating(true);
@@ -92,6 +112,43 @@ export function TaskPrepClient({
           </p>
         </div>
         <Badge tone={STATUS_TONE[task.status]}>{task.status.toLowerCase().replace(/_/g, " ")}</Badge>
+      </div>
+
+      {/* Event context, assignee, due time */}
+      <div className="rounded-md border border-bg-border bg-bg-surface px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+        {task.eventName && (
+          <div>
+            <span className="text-text-tertiary text-xs">Event: </span>
+            <span className="text-text-primary">{task.eventName}</span>
+            {task.eventStartsAt && (
+              <span className="text-text-tertiary text-xs"> · {formatTime(task.eventStartsAt, workspaceTimeZone)}</span>
+            )}
+          </div>
+        )}
+        <label className="flex items-center gap-2">
+          <span className="text-text-tertiary text-xs">Assigned to:</span>
+          <select
+            className="bg-bg-inset border border-bg-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-accent-500/60"
+            value={task.assignedUserId ?? ""}
+            disabled={updating || isDone}
+            onChange={(e) => patchTask({ assignedUserId: e.target.value || null })}
+          >
+            <option value="">Unassigned</option>
+            {assignableUsers.map((u) => (
+              <option key={u.id} value={u.id}>{u.displayName ?? u.username}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2">
+          <span className="text-text-tertiary text-xs">Due:</span>
+          <input
+            type="datetime-local"
+            className="bg-bg-inset border border-bg-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-accent-500/60"
+            defaultValue={task.dueAt ? new Date(task.dueAt).toISOString().slice(0, 16) : ""}
+            disabled={updating || isDone}
+            onBlur={(e) => patchTask({ dueAt: e.target.value ? new Date(e.target.value).toISOString() : null })}
+          />
+        </label>
       </div>
 
       {task.blockReason && (

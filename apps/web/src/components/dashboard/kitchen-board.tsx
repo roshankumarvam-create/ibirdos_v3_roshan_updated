@@ -7,6 +7,7 @@ import { Card, Badge } from "@ibirdos/ui";
 import { useWorkspaceChannel } from "@/hooks/use-workspace-channel";
 import { toast } from "@/lib/toast";
 import { Skeleton } from "@/components/common/skeleton";
+import { formatTime } from "@/lib/format";
 
 interface KitchenTask {
   id: string;
@@ -17,14 +18,18 @@ interface KitchenTask {
   estimatedMinutes: number | null;
   blockReason: string | null;
   assignedUserId: string | null;
+  assignedUserName: string | null;
   startedAt: string | null;
   completedAt: string | null;
+  dueAt: string | null;
+  eventName: string | null;
+  eventStartsAt: string | null;
 }
 
 const STATIONS = ["PREP", "GRILL", "SAUTE", "FRY", "PIZZA", "SALAD", "PASTRY", "EXPO", "OTHER"] as const;
 const STATUS_TONE = { PENDING: "neutral", IN_PROGRESS: "info", BLOCKED: "danger", DONE: "success", CANCELLED: "neutral" } as const;
 
-export function KitchenBoard({ workspaceSlug }: { workspaceSlug: string }) {
+export function KitchenBoard({ workspaceSlug, workspaceTimeZone }: { workspaceSlug: string; workspaceTimeZone: string }) {
   const qc = useQueryClient();
 
   const { data, isLoading } = useQuery({
@@ -104,6 +109,18 @@ export function KitchenBoard({ workspaceSlug }: { workspaceSlug: string }) {
                   {task.targetPortions && <span>{task.targetPortions} portions</span>}
                   {task.estimatedMinutes && <span> · ~{task.estimatedMinutes}min</span>}
                 </div>
+                {(task.eventName || task.dueAt || task.assignedUserName) && (
+                  <div className="text-[10px] text-text-tertiary space-y-0.5">
+                    {task.eventName && (
+                      <div>
+                        {task.eventName}
+                        {task.eventStartsAt && ` · event ${formatTime(task.eventStartsAt, workspaceTimeZone)}`}
+                      </div>
+                    )}
+                    {task.dueAt && <div className="text-warning">Due {formatTime(task.dueAt, workspaceTimeZone)}</div>}
+                    {task.assignedUserName && <div>→ {task.assignedUserName}</div>}
+                  </div>
+                )}
                 {task.blockReason && <div className="text-danger italic">Blocked: {task.blockReason}</div>}
                 <div className="flex gap-1 pt-1">
                   {task.status === "PENDING" && (

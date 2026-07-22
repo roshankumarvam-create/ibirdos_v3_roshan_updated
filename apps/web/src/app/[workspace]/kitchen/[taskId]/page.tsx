@@ -45,6 +45,17 @@ interface TaskDetail {
   completedAt: string | null;
   notes: string | null;
   blockReason: string | null;
+  assignedUserId: string | null;
+  assignedUserName: string | null;
+  dueAt: string | null;
+  eventName: string | null;
+  eventStartsAt: string | null;
+}
+
+interface AssignableUser {
+  id: string;
+  username: string;
+  displayName: string | null;
 }
 
 export interface PrepLine {
@@ -65,13 +76,16 @@ export default async function TaskPrepPage({
   const user = await requireSession();
   const c = await cookies();
 
-  const res = await api.get<{ task: TaskDetail; recipe: RecipeDetail | null }>(
-    `/kitchen/tasks/${taskId}`,
-    { cookies: c },
-  );
+  const [res, usersRes] = await Promise.all([
+    api.get<{ task: TaskDetail; recipe: RecipeDetail | null }>(`/kitchen/tasks/${taskId}`, { cookies: c }),
+    api.get<{ users: AssignableUser[] }>("/users", { cookies: c }),
+  ]);
 
   if (!res.data) notFound();
   const { task, recipe } = res.data;
+  // Empty (not an error) for roles without user.read -- assignee display
+  // still works via task.assignedUserName either way, only the picker needs this.
+  const assignableUsers = usersRes.data?.users ?? [];
 
   // Compute prep list server-side (has access to toCanonical)
   const targetPortions = task.targetPortions ?? 1;
@@ -134,6 +148,7 @@ export default async function TaskPrepPage({
       recipe={recipe}
       prepLines={prepLines}
       workspaceTimeZone={user.workspaceTimeZone}
+      assignableUsers={assignableUsers}
     />
   );
 }

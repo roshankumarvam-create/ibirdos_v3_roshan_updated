@@ -14,6 +14,7 @@ const UpdateSchema = z.object({
   assignedUserId: z.string().nullable().optional(),
   station: z.enum(["GRILL", "SAUTE", "FRY", "PASTRY", "PREP", "PIZZA", "SALAD", "GARDE_MANGER", "EXPO", "OTHER"]).optional(),
   notes: z.string().max(1000).optional(),
+  dueAt: z.string().datetime().nullable().optional(),
 });
 
 @Controller("kitchen")
