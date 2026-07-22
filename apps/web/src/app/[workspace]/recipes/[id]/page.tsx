@@ -321,8 +321,9 @@ export default async function RecipeDetailPage({
                   <div className="border-t border-bg-border pt-2 mt-2 space-y-2">
                     <CostRow label="Sell price" value={fmtCents(recipe.salePriceCents)} />
                     <CostRow
-                      label="Food cost %"
+                      label="Actual food cost % (calculated)"
                       value={fmtPct(foodCostPct)}
+                      title="Ingredient cost as a % of sell price. Colored against Goal food cost % below, but not driven by it."
                       {...(foodCostPct != null && {
                         valueClass: foodCostPct <= (recipe.goalFoodCostPct ?? 30)
                           ? "text-success font-medium"
@@ -330,10 +331,14 @@ export default async function RecipeDetailPage({
                       })}
                     />
                     {recipe.goalFoodCostPct != null && (
-                      <CostRow label="Goal food cost %" value={fmtPct(recipe.goalFoodCostPct)} />
+                      <CostRow
+                        label="Goal food cost % (reference)"
+                        value={fmtPct(recipe.goalFoodCostPct)}
+                        title="A reference line only, set on the Edit page — flags the row above red/green. Does not set the sell price; Target margin % does that."
+                      />
                     )}
                     <CostRow
-                      label="Margin per portion"
+                      label="Margin per portion (calculated)"
                       value={fmtCents(marginCents)}
                       {...(marginCents != null && {
                         valueClass: marginCents >= 0 ? "text-success font-medium" : "text-danger font-medium",
@@ -359,9 +364,9 @@ function StatBox({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CostRow({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
+function CostRow({ label, value, valueClass, title }: { label: string; value: string; valueClass?: string; title?: string }) {
   return (
-    <div className="flex justify-between items-center text-xs">
+    <div className="flex justify-between items-center text-xs" title={title}>
       <span className="text-text-secondary">{label}</span>
       <span className={valueClass ?? "tabular-nums text-text-primary font-medium"}>{value}</span>
     </div>

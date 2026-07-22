@@ -913,9 +913,13 @@ export function NewRecipeClient({ workspaceSlug, canSeeFinancials }: { workspace
                         onChange={e => setGoalFoodCostPct(e.target.value)}
                         placeholder="e.g. 28"
                       />
+                      <p className="mt-1 text-[10px] text-text-tertiary">
+                        A reference line only — flags "Actual food cost %" below red/green.
+                        Does <strong>not</strong> set your price (that's "Target margin %" below, under Pricing strategy).
+                      </p>
                       {minSellPrice != null && (
                         <p className="mt-1 text-[10px] text-text-secondary">
-                          Min sell price: <span className="font-medium text-text-primary">{fmtCents(minSellPrice)}</span>
+                          Min sell price to hit this goal manually: <span className="font-medium text-text-primary">{fmtCents(minSellPrice)}</span>
                         </p>
                       )}
                     </div>
@@ -940,14 +944,14 @@ export function NewRecipeClient({ workspaceSlug, canSeeFinancials }: { workspace
                       )}
                     </div>
                     <Row
-                      label="Actual food cost %"
+                      label="Actual food cost % (calculated)"
                       value={foodCostPct != null ? `${foodCostPct.toFixed(1)}%` : "—"}
                       valueClass={foodCostPct != null
                         ? (foodCostPct > 35 ? "text-danger tabular-nums font-medium" : "text-success tabular-nums font-medium")
                         : undefined}
                     />
                     <Row
-                      label="Margin per portion"
+                      label="Margin per portion (calculated)"
                       value={marginCents != null ? fmtCents(marginCents) : "—"}
                       valueClass={marginCents != null ? (marginCents >= 0 ? "text-success tabular-nums font-medium" : "text-danger tabular-nums font-medium") : undefined}
                     />
@@ -977,6 +981,10 @@ export function NewRecipeClient({ workspaceSlug, canSeeFinancials }: { workspace
                   </div>
                   <div>
                     <Label htmlFor="targetMarginPct">Target margin %</Label>
+                    <p className="text-[10px] text-text-tertiary mb-1">
+                      This is what actually sets your sell price when Auto-reprice is on — the
+                      calculator solves for the sell price that hits this margin exactly.
+                    </p>
                     <Input
                       id="targetMarginPct"
                       type="number"
