@@ -2,6 +2,12 @@
 
 ---
 
+## P1-10 — no business address anywhere to put on a purchase order
+
+Built exactly as approved — see `FIX_LOG.md` "P1-10." One gap worth flagging: the PO header shows only the workspace **name**. There is no address, phone, or other business-contact field anywhere in the schema (`Workspace` has just `name` + a `settings` JSON blob) — so there's nothing to put on a "ship to" line. Not a decision to make right now, just flagging it in case a real, printed PO without a return address looks incomplete once you actually use one. If you want it, adding a workspace address is a small, additive schema change (probably a few fields on `Workspace` or inside `settings`) — let me know if/when you want it built.
+
+---
+
 ## P1-14 — reorder-threshold suggestions — BLOCKED ON DATA, not built
 
 **Not a decision to make — a data gap.** Queried real production: only **3 ingredients in the entire database** have ever had a `CONSUME` inventory transaction, out of 2,624 active ingredients, and all three are from this session's own backtests (URGENT-1/P0-2 debugging), not real client usage. Consumption only started recording *correctly* as of the URGENT-1 fix (shipped today, 2026-07-22) — before that, the kitchen auto-consume path silently failed on any shortage, so there's effectively no real historical usage-rate data yet, at any point before today.

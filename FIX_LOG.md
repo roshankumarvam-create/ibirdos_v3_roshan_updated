@@ -1254,3 +1254,22 @@ Investigated what data exists to base a suggestion on, per instructions, before 
 **Status:** BLOCKED ON DATA.
 
 ---
+
+### P1-10 — purchase order document (v1) — FIXED, built exactly as scoped and approved
+
+Investigated first (previous turn): `event_ingredient_shortages` has no vendor field, but grouping by vendor doesn't need one — `Ingredient.currentVendorId` already exists and can be joined at read time. Confirmed `Vendor.contactEmail` exists and this app's email infra already works (reused from `sendQuote()`), but flagged auto-emailing a PO to a real vendor as a real-world-consequence risk, not a code-complexity one — matches the approved decision to leave emailing out of v1.
+
+**Built exactly as approved:**
+- New `getPurchaseOrderPreview()` groups an event's unresolved outstanding-shortage rows by vendor (via `Ingredient.currentVendorId`, no schema change), with a separate "No vendor assigned" bucket for ingredients that can't be ordered until one is set.
+- Per-line unit price is computed **fresh from each ingredient's current cost** at generation time (not a frozen snapshot from whenever the shortage was first recorded) — more useful for "what should I actually order right now." Reused (and exported) the existing `toDisplayUnitCents()` helper from the P1-D price-alert fix rather than re-deriving the same microcents→display-unit math a third time.
+- New `GET /events/:id/purchase-order`, gated on `vendor.read` (OWNER/MANAGER only) rather than `event.read` — a PO is nothing but vendor pricing, unlike the rest of that controller which CHEF/STAFF can also reach.
+- New printable page (`/events/:id/purchase-order`) — plain HTML with print-friendly styling and a "Print / Save as PDF" button, no PDF-generation dependency added. Replaces the old `alert()`-stub button.
+- **Not built, per the approved scope:** no persisted `PurchaseOrder` record/status lifecycle, no vendor emailing, no approval workflow. Workspace name only in the header (no address field exists anywhere in the schema — flagged in `NEEDS_ROSHAN.md`, not invented).
+
+**Files changed:** `apps/api/src/events/{purchase-order.service.ts (new), events.controller.ts}`, `apps/api/src/insights/rules/vendor-price-change.rule.ts` (exported `toDisplayUnitCents`), `apps/web/src/app/[workspace]/events/[id]/{outstanding-shortage-banner.tsx, purchase-order/{page.tsx, print-button.tsx} (new)}`
+**Commit:** `640f50a`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. Full API suite 140/143 (same 3 pre-existing unrelated failures). **Live-backtested in `roshantest` with a genuine multi-vendor scenario, cleaned up after**: 3 outstanding shortages across 2 real vendors + 1 no-vendor ingredient → correctly produced 2 vendor sections (alphabetically sorted) + 1 flagged no-vendor section; per-line pricing and totals verified by hand ($10.01/lb × 10 lb = $100.02, $18.14/lb × 5 lb = $90.72, $4.54/lb × 2 lb = $9.07, grand total $199.81 — all matched exactly).
+
+**NOT deployed. Live test for Roshan**: open an event with an outstanding shortage, click "Generate purchase order →", confirm ingredients group correctly by vendor with sensible current pricing, and that the Print button produces a clean printable/savable document.
+
+---
