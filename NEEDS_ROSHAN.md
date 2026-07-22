@@ -2,6 +2,16 @@
 
 ---
 
+## P1-14 — reorder-threshold suggestions — BLOCKED ON DATA, not built
+
+**Not a decision to make — a data gap.** Queried real production: only **3 ingredients in the entire database** have ever had a `CONSUME` inventory transaction, out of 2,624 active ingredients, and all three are from this session's own backtests (URGENT-1/P0-2 debugging), not real client usage. Consumption only started recording *correctly* as of the URGENT-1 fix (shipped today, 2026-07-22) — before that, the kitchen auto-consume path silently failed on any shortage, so there's effectively no real historical usage-rate data yet, at any point before today.
+
+The standard, defensible reorder-point formula (average daily usage × lead time) needs exactly the data that doesn't exist. Building it now would mean inventing a formula dressed up as data-driven, which you correctly flagged as worse than no suggestion at all.
+
+**Path forward:** revisit this once a few weeks of real kitchen usage have accumulated post-URGENT-1-fix (rough rule of thumb: enough CONSUME transactions per ingredient, spanning enough calendar time, that an average isn't dominated by noise — I'd want to see meaningfully more than the "1-2 data points" state production is in today before trusting any formula). Purchase/RECEIVE data is healthy in the meantime (606 ingredients have 2+ receives) if you ever want a rougher, clearly-labeled "percentage of typical order size" heuristic as a stopgap — flagged as an option, not built, since you didn't ask for it as a fallback.
+
+---
+
 ## P1-8 — "Goal food cost %" and "Target margin %" are two independent targets that can silently disagree
 
 Fixed the labeling/clarity part (see `FIX_LOG.md` "P1-8") — that was a real, worthwhile improvement regardless of what follows. But investigating this surfaced something bigger than labels, which I'm flagging rather than fixing myself, per your instruction: this may be a genuine design issue, not just poor copy.
