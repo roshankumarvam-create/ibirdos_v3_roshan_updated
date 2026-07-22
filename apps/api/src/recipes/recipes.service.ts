@@ -37,6 +37,22 @@ import { can, canViewFinancials, type Role } from "@ibirdos/permissions";
 
 const log = moduleLogger("RecipesService");
 
+// cachedMarginPct / recipe_cost_history.margin_pct are both NUMERIC(5,2) --
+// max 3 digits before the decimal point (+/-999.99). marginPct is computed
+// as (sale - cost) / sale * 100 with no upper/lower bound: a recipe priced
+// far below its ingredient cost (e.g. a placeholder $1 sale price on a $25
+// cost) produces a margin like -2400%, which Postgres rejects outright
+// ("numeric field overflow") -- this crashed POST /recipes and
+// PATCH /recipes/:id with a bare 500 any time that combination occurred,
+// since the write was never guarded against the column's own range. Only
+// the PERSISTED/cached value needs clamping; the live, unclamped percentage
+// (recipe-cost.helper.ts, used by GET /recipes/:id's liveMarginPct) is
+// unaffected and still shows the true, informative number on screen.
+const MARGIN_PCT_DB_BOUND = 999.99;
+function clampMarginPctForStorage(pct: number): number {
+  return Math.max(-MARGIN_PCT_DB_BOUND, Math.min(MARGIN_PCT_DB_BOUND, pct));
+}
+
 const MICROCENTS_PER_CENT = 1000n;
 
 // ---------------------------------------------------------------------
@@ -660,7 +676,7 @@ export class RecipesService {
         costStaleness: breakdown.staleness as any,
         costComputeError: breakdown.computeError,
         cachedMarginPct: breakdown.marginPct != null
-          ? new Decimal(breakdown.marginPct.toFixed(2))
+          ? new Decimal(clampMarginPctForStorage(breakdown.marginPct).toFixed(2))
           : null,
         ...(recalcSalePriceCents !== undefined ? { salePriceCents: recalcSalePriceCents } : {}),
       },
@@ -676,7 +692,7 @@ export class RecipesService {
           portionsYielded: recipe.portionsYielded,
           salePriceCents: recipe.salePriceCents,
           marginPct: breakdown.marginPct != null
-            ? new Decimal(breakdown.marginPct.toFixed(2))
+            ? new Decimal(clampMarginPctForStorage(breakdown.marginPct).toFixed(2))
             : null,
           triggerKind,
           triggerRef: triggerRef ?? null,
