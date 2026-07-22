@@ -1223,3 +1223,25 @@ Investigated first: `KitchenService.listForBoard()` (backing `GET /kitchen/tasks
 **NOT deployed. Live test for Roshan**: complete a kitchen task, click "Completed tasks →" from the kitchen board, confirm it appears with the right event/station/portions/completed-at/completed-by.
 
 ---
+
+### P1-12 — station/assignee/due-time/event-time on kitchen tasks — FIXED
+
+Investigated first, per instructions:
+- **Station**: already existed (real enum), already shown on board and detail. Nothing to build.
+- **Assignee**: already existed (`assignedUserId`), backend `PATCH` already accepted it — but never displayed or settable anywhere in the UI. Found `CHEF`/`STAFF` already hold `user.read` with the code comment *"can see kitchen colleagues for assignment"* — a previous dev clearly planned this and never finished the picker.
+- **Event time**: not stored on the task at all — no Prisma relation even exists between `KitchenTask` and `Event` (`eventId` is a plain scalar FK). Doesn't need a column, just a batched lookup for display.
+- **Due time**: didn't exist at all. Only field that needed new schema.
+
+**Built:** `kitchen_tasks.due_at` (additive, `PENDING_MIGRATIONS.sql`, NOT run). Same inert-until-migrated reasoning as `quote_token`/`event_ingredient_shortages` — `KitchenTask` is queried via plain Prisma everywhere (board, task detail, update, history), so this can't go into `schema.prisma` until the column exists without breaking every one of those queries. New `kitchen-task-due.service.ts` handles it via raw SQL, gracefully no-op/null on the missing column.
+
+New `KitchenService.enrichTasks()` batches event name/start time, assignee display name, and due time onto every task returned by the board, history, and single-task endpoints (shared helper, avoids duplicating the lookups across three call sites). `updateTask()` now accepts `dueAt` too (kept separate from the normal Prisma `update()` call since `dueAt` isn't a known Prisma field yet — passing it through would throw at runtime).
+
+Frontend: kitchen board cards now show event name/time, due time, and assignee when present; task detail page adds an assignee dropdown (populated from `GET /users`) and a due-time picker, plus an event-context strip.
+
+**Files changed:** `PENDING_MIGRATIONS.sql`, `apps/api/src/kitchen/{kitchen.service.ts, kitchen.controller.ts, kitchen-task-due.service.ts}` (new), `apps/web/src/app/[workspace]/kitchen/{page.tsx, [taskId]/{page.tsx, client.tsx}}`, `apps/web/src/components/dashboard/kitchen-board.tsx`
+**Commit:** `8f27ece`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. Full API suite 140/143 (same 3 pre-existing unrelated failures). Live-backtested in `roshantest`, cleaned up after: confirmed `due_at` genuinely doesn't exist in production yet; `getTask`/`listForBoard`/`updateTask` all correctly resolve `eventName`, `eventStartsAt`, and `assignedUserName`; `updateTask` with a `dueAt` patch did **not** throw despite the missing column (graceful no-op, `dueAt` comes back `null`).
+
+**NOT deployed. Live test for Roshan**: open a kitchen task, assign it to a team member, confirm it shows up correctly on the board card and sticks on reload. Due-time picker will silently no-op until the migration runs — that's expected, not a bug, until you run `PENDING_MIGRATIONS.sql`.
+
+---
