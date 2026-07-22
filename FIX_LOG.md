@@ -1273,3 +1273,24 @@ Investigated first (previous turn): `event_ingredient_shortages` has no vendor f
 **NOT deployed. Live test for Roshan**: open an event with an outstanding shortage, click "Generate purchase order →", confirm ingredients group correctly by vendor with sensible current pricing, and that the Print button produces a clean printable/savable document.
 
 ---
+
+### `POST /recipes` / `PATCH /recipes/:id` — 500 on extreme margin (numeric overflow) — found while building the tenant-isolation test, fixed as its own item
+
+**Not guessed at — root cause came straight from real Railway production logs**, exact stack trace: `PrismaClientUnknownRequestError` from `prisma.recipe.update()`, Postgres code `22003 numeric field overflow`, `"A field with precision 5, scale 2 must round to an absolute value less than 10^3"`, at `RecipesService.recost`, called from both `.create` (line 199) and `.update` (line 394).
+
+`cachedMarginPct` (on `Recipe`) and `marginPct` (on `RecipeCostHistory`) are both `NUMERIC(5,2)` — max ±999.99. `recost()`'s margin formula, `(sale - cost) / sale * 100`, has no bound: an ingredient costing meaningfully more than the recipe's sale price (e.g. $25 cost vs. a $1 sale price — margin −2400%) produces a value Postgres flatly rejects, crashing the write with a bare 500 on both create and update. Confirmed reproducible by narrowing across 5 attempts: fails only when {an ingredient with a real cost} + {a recipe with both `totalPortions` and `salePriceCents` set} are combined — matches exactly what triggers `recost()`'s margin computation.
+
+**Fix:** clamp the value to the column's own range (±999.99) immediately before building the `Decimal`, at both write sites. The **live**, unclamped percentage shown on the recipe detail page (`recipe-cost.helper.ts`'s `liveMarginPct` — a separate, read-only computation with no DB write) is untouched, so the true number (e.g. "−2400%") still displays on screen even though the persisted/cached copy has to be bounded to fit the column.
+
+**Files changed:** `apps/api/src/recipes/recipes.service.ts`
+**Commit:** `e2b634a`
+**Verification:** `pnpm typecheck` clean. Full API suite 140/143 (same 3 pre-existing unrelated failures). Live-backtested in `roshantest`, cleaned up after: (1) the exact production crash scenario ($25 cost vs. $1 sale price) — `create()` and `update()` both completed without throwing; stored `cachedMarginPct` correctly clamped to `-999.99` while `liveMarginPct` correctly still showed the true `-2400`; (2) a normal recipe with a realistic 75% margin — confirmed the clamp leaves in-range values untouched.
+
+**Same bug class, found and fixed proactively:** `Event.computedMarginPct` (also `NUMERIC(5,2)`) is set by `computeMarginPct()` in `events.service.ts` using the identical unbounded `(revenue - cost) / revenue * 100` formula — an event costed far above its revenue would hit the exact same overflow. Not triggered by anything reported so far, but a trivial, zero-risk clamp with no design decision involved, so fixed in the same pass rather than left as a known landmine. Two new unit tests added (`events.service.spec.ts`) proving the clamp is symmetric. Full `events.service.spec.ts` suite: 18/18 passing.
+
+**Files changed (Events fix):** `apps/api/src/events/{events.service.ts, events.service.spec.ts}`
+**Commit:** `26ad27a`
+
+**NOT deployed.**
+
+---
