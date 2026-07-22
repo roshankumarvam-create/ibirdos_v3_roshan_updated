@@ -1066,3 +1066,33 @@ Full build per the decision to proceed: schema (additive, NOT applied — see `P
 **Verification:** `pnpm typecheck` (all 9 packages) clean. Full API suite 136/139 (same 3 pre-existing unrelated failures). `quote-token.service.spec.ts` 8/8 pass. **NOT deployed. Schema migration NOT run** — this needs Roshan to (1) run the SQL in `PENDING_MIGRATIONS.sql`, (2) add the noted field to `schema.prisma` and re-run `prisma generate` as a follow-up for cleaner typed access, (3) deploy, (4) live test: mark an event's quote as sent (or click "Copy quote & link"), open the resulting `/quote/{token}` link in an incognito window with no session, confirm it shows only that event's quote with no login prompt.
 
 ---
+
+### Overnight batch — deployed to production (2026-07-22)
+
+Pushed `dc17b26` (Bug 3, P1-A/B/C/D, Bug 5-inert) to `origin/master`, deployed API to Railway via manual `railway up` (webhook still broken), confirmed Vercel picked up the push automatically via its webhook.
+
+**Verification:** Railway instance `RUNNING`, all three health endpoints (`/health/live`, `/health/ready`, `/health`) return 200. Newest Vercel deployment (`dpl_5LaqhfpHUcuJQLv3rouFqnXhMtEG`) created ~3 min after the push, `Ready`, aliased to `workspace.ibirdos.com`, confirmed loading (200). Note: `railway up` (CLI deploy) carries no git-commit metadata the way a webhook-triggered deploy does, so the live commit can't be independently confirmed from Railway's side the way it could for GitHub-triggered deploys — confirmed instead by deploying directly from this exact working tree at `dc17b26` immediately before running it.
+
+**Housekeeping, not a fix:** while regenerating the Prisma client for the next entry below, found and killed two orphaned `tsx _p03_live_backtest.ts` processes (PIDs 28772, 39612) left running since an earlier P0-3 backtest — they were holding a file lock on the Prisma engine DLL. Leaked temp-script processes from earlier this session, not user work; safe to kill.
+
+---
+
+### BUG 5 activation — migration confirmed live, switched from raw SQL to normal Prisma
+
+Once Roshan confirmed `quote_token` column + `events_quote_token_key` index were live in production, added `quoteToken String? @unique @map("quote_token")` to the `Event` model in `schema.prisma`, ran `prisma generate`, and rewrote `quote-token.service.ts` to use `prisma.event.findFirst`/`update` instead of raw SQL — the graceful-degradation try/catch (needed only while the column might not exist) is gone now that it always exists. Same security model as before: exact-equality lookup only, single-event-scoped, proven by the same test suite (rewritten against the new implementation, 8/8 passing including the prefix-non-match and cross-tenant isolation cases, plus one new soft-delete case).
+
+**Files changed:** `packages/db/prisma/schema.prisma`, `apps/api/src/events/quote-token.service.ts`, `apps/api/src/events/quote-token.service.spec.ts`
+**Commit:** `c32135f`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. Full API suite 136/139 (same 3 pre-existing unrelated failures). Deployed via manual `railway up`; all three health endpoints 200; live sanity check `GET /api/v1/public/quote/<garbage-token>` against production returns 404 as expected (route is live and reachable, no data touched). **Live test for Roshan**: click "Send quote" or "Copy quote & link" on a real event, confirm the link is now a `/quote/{token}` URL openable with no login.
+
+---
+
+### P1-B — Option A: category is now editable after ingredient creation
+
+Per Roshan's decision: build only the manual-edit escape hatch (Option A), hold off on auto-detection/mapping (Option C) pending confirmation of whether the client actually requires it. The API's `PATCH /ingredients/:id` already accepted `category` — the ingredient detail page's edit form just never exposed a field for it, so an ingredient auto-created as `OTHER` (e.g. an unmatched invoice line) had no way to be corrected except a raw API call. Added the same 11-value category dropdown already used on the New Ingredient page to the edit form.
+
+**Files changed:** `apps/web/src/app/[workspace]/ingredients/[id]/IngredientDetailClient.tsx`
+**Commit:** `861fd9f`
+**Verification:** `pnpm --filter @ibirdos/web typecheck` clean. Pure frontend change, no backend/schema touched (API already supported it). **Not yet deployed — bundle with the next deploy.** **Live test for Roshan**: open any ingredient, click Edit, confirm a Category dropdown appears and saving a new category actually sticks (reload the page, category shows the new value).
+
+---
