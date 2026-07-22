@@ -149,6 +149,22 @@ describe("computeMarginPct — Fix #5: margin formula includes labor cost", () =
     expect(result).not.toBeNull();
     expect(Number((result as any).v)).toBeCloseTo(60.0, 1);
   });
+
+  it("clamps an extreme negative margin to -999.99 instead of overflowing the NUMERIC(5,2) column (same bug class as recipes.service.ts's cachedMarginPct, see FIX_LOG.md)", () => {
+    // revenue $10, food $10,000 -- true margin is -99900%, which Postgres
+    // would reject outright as "numeric field overflow" if written unclamped.
+    const result = computeMarginPct(1_000, 1_000_000, 0);
+    expect(result).not.toBeNull();
+    expect(Number((result as any).v)).toBe(-999.99);
+  });
+
+  it("clamps an extreme positive margin to 999.99", () => {
+    // Contrived (cost/labor would need to be negative), but proves the
+    // clamp is symmetric rather than one-sided.
+    const result = computeMarginPct(1_000, -1_000_000, 0);
+    expect(result).not.toBeNull();
+    expect(Number((result as any).v)).toBe(999.99);
+  });
 });
 
 describe("computeLiveQuoteTotalCents — BUG 3: labor IS billed, must be included in the quote total", () => {

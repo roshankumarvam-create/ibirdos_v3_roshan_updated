@@ -1381,6 +1381,14 @@ export function computeLiveQuoteTotalCents(
   return subtotalCents + markupAmount + (laborTotalCents ?? 0);
 }
 
+// Event.computedMarginPct is NUMERIC(5,2) -- max +/-999.99. Same bug class
+// as recipes.service.ts's cachedMarginPct overflow (found via real
+// production logs, see FIX_LOG.md): an event costed far above its revenue
+// produces a margin outside that range and Postgres rejects the write
+// outright. Clamped here before the Decimal is built so this can never
+// crash rollupCosts(), regardless of how lopsided the real numbers are.
+const MARGIN_PCT_DB_BOUND = 999.99;
+
 /** Pure margin computation — extracted for unit testing. */
 export function computeMarginPct(
   revenueCents: number | null | undefined,
@@ -1389,5 +1397,6 @@ export function computeMarginPct(
 ): Decimal | null {
   if (!revenueCents || revenueCents <= 0) return null;
   const pct = ((revenueCents - foodCents - laborCents) / revenueCents) * 100;
-  return new Decimal(pct.toFixed(2));
+  const clamped = Math.max(-MARGIN_PCT_DB_BOUND, Math.min(MARGIN_PCT_DB_BOUND, pct));
+  return new Decimal(clamped.toFixed(2));
 }
