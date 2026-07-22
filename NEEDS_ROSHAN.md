@@ -2,6 +2,14 @@
 
 ---
 
+## Billing — does "5 seats included free" apply to Solo Chef too?
+
+The brief says "5 staff seats included free; seat #6 onward bills $15/month each" without saying whether that's the same for both plans or Core-Restaurant-only. Solo Chef is named and priced ($99/mo) like a single-operator plan, which reads like it might be meant to cap much lower (1 seat?) rather than also including 5 free seats — but I don't want to guess at a number that changes what a real customer gets billed.
+
+**Seeded `billing_plan_catalog` (in `PENDING_MIGRATIONS.sql`, not run) with `seat_included = 5` for both plans**, matching the brief's literal wording, since that's the only number actually given. If Solo Chef should cap differently, this is a one-line change to the `INSERT` before you run it — flag it and I'll update the seed SQL.
+
+---
+
 ## P1-10 — no business address anywhere to put on a purchase order
 
 Built exactly as approved — see `FIX_LOG.md` "P1-10." One gap worth flagging: the PO header shows only the workspace **name**. There is no address, phone, or other business-contact field anywhere in the schema (`Workspace` has just `name` + a `settings` JSON blob) — so there's nothing to put on a "ship to" line. Not a decision to make right now, just flagging it in case a real, printed PO without a return address looks incomplete once you actually use one. If you want it, adding a workspace address is a small, additive schema change (probably a few fields on `Workspace` or inside `settings`) — let me know if/when you want it built.

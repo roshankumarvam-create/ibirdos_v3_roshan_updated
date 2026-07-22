@@ -149,3 +149,87 @@ ALTER TABLE kitchen_tasks ADD COLUMN due_at TIMESTAMP(3);
 --     dueAt DateTime? @map("due_at")
 --     ...
 --   }
+
+-- =====================================================================
+-- Billing plan taxonomy (2026-07-22). NOT run yet.
+--
+-- Three vocabularies were in play: the client's brief (Solo Chef / Core
+-- Restaurant), the DB enum (TRIAL/STARTER/GROWTH/SCALE/ENTERPRISE, never
+-- actually used -- 0 rows in every billing table), and billing.service.ts
+-- (SOLO/KITCHEN/ENTERPRISE, wrong prices). This adds the two enum values
+-- the app now actually uses (SOLO, CORE_RESTAURANT) and seeds the plan
+-- catalog with the correct prices from the brief. TRIAL/STARTER/GROWTH/
+-- SCALE are left defined, unused, forever -- Postgres can't drop enum
+-- values without rebuilding the type, and nothing references them.
+--
+-- *** IMPORTANT — RUN AS TWO SEPARATE STATEMENTS/TRANSACTIONS, NOT ONE ***
+-- Postgres will not let you add an enum value and USE that same value
+-- (e.g. in an INSERT) within the same transaction -- "unsafe use of new
+-- value" / "ALTER TYPE ... ADD BEFORE/AFTER cannot run inside a
+-- transaction block" depending on version. Concretely:
+--   1. Run the two ALTER TYPE statements below FIRST, and let that
+--      transaction commit (e.g. two separate `railway connect` psql
+--      commands, or wrap ONLY these two lines in their own BEGIN/COMMIT
+--      and commit before moving on).
+--   2. THEN, in a separate connection/transaction, run the
+--      billing_plan_catalog INSERTs further down. If you try to do
+--      both in one script/transaction, the INSERTs will fail with
+--      something like: "unsafe use of new value 'SOLO' of enum type
+--      billing_plan -- New enum values must be committed before they
+--      can be used."
+
+ALTER TYPE billing_plan ADD VALUE 'SOLO';
+ALTER TYPE billing_plan ADD VALUE 'CORE_RESTAURANT';
+
+-- ---- COMMIT THE ABOVE BEFORE RUNNING ANYTHING BELOW THIS LINE ----
+
+-- Seed the plan catalog (Solo + Core Restaurant only -- Multi-Unit/
+-- Franchise/Corporate Hub are out of scope for now, not seeded).
+-- Prices are from the client's brief, in whole cents.
+-- stripe_price_*_id columns are left NULL here -- they get set once
+-- real Stripe test-mode prices exist (see PENDING_MIGRATIONS.sql's
+-- Stripe env var section once Step 3 is built, or via a follow-up
+-- UPDATE once you've created the prices in the Stripe Dashboard).
+--
+-- NEEDS_ROSHAN.md flags one open question before this seed is final:
+-- whether the "5 seats included free" rule applies to BOTH plans as
+-- written, or whether Solo Chef is meant to cap lower (it's a 1-person
+-- plan by name). Seeded here with seat_included = 5 for both, matching
+-- the brief's literal wording -- change before running if that's wrong.
+
+INSERT INTO billing_plan_catalog (
+  id, plan, display_name, unit_amount_monthly_cents, unit_amount_yearly_cents,
+  seat_included, features, active, created_at, updated_at
+) VALUES
+  (
+    gen_random_uuid()::text, 'SOLO', 'Solo Chef',
+    9900, 106900, 5,
+    '["Owner role only", "All operational features", "Manual invoice + recipe + inventory", "AI insights daily"]'::jsonb,
+    true, now(), now()
+  ),
+  (
+    gen_random_uuid()::text, 'CORE_RESTAURANT', 'Core Restaurant',
+    34900, 376900, 5,
+    '["Full role-based access control", "Everything in Solo Chef", "Multi-user kitchen tasks", "Priority support"]'::jsonb,
+    true, now(), now()
+  );
+
+-- Corresponding schema.prisma change (BillingPlan enum) to make once the
+-- ALTER TYPE statements above have run:
+--
+--   enum BillingPlan {
+--     TRIAL
+--     STARTER
+--     GROWTH
+--     SCALE
+--     ENTERPRISE
+--     SOLO
+--     CORE_RESTAURANT
+--   }
+--
+-- (this repo's schema.prisma already declares SOLO/CORE_RESTAURANT --
+-- that's safe to have ahead of the migration, since enum declarations
+-- are TypeScript-side type info at codegen time, not a live DB read.
+-- Only WRITES using these values fail until the ALTER TYPE has run --
+-- reads/SELECTs against the still-empty billing tables are unaffected
+-- either way.)

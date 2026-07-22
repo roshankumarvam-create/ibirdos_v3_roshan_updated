@@ -1160,6 +1160,16 @@ enum BillingPlan {
   GROWTH
   SCALE
   ENTERPRISE
+  /// Added for the real client catalog (Solo Chef / Core Restaurant) --
+  /// NOT usable until PENDING_MIGRATIONS.sql's ALTER TYPE has actually been
+  /// run against the database (Postgres enum values aren't retroactive;
+  /// declaring them here is TypeScript-side type info only). TRIAL/STARTER/
+  /// GROWTH/SCALE predate the current plan taxonomy and are intentionally
+  /// left defined but unused -- Postgres can't drop enum values without
+  /// rebuilding the type, and nothing references them (0 rows in every
+  /// billing table), so leaving them idle is harmless.
+  SOLO
+  CORE_RESTAURANT
 
   @@map("billing_plan")
 }
