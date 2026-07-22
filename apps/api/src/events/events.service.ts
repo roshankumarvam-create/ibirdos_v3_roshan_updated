@@ -15,6 +15,7 @@ import { InventoryService } from "../inventory/inventory.service";
 import { canViewFinancials } from "@ibirdos/permissions";
 import { env } from "@ibirdos/config";
 import { getOrCreateQuoteToken } from "./quote-token.service";
+import { listOutstandingForEvent, resolveShortage } from "./event-ingredient-shortage.service";
 
 const log = moduleLogger("EventsService");
 
@@ -878,6 +879,35 @@ export class EventsService {
     const event = await prisma.event.findFirst({ where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null } });
     if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
     return prisma.event.update({ where: { id: eventId }, data: { shortageAcknowledged: true } as any });
+  }
+
+  /**
+   * Outstanding post-consumption purchase requirements for this event --
+   * real shortfalls KitchenService.consumeIngredients() actually hit, not
+   * the pre-emptive Event.inventoryShortages check. Cost is financial data,
+   * redacted for CHEF/STAFF same as everywhere else; quantity stays
+   * visible (operationally needed -- "still short X lb, go buy it").
+   */
+  async getOutstandingShortages(ctx: TenantContext, eventId: string): Promise<any[]> {
+    const event = await prisma.event.findFirst({ where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null } });
+    if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+    const rows = await listOutstandingForEvent(ctx, eventId);
+    if (canViewFinancials(ctx.role)) return rows;
+    return rows.map(({ estCostCents, ...rest }) => rest);
+  }
+
+  async resolveOutstandingShortage(ctx: TenantContext, eventId: string, shortageId: string): Promise<{ resolved: boolean }> {
+    const event = await prisma.event.findFirst({ where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null } });
+    if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+    const resolved = await resolveShortage(ctx, shortageId, ctx.userId);
+    if (resolved) {
+      await writeAudit(ctx, {
+        action: "event.outstanding_shortage_resolved",
+        entityType: "Event", entityId: eventId,
+        metadata: { shortageId },
+      });
+    }
+    return { resolved };
   }
 
   async assignStaff(ctx: TenantContext, eventId: string, input: { userId?: string; role: string; hours: number; hourlyRateCents: number; notes?: string }): Promise<any> {

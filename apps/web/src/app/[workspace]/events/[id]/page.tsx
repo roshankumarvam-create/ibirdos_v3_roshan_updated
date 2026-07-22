@@ -9,6 +9,7 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { formatCents, formatPct, formatDateTime, formatDate } from "@/lib/format";
 import { MenuSection } from "./menu-section";
 import { ShortageBanner } from "./shortage-banner";
+import { OutstandingShortageBanner } from "./outstanding-shortage-banner";
 import { MarkPaidButton } from "./mark-paid-button";
 import { SendQuoteButton } from "./send-quote-button";
 import { DeleteEventButton } from "./delete-event-button";
@@ -54,6 +55,22 @@ interface Shortage {
   // without financial visibility -- see redactEventFinancials().
   vendorId?: string | null;
   lastUnitPriceCents?: number | null;
+  estCostCents?: number | null;
+}
+
+interface OutstandingShortage {
+  id: string;
+  ingredientId: string;
+  ingredientName: string;
+  canonicalUnit: string;
+  preferredDisplayUnit: string | null;
+  neededCanonical: number;
+  consumedCanonical: number;
+  shortCanonical: number;
+  currentStockCanonical: number;
+  createdAt: string;
+  // Omitted from the API response entirely (not sent as null) for roles
+  // without financial visibility -- see EventsService.getOutstandingShortages().
   estCostCents?: number | null;
 }
 
@@ -128,14 +145,16 @@ export default async function EventDetailPage({
   const c = await cookies();
   const canSeeFinancials = canViewFinancials(user.role);
 
-  const [eventRes, reqRes] = await Promise.all([
+  const [eventRes, reqRes, outstandingRes] = await Promise.all([
     api.get<EventDetail>(`/events/${id}`, { cookies: c }),
     api.get<IngredientRequirement[]>(`/events/${id}/ingredient-requirements`, { cookies: c }),
+    api.get<OutstandingShortage[]>(`/events/${id}/outstanding-shortages`, { cookies: c }),
   ]);
 
   if (!eventRes.data) notFound();
   const event = eventRes.data;
   const requirements = reqRes.data ?? [];
+  const outstandingShortages = outstandingRes.data ?? [];
 
   const isPaid = event.paymentStatus === "PAID";
   const shortages = (event.inventoryShortages ?? []) as Shortage[];
@@ -244,12 +263,27 @@ export default async function EventDetailPage({
         </div>
       </div>
 
-      {/* Shortage banner — shown when PAID and shortages exist */}
+      {/* Shortage banner — shown when PAID and shortages exist. Pre-emptive
+          check computed once at markAsPaid() time (Event.inventoryShortages) --
+          drives the "Acknowledge, proceed anyway" soft gate. Not touched by
+          the outstanding-shortage work below. */}
       {isPaid && shortages.length > 0 && (
         <ShortageBanner
           eventId={event.id}
           shortages={shortages}
           alreadyAcknowledged={event.shortageAcknowledged}
+          canSeeFinancials={canSeeFinancials}
+        />
+      )}
+
+      {/* Outstanding shortage banner — real, already-happened shortfalls
+          from kitchen consumption (KitchenService.consumeIngredients()),
+          separate from the pre-emptive banner above. Visible regardless of
+          acknowledgement/payment status; stays until resolved. */}
+      {outstandingShortages.length > 0 && (
+        <OutstandingShortageBanner
+          eventId={event.id}
+          shortages={outstandingShortages}
           canSeeFinancials={canSeeFinancials}
         />
       )}

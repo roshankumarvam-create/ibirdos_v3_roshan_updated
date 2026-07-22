@@ -93,18 +93,6 @@ export function ShortageBanner({ eventId, shortages, alreadyAcknowledged, canSee
           ))}
         </tbody>
       </table>
-
-      <div className="mt-3 pt-3 border-t border-danger/20">
-        <button
-          className="text-xs text-text-tertiary hover:text-accent-400 underline"
-          onClick={() => {
-            // Stub: in a future task, open a create-PO modal or redirect to vendors page
-            alert("Purchase order generation coming soon. Shortage data has been saved to this event.");
-          }}
-        >
-          Generate purchase order (stub)
-        </button>
-      </div>
     </div>
   );
 }

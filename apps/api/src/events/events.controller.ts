@@ -176,4 +176,18 @@ export class EventsController {
   ingredientRequirements(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
     return this.svc.ingredientRequirements(ctx, id).then(ok);
   }
+
+  // Outstanding post-consumption purchase requirements -- separate surface
+  // from Event.inventoryShortages / shortage/acknowledge above. See
+  // event-ingredient-shortage.service.ts.
+  @Get(":id/outstanding-shortages") @RequirePermission("event.read")
+  outstandingShortages(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return this.svc.getOutstandingShortages(ctx, id).then(ok);
+  }
+
+  @Post(":id/outstanding-shortages/:shortageId/resolve") @RequirePermission("event.update") @HttpCode(HttpStatus.OK)
+  resolveOutstandingShortage(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+                              @Param("shortageId") shortageId: string): Promise<any> {
+    return this.svc.resolveOutstandingShortage(ctx, id, shortageId).then(ok);
+  }
 }

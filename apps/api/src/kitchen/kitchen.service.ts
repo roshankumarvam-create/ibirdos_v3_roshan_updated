@@ -7,6 +7,7 @@ import { toCanonical } from "@ibirdos/types";
 import { canViewFinancials } from "@ibirdos/permissions";
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { InventoryService } from "../inventory/inventory.service";
+import { recordShortage } from "../events/event-ingredient-shortage.service";
 
 const log = moduleLogger("KitchenService");
 
@@ -283,7 +284,7 @@ export class KitchenService {
           // available right now instead of silently consuming nothing.
           const fresh = await prisma.ingredient.findFirst({
             where: { id: ing.id, workspaceId: ctx.workspaceId },
-            select: { currentStockCanonical: true },
+            select: { currentStockCanonical: true, currentCostMicrocents: true, preferredDisplayUnit: true },
           });
           const availableCanonical = fresh ? Number(fresh.currentStockCanonical) : 0;
 
@@ -304,6 +305,33 @@ export class KitchenService {
             { ingredientId: ing.id, taskId, neededCanonical, availableCanonical },
             "shortage on kitchen-task auto-consume — deducted available stock to zero",
           );
+
+          // Outstanding purchase-requirement ledger: record what's still
+          // needed after this actual consumption attempt, not a live
+          // recompute against current stock later (see file header for
+          // why that distinction matters). No-op until PENDING_MIGRATIONS.sql
+          // is run -- see event-ingredient-shortage.service.ts.
+          if (eventId) {
+            const shortCanonical = neededCanonical - availableCanonical;
+            const currentCostMicrocents = fresh?.currentCostMicrocents != null ? Number(fresh.currentCostMicrocents) : 0;
+            const estCostCents = currentCostMicrocents > 0
+              ? Math.round((shortCanonical * currentCostMicrocents) / 1_000)
+              : null;
+            await recordShortage(ctx, {
+              eventId,
+              ingredientId: ing.id,
+              ingredientName: ing.name,
+              canonicalUnit: ing.canonicalUnit,
+              preferredDisplayUnit: fresh?.preferredDisplayUnit ?? null,
+              neededCanonical,
+              consumedCanonical: availableCanonical,
+              shortCanonical,
+              estCostCents,
+              sourceTaskId: taskId,
+            }).catch((err: any) =>
+              log.warn({ err: err.message, ingredientId: ing.id, taskId }, "failed to record outstanding shortage"),
+            );
+          }
         }
       } catch (err: any) {
         log.warn({ err: err.message, ingredientId: ing.id, taskId }, "ingredient consume skipped (non-stock error)");
