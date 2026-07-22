@@ -82,6 +82,19 @@ const UpdateRecipeSchema = CreateRecipeSchema.partial().omit({ ingredients: true
   procedure:     z.union([z.string().max(20000), z.null()]).optional(),
   instructionsMd: z.union([z.string().max(20000), z.null()]).optional(),
 });
+// UpdateLineSchema: PATCH /recipes/:id/ingredients/:linkId -- edits an
+// EXISTING line's quantity/unit/prep note/size/yield. Deliberately no
+// `name` field: renaming would mean renaming the shared Ingredient
+// record (name isn't a RecipeIngredient column at all), a bigger action
+// than a per-recipe-line edit implies -- see NEEDS_ROSHAN.md.
+const UpdateLineSchema = z.object({
+  quantity:        z.number().positive().optional(),
+  unit:            z.string().min(1).max(32).optional(),
+  prepNote:        z.string().max(500).nullable().optional(),
+  sizeQualifier:   z.string().max(40).nullable().optional(),
+  percentUtilized: z.number().min(1).max(200).nullable().optional(),
+});
+
 const ImportCsvSchema = z.object({
   filename: z.string().min(1),
   contentBase64: z.string().min(1),
@@ -146,6 +159,13 @@ export class RecipesController {
   addIngredient(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
                 @Body(new ZodValidationPipe(LineSchema)) body: any) {
     return this.svc.addIngredient(ctx, id, body).then(ok);
+  }
+
+  @Patch(":id/ingredients/:linkId") @RequirePermission("recipe.update")
+  updateIngredient(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+                   @Param("linkId") linkId: string,
+                   @Body(new ZodValidationPipe(UpdateLineSchema)) body: any) {
+    return this.svc.updateIngredientLine(ctx, id, linkId, body).then(ok);
   }
 
   @Delete(":id/ingredients/:linkId") @RequirePermission("recipe.update")

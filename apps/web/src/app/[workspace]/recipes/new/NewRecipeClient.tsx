@@ -210,6 +210,14 @@ export function NewRecipeClient({ workspaceSlug, canSeeFinancials }: { workspace
     setLines(prev => prev.map(l => {
       if (l.key !== key) return l;
       const dim = ing.dimension;
+      // P1-6 fix: only reset the unit when the newly selected ingredient's
+      // dimension actually differs from the line's current one (so the
+      // previously chosen unit isn't even valid in the new dropdown) --
+      // previously this unconditionally overwrote unit to the dimension's
+      // default, silently discarding a unit the user had already set (e.g.
+      // set qty "2" + unit "lb", then search/select an ingredient last —
+      // "lb" got clobbered back to "oz" with no indication to the user).
+      const unitStillValid = (UNITS_BY_DIMENSION[dim] ?? []).includes(l.unit);
       return {
         ...l,
         ingredientId: ing.id,
@@ -217,7 +225,7 @@ export function NewRecipeClient({ workspaceSlug, canSeeFinancials }: { workspace
         dimension: dim,
         densityGPerMl: ing.densityGPerMl,
         pricePerCanonicalCents: ing.currentCostCents ?? 0,
-        unit: DEFAULT_UNIT[dim] ?? "each",
+        unit: unitStillValid ? l.unit : (DEFAULT_UNIT[dim] ?? "each"),
         searchQuery: ing.name,
         searchResults: [],
         showDropdown: false,

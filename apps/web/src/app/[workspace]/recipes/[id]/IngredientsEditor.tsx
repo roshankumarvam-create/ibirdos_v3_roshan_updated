@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
@@ -115,15 +116,20 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
       <tbody className="divide-y divide-bg-border">
         {lines.map(line => (
           <tr key={line.id} className={`hover:bg-bg-hover/20 ${saving[line.id] ? "opacity-50" : ""}`}>
-            {/* Name */}
+            {/* Name -- read-only here: this is the shared Ingredient's name
+                (not a per-recipe-line field), so renaming it belongs on the
+                ingredient's own page, not a silent side effect of editing
+                one recipe. See NEEDS_ROSHAN.md. */}
             <td className="px-4 py-1.5 text-text-primary">
               <div className="flex items-center gap-1">
                 {canEdit ? (
-                  <input
-                    className="w-full bg-transparent border-b border-transparent hover:border-bg-border focus:border-primary focus:outline-none text-sm"
-                    defaultValue={line.ingredient.name}
-                    onBlur={e => handleBlur(line.id, "name", e.target.value)}
-                  />
+                  <Link
+                    href={`/${workspaceId}/ingredients/${line.ingredientId}` as any}
+                    className="text-sm hover:underline hover:text-accent-400"
+                    title="Edit this ingredient's name on its own page"
+                  >
+                    {line.ingredient.name}
+                  </Link>
                 ) : (
                   <span>{line.ingredient.name}</span>
                 )}
@@ -155,7 +161,13 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
               )}
             </td>
 
-            {/* Qty */}
+            {/* Qty -- edits the SAME `quantity` field cost computation reads
+                (computeLiveRecipeCost() in recipe-cost.helper.ts), not the
+                separate qtyNative/unitNative copy (that's a cosmetic record
+                of what the AI extraction literally said, never read by any
+                cost/consumption logic -- editing it here previously changed
+                what was displayed without changing what the recipe actually
+                costs, see FIX_LOG.md P1-6/P1-7). */}
             <td className="px-4 py-1.5 text-right">
               {canEdit ? (
                 <input
@@ -163,12 +175,12 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
                   step="0.001"
                   min="0"
                   className="w-20 bg-transparent border-b border-transparent hover:border-bg-border focus:border-primary focus:outline-none text-sm text-right tabular-nums"
-                  defaultValue={Number(line.qtyNative ?? line.quantity)}
-                  onBlur={e => handleBlur(line.id, "qtyNative", parseFloat(e.target.value))}
+                  defaultValue={Number(line.quantity)}
+                  onBlur={e => handleBlur(line.id, "quantity", parseFloat(e.target.value))}
                 />
               ) : (
                 <span className="tabular-nums text-text-secondary">
-                  {line.qtyNative ?? line.quantity}
+                  {line.quantity}
                 </span>
               )}
             </td>
@@ -178,9 +190,9 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
               {canEdit ? (
                 <select
                   className="bg-bg-inset border border-bg-border rounded px-1 py-0.5 text-text-primary focus:outline-none focus:border-accent-500/60 text-sm font-mono cursor-pointer"
-                  defaultValue={line.unitNative ?? line.unit}
-                  onBlur={e => handleBlur(line.id, "unitNative", e.target.value)}
-                  onChange={e => handleBlur(line.id, "unitNative", e.target.value)}
+                  defaultValue={line.unit}
+                  onBlur={e => handleBlur(line.id, "unit", e.target.value)}
+                  onChange={e => handleBlur(line.id, "unit", e.target.value)}
                 >
                   {UNIT_GROUPS.map(group => (
                     <optgroup key={group.label} label={group.label}>
@@ -192,7 +204,7 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
                 </select>
               ) : (
                 <span className="font-mono text-xs text-text-secondary">
-                  {line.unitNative ?? line.unit}
+                  {line.unit}
                 </span>
               )}
             </td>

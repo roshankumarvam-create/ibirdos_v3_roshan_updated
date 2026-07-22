@@ -520,6 +520,64 @@ export class RecipesService {
     return created;
   }
 
+  /**
+   * P1-6/P1-7 fix: this endpoint didn't exist at all before -- the saved
+   * recipe detail page's inline editor (IngredientsEditor.tsx) has always
+   * called PATCH /recipes/:id/ingredients/:linkId, which 404'd silently
+   * (no error surfaced to the user) on every single edit. Quantity/unit
+   * here are the SAME fields computeLiveRecipeCost() reads for costing --
+   * unlike qtyNative/unitNative, which are a separate, cosmetic copy of
+   * "what the AI extraction literally said" and are never read by any
+   * cost/consumption logic. The frontend fix (this same commit) stops
+   * targeting qtyNative/unitNative for user edits and targets quantity/unit
+   * directly, so an edit here now actually changes what the recipe costs.
+   */
+  async updateIngredientLine(
+    ctx: TenantContext,
+    recipeId: string,
+    recipeIngredientId: string,
+    patch: {
+      quantity?: number;
+      unit?: string;
+      prepNote?: string | null;
+      sizeQualifier?: string | null;
+      percentUtilized?: number | null;
+    },
+  ) {
+    const link = await prisma.recipeIngredient.findFirst({
+      where: { id: recipeIngredientId, recipeId, workspaceId: ctx.workspaceId },
+    });
+    if (!link) throw new NotFoundException({ code: "not_found", message: "Recipe ingredient not found" });
+
+    const updated = await prisma.recipeIngredient.update({
+      where: { id: recipeIngredientId },
+      data: {
+        ...(patch.quantity !== undefined ? { quantity: patch.quantity } : {}),
+        ...(patch.unit !== undefined ? { unit: patch.unit } : {}),
+        ...(patch.prepNote !== undefined ? { prepNote: patch.prepNote } : {}),
+        ...(patch.sizeQualifier !== undefined ? { sizeQualifier: patch.sizeQualifier } : {}),
+        ...(patch.percentUtilized !== undefined ? { yieldPctOverride: patch.percentUtilized } : {}),
+      },
+      include: { ingredient: { select: { id: true, name: true, canonicalUnit: true, preferredDisplayUnit: true } } },
+    });
+
+    await writeAudit(ctx, {
+      action: "recipe.ingredient_updated",
+      entityType: "RecipeIngredient",
+      entityId: recipeIngredientId,
+      metadata: { recipeId, changes: Object.keys(patch) },
+    });
+
+    // Any of these fields affects cost -- recost so the detail page's live
+    // cost reflects the edit immediately, not after the next unrelated trigger.
+    await this.recost(ctx, recipeId, "recipe_edit");
+
+    return {
+      ...updated,
+      percentUtilized: updated.yieldPctOverride != null ? Number(updated.yieldPctOverride) : null,
+    };
+  }
+
   async removeIngredient(ctx: TenantContext, recipeId: string, recipeIngredientId: string) {
     const link = await prisma.recipeIngredient.findFirst({
       where: { id: recipeIngredientId, recipeId, workspaceId: ctx.workspaceId },

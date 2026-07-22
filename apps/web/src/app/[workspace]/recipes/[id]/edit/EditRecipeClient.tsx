@@ -259,6 +259,11 @@ export function EditRecipeClient({
   const selectIngredient = (key: string, ing: IngredientSearchResult) => {
     setLines((prev) => prev.map((l) => {
       if (l.key !== key) return l;
+      // P1-6 fix: preserve a unit the user already set if it's still valid
+      // for the newly selected ingredient's dimension -- previously this
+      // unconditionally reset unit to the dimension's default, silently
+      // discarding whatever the user had already picked.
+      const unitStillValid = (UNITS_BY_DIMENSION[ing.dimension] ?? []).includes(l.unit);
       return {
         ...l,
         ingredientId: ing.id,
@@ -266,7 +271,7 @@ export function EditRecipeClient({
         dimension: ing.dimension,
         densityGPerMl: ing.densityGPerMl,
         pricePerCanonicalCents: ing.currentCostCents ?? 0,
-        unit: DEFAULT_UNIT[ing.dimension] ?? "each",
+        unit: unitStillValid ? l.unit : (DEFAULT_UNIT[ing.dimension] ?? "each"),
         searchQuery: ing.name,
         searchResults: [],
         showDropdown: false,
