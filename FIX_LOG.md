@@ -1096,3 +1096,27 @@ Per Roshan's decision: build only the manual-edit escape hatch (Option A), hold 
 **Verification:** `pnpm --filter @ibirdos/web typecheck` clean. Pure frontend change, no backend/schema touched (API already supported it). **Not yet deployed — bundle with the next deploy.** **Live test for Roshan**: open any ingredient, click Edit, confirm a Category dropdown appears and saving a new category actually sticks (reload the page, category shows the new value).
 
 ---
+
+### URGENT-1 — kitchen-task inventory consume silently deducted nothing on shortage — FIXED (not a P0-2 regression)
+
+Reported as "inventory now consuming NOTHING, may be P0-2 over-correcting." **Investigated with real production data first, per instructions, before touching any code.**
+
+**What the data showed** (workspace `roshancafe99999`, event "22smith", ingredient Beef Sirloin Tri Tip — needed 1000 lb, stock 68.5 lb, both PREP and SERVICE tasks DONE, stock unchanged):
+- Zero `Event`-sourced CONSUME transactions existed for this event.
+- Zero `KitchenTask`-sourced CONSUME transactions existed for either of this event's two tasks.
+- Both of P0-2's idempotency guards (`hasTransactionFor(ctx, "KitchenTask", taskId, ...)` and `hasTransactionFor(ctx, "Event", eventId, ...)`) require an *existing* transaction to fire — with zero existing transactions, neither guard could possibly have blocked anything. **P0-2 is not the cause.**
+- `Event.shortageAcknowledged` is written by exactly one endpoint and read nowhere else in the codebase — confirmed zero effect on consumption.
+
+**Actual root cause**: `InventoryService.recordTransaction()` — the single choke point for every stock change, present since the very first MVP commit, untouched by P0-2 — throws `BadRequestException` for any transaction that would take stock negative (`if (newBalance.lt(0)) throw`). `KitchenService.consumeIngredients()`'s per-ingredient loop wrapped that call in a try/catch that treated the rejection exactly like "skip this ingredient" (by original design, per its own docstring: "a failure on one, e.g. no stock, is logged but does NOT abort the others"). On a shortage, that meant the entire ingredient's consumption silently became a no-op — and the subsequent `writeAudit` call still logged `action: "kitchen.ingredients_consumed"` with no indication anything was skipped, which is why nobody noticed until an event with a shortage this large (931.5 lb short) was actually completed.
+
+**Fix:** on the specific negative-stock rejection (discriminated from other validation failures via a new `isNegativeStockRejection()` helper, so genuine errors — bad units, missing ingredient — still propagate normally), re-read the ingredient's current stock and consume whatever is actually available, flooring at zero. Never skips, never goes negative. The transaction's `notes` field and the audit log's new `shortfalls` metadata both record the true shortfall (needed vs. available) instead of the previous silent, misleadingly-labeled no-op. Whether stock should instead be allowed to go negative (to preserve the exact shortfall magnitude) is flagged as an open product decision in `NEEDS_ROSHAN.md`, not guessed at.
+
+**Files changed:** `apps/api/src/kitchen/kitchen.service.ts`
+**Commit:** `da1650d`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. Full API suite 136/139 (same 3 pre-existing unrelated failures). **Live-backtested in the isolated `roshantest` workspace, both cases, then fully cleaned up (confirmed zero leftover rows)**:
+- Sufficient stock (need 200g, have 500g): full CONSUME of -200g, stock 500 → 300, no shortfall recorded.
+- Shortage (need 200g, have only 50g): CONSUME of -50g (all available), stock 50 → 0 (not negative, not unchanged), transaction note and audit metadata both correctly record the 150g shortfall.
+
+**NOT deployed** per instruction. **Live test for Roshan, after deploying**: the real "22smith" event's PREP task never actually recorded any transaction (the old code threw before writing one), so the task-level idempotency guard won't block a retry — toggle that task DONE → PENDING → DONE once this is live and it will correctly backfill the shortage-aware consumption for that real event. No manual SQL needed.
+
+---

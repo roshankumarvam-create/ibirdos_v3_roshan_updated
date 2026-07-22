@@ -2,6 +2,18 @@
 
 ---
 
+## URGENT-1 — should shortage-consumption be allowed to go negative instead of deduct-to-zero?
+
+**Fixed the actual bug (kitchen tasks silently consuming nothing on shortage) without guessing on this part** — see `FIX_LOG.md` "URGENT-1". Current shipped behavior: on a shortage, consume whatever stock IS available and floor at zero, recording the shortfall in the transaction note and audit metadata. Stock never goes negative.
+
+The alternative — let the CONSUME transaction take stock negative, preserving the exact shortfall magnitude (e.g. `-931.5 lb` instead of floored `0`) — is more information-preserving (matches how the app's own shortage-detection feature already reports deficits as negative numbers elsewhere) but is a bigger-blast-radius change: it assumes every other place that reads `currentStockCanonical` (low-stock alerts, "in stock" badges, reorder-threshold comparisons, CSV exports) tolerates a negative value without breaking or displaying something confusing. I didn't audit all of those for negative-safety, so I didn't default to it.
+
+If you want negative stock instead (more honest shortfall tracking, but needs that broader audit first), let me know and I'll do the audit + switch it over. Otherwise, deduct-to-zero (current, shipped) stands.
+
+**Also flagged, not a decision needed, just context:** the real production event that surfaced this ("22smith", workspace `roshancafe99999`, Beef Sirloin Tri Tip) has its PREP task already marked DONE with zero consumption ever recorded (confirmed via direct query — no CONSUME transaction exists for that task). Because no transaction was ever written, the task-level idempotency guard won't block a retry: once this fix is deployed, toggling that task DONE → PENDING → DONE again will correctly backfill the (now-shortage-aware) consumption for that event. No manual SQL needed for this one — just re-run it through the UI once deployed.
+
+---
+
 ## BUG C — Should Chef be able to log inventory write-offs at all? — RESOLVED
 
 **Resolved 2026-07-21: keep as implemented.** Decision: Chef's write-off/waste-logging ability (`waste.create`) stays — a chef logging spoilage is legitimate kitchen work. Receive and Recount (`inventory.adjust`) stay blocked for Chef/Staff. No change needed; the shipped implementation is correct.
