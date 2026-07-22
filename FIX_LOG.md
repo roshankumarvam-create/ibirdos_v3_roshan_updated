@@ -1188,3 +1188,22 @@ Neither field was labeled as input-vs-derived, and nothing indicated which one a
 **NOT deployed. Live test for Roshan**: open the create-recipe and edit-recipe forms, confirm the new helper text under "Goal food cost %" and "Target margin %" reads clearly; open a saved recipe's Cost summary sidebar and hover the "Actual food cost %" / "Goal food cost % (reference)" rows to see the new tooltips.
 
 ---
+
+### Saved recipe page: blank Line cost / confusing % Used — investigated as a reported "P1-6/7 regression," confirmed pre-existing, fixed
+
+Reported against a real recipe (`cmrt5mx5j00py9uv8w7pwxp58`, workspace `roshancafe99999`): Size/% Used/Line cost showing dashes on the saved detail page while the edit page showed real values. **Confirmed this is NOT caused by the P1-6/P1-7 commit** — that commit only touched Name/Qty/Unit cells. Root cause, verified against the real row:
+- `sizeQualifier` is genuinely `null` — not a bug, nothing to compare.
+- `yieldPctOverride` is genuinely `null` too — the edit page just silently displays a fallback of 100 for that case; the saved page didn't, which read as inconsistent but wasn't data loss.
+- `RecipesService.get()` has never merged per-line cost into `ingredients[]` at all — that lived only in the separate `liveBreakdown` array, which the saved page's inline editor never receives. Line cost showed "—" for every recipe, always, structurally.
+
+Also ran a workspace-wide audit per request: `qtyNative`/`unitNative` disagree with `quantity`/`unit` in **0 of 133** `recipe_ingredients` rows across all of production. The original P1-6/P1-7 bug never actually corrupted real data — nothing to backfill.
+
+**Fix:** merged `live.breakdown`'s `lineCostCents` into each `ingredients[]` row (redacted for CHEF/STAFF same as every other cost field — verified: CHEF role gets `null`, OWNER gets the real figure). Left % Used's actual persisted value untouched — deliberately did *not* pre-fill "100" into the editable input, since blurring an untouched pre-filled input would silently persist an explicit 100% override (risking that line no longer tracking a future change to the ingredient's own default yield %). Clarified the placeholder/tooltip copy instead so blank reads as "uses the ingredient's default," not "no data."
+
+**Files changed:** `apps/api/src/recipes/recipes.service.ts`, `apps/web/src/app/[workspace]/recipes/[id]/IngredientsEditor.tsx`
+**Commit:** `e29b335`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. Full API suite 140/143 (same 3 pre-existing unrelated failures). Live-backtested in `roshantest`: OWNER sees the correct Line cost ($20.00 for 2lb @ ~$10/lb), CHEF sees `null` (redacted), `percentUtilized` correctly `null` when no override exists.
+
+**NOT deployed. Live test for Roshan**: open the "22smith"/"33smith"-style recipe with Beef Sirloin, confirm Line cost now shows a real dollar figure instead of "—".
+
+---
