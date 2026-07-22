@@ -1207,3 +1207,19 @@ Also ran a workspace-wide audit per request: `qtyNative`/`unitNative` disagree w
 **NOT deployed. Live test for Roshan**: open the "22smith"/"33smith"-style recipe with Beef Sirloin, confirm Line cost now shows a real dollar figure instead of "—".
 
 ---
+
+### P1-11 — completed kitchen-task history — FIXED
+
+Investigated first: `KitchenService.listForBoard()` (backing `GET /kitchen/tasks`) has never filtered by status — the API always returned DONE/CANCELLED tasks too. Only `KitchenBoard`'s frontend component excluded them (`if (t.status === "DONE" || t.status === "CANCELLED") continue`), and no history view existed anywhere to actually see them. `status`/`completedAt` already exist on `KitchenTask`; "completed by" does not have its own column.
+
+**No schema change needed at all.** `KitchenTask` is queried via plain Prisma everywhere (unlike quote_token/event_ingredient_shortages, which are accessed only through dedicated raw-SQL services) — adding an unmigrated field to `schema.prisma` would break every one of those queries the moment this deploys. Instead of a new column, "completed by" is resolved from the audit-log entry `writeAudit()` already writes on every status change inside `updateTask()` — that data already exists for every task that's ever been completed, so no migration is needed for this one at all.
+
+**Built:** `KitchenService.listHistory()` (cursor-paginated, most-recently-finished first, DONE/CANCELLED only, resolves event name + completed-by name via batched lookups), new `GET /kitchen/tasks/history`, new `/kitchen/history` page (Task, Event, Station, Portions, Status, Completed at, Completed by), linked from the kitchen board header ("Completed tasks →").
+
+**Files changed:** `apps/api/src/kitchen/{kitchen.service.ts, kitchen.controller.ts}`, `apps/web/src/app/[workspace]/kitchen/{page.tsx, history/page.tsx}` (new)
+**Commit:** `db11c8c`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. Full API suite 140/143 (same 3 pre-existing unrelated failures). Live-backtested in `roshantest`, cleaned up after: created and completed a real task, confirmed it appears in the history list with the correct event name and the correct completing user's name resolved from the audit log.
+
+**NOT deployed. Live test for Roshan**: complete a kitchen task, click "Completed tasks →" from the kitchen board, confirm it appears with the right event/station/portions/completed-at/completed-by.
+
+---
