@@ -538,6 +538,8 @@ model Event {
   /// [{ingredientId, name, neededCanonical, haveCanonical, shortCanonical, vendorId, lastUnitPriceCents}]
   inventoryShortages     Json?                  @map("inventory_shortages")
   shortageAcknowledged   Boolean                @default(false) @map("shortage_acknowledged")
+  /// BUG 5: unguessable token resolving GET /public/quote/:token to this event only
+  quoteToken             String?                @unique @map("quote_token")
   createdAt              DateTime               @default(now()) @map("created_at")
   updatedAt              DateTime               @updatedAt @map("updated_at")
   createdById            String?                @map("created_by_id")

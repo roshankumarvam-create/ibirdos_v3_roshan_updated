@@ -1,53 +1,47 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@ibirdos/logger", () => ({
-  moduleLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-}));
-
-// In-memory fake table simulating real Postgres WHERE-equality semantics --
-// the point of these tests is to prove the LOOKUP LOGIC only ever matches
-// by exact token equality, never by prefix/fuzzy/partial match, and never
-// returns more than one event's data for one token.
+// In-memory fake table simulating real Prisma/Postgres WHERE-equality
+// semantics -- the point of these tests is to prove the LOOKUP LOGIC
+// only ever matches by exact token equality, never by prefix/fuzzy/
+// partial match, and never returns more than one event's data for one
+// token.
 interface FakeEventRow {
-  id: string; workspace_id: string; name: string; service_type: string;
-  venue_address: string | null; customer_name: string | null; starts_at: Date;
-  status: string; markup_pct: string; labor_total_cents: number;
-  quoted_price_cents: number | null; quoted_total_override_cents: number | null;
-  quote_token: string | null;
+  id: string; workspaceId: string; name: string; serviceType: string;
+  venueAddress: string | null; customerName: string | null; startsAt: Date;
+  status: string; markupPct: { toString(): string }; laborTotalCents: number;
+  quotedPriceCents: number | null; quotedTotalOverrideCents: number | null;
+  quoteToken: string | null; deletedAt: Date | null;
 }
 
 let fakeTable: FakeEventRow[] = [];
-let queryShouldThrow = false;
 
-const mockQueryRaw = vi.fn(async (strings: TemplateStringsArray, ...values: any[]) => {
-  if (queryShouldThrow) throw new Error('column "quote_token" does not exist');
-  const sql = strings.join("?");
-  if (sql.includes("SELECT quote_token FROM events WHERE id")) {
-    const [eventId, workspaceId] = values;
-    const row = fakeTable.find((r) => r.id === eventId && r.workspace_id === workspaceId);
-    return row ? [{ quote_token: row.quote_token }] : [];
-  }
-  if (sql.includes("SELECT id, workspace_id, name")) {
-    const [token] = values;
+const mockFindFirst = vi.fn(async ({ where, select }: any) => {
+  const row = fakeTable.find((r) => {
+    if (r.deletedAt !== null && where.deletedAt === null) return false;
+    if (where.id !== undefined && r.id !== where.id) return false;
+    if (where.workspaceId !== undefined && r.workspaceId !== where.workspaceId) return false;
     // Exact-equality match only -- this is the actual behavior under test.
-    const row = fakeTable.find((r) => r.quote_token === token);
-    return row ? [row] : [];
-  }
-  throw new Error(`unexpected query in test: ${sql}`);
+    if (where.quoteToken !== undefined && r.quoteToken !== where.quoteToken) return false;
+    return true;
+  });
+  if (!row) return null;
+  const result: any = {};
+  for (const key of Object.keys(select)) result[key] = (row as any)[key];
+  return result;
 });
 
-const mockExecuteRaw = vi.fn(async (strings: TemplateStringsArray, ...values: any[]) => {
-  if (queryShouldThrow) throw new Error('column "quote_token" does not exist');
-  const [token, eventId, workspaceId] = values;
-  const row = fakeTable.find((r) => r.id === eventId && r.workspace_id === workspaceId);
-  if (row) row.quote_token = token;
-  return 1;
+const mockUpdate = vi.fn(async ({ where, data }: any) => {
+  const row = fakeTable.find((r) => r.id === where.id);
+  if (row) Object.assign(row, data);
+  return row;
 });
 
 vi.mock("@ibirdos/db", () => ({
   prisma: {
-    $queryRaw: (strings: TemplateStringsArray, ...values: any[]) => mockQueryRaw(strings, ...values),
-    $executeRaw: (strings: TemplateStringsArray, ...values: any[]) => mockExecuteRaw(strings, ...values),
+    event: {
+      findFirst: (args: any) => mockFindFirst(args),
+      update: (args: any) => mockUpdate(args),
+    },
   },
 }));
 
@@ -55,11 +49,11 @@ import { getOrCreateQuoteToken, resolveEventByQuoteToken } from "./quote-token.s
 
 function makeEvent(overrides: Partial<FakeEventRow>): FakeEventRow {
   return {
-    id: "ev1", workspace_id: "ws1", name: "Event", service_type: "OTHER",
-    venue_address: null, customer_name: null, starts_at: new Date(),
-    status: "DRAFT", markup_pct: "0", labor_total_cents: 0,
-    quoted_price_cents: null, quoted_total_override_cents: null,
-    quote_token: null,
+    id: "ev1", workspaceId: "ws1", name: "Event", serviceType: "OTHER",
+    venueAddress: null, customerName: null, startsAt: new Date(),
+    status: "DRAFT", markupPct: { toString: () => "0" }, laborTotalCents: 0,
+    quotedPriceCents: null, quotedTotalOverrideCents: null,
+    quoteToken: null, deletedAt: null,
     ...overrides,
   };
 }
@@ -67,10 +61,9 @@ function makeEvent(overrides: Partial<FakeEventRow>): FakeEventRow {
 describe("quote-token.service — BUG 5 security: a token can only ever resolve to the ONE event it was generated for", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    queryShouldThrow = false;
     fakeTable = [
-      makeEvent({ id: "ev-A", workspace_id: "ws-A", name: "Smith Wedding", quote_token: "a".repeat(64) }),
-      makeEvent({ id: "ev-B", workspace_id: "ws-B", name: "Jones Birthday (different tenant entirely)", quote_token: "b".repeat(64) }),
+      makeEvent({ id: "ev-A", workspaceId: "ws-A", name: "Smith Wedding", quoteToken: "a".repeat(64) }),
+      makeEvent({ id: "ev-B", workspaceId: "ws-B", name: "Jones Birthday (different tenant entirely)", quoteToken: "b".repeat(64) }),
     ];
   });
 
@@ -105,13 +98,13 @@ describe("quote-token.service — BUG 5 security: a token can only ever resolve 
     const result2 = await resolveEventByQuoteToken("short");
     expect(result1).toBeNull();
     expect(result2).toBeNull();
-    expect(mockQueryRaw).not.toHaveBeenCalled();
+    expect(mockFindFirst).not.toHaveBeenCalled();
   });
 
   it("getOrCreateQuoteToken generates a token scoped to the requesting workspace, and a mismatched workspaceId cannot mint/fetch another workspace's token", async () => {
     const token = await getOrCreateQuoteToken("ws-A", "ev-A");
     expect(token).not.toBeNull();
-    expect(fakeTable.find((r) => r.id === "ev-A")!.quote_token).toBe(token);
+    expect(fakeTable.find((r) => r.id === "ev-A")!.quoteToken).toBe(token);
 
     // Wrong workspaceId for a real event id -- must not mint/return a token.
     const wrongWorkspace = await getOrCreateQuoteToken("ws-WRONG", "ev-B");
@@ -119,16 +112,14 @@ describe("quote-token.service — BUG 5 security: a token can only ever resolve 
   });
 
   it("reuses an existing token rather than minting a new one on repeat calls", async () => {
-    fakeTable[0]!.quote_token = "existing-token-value".padEnd(64, "0");
+    fakeTable[0]!.quoteToken = "existing-token-value".padEnd(64, "0");
     const token = await getOrCreateQuoteToken("ws-A", "ev-A");
     expect(token).toBe("existing-token-value".padEnd(64, "0"));
   });
 
-  it("degrades gracefully (returns null, doesn't throw) when the quote_token column doesn't exist yet -- the migration-not-run case", async () => {
-    queryShouldThrow = true;
-    const lookupResult = await resolveEventByQuoteToken("a".repeat(64));
-    const tokenResult = await getOrCreateQuoteToken("ws-A", "ev-A");
-    expect(lookupResult).toBeNull();
-    expect(tokenResult).toBeNull();
+  it("a soft-deleted event's token no longer resolves", async () => {
+    fakeTable[0]!.deletedAt = new Date();
+    const result = await resolveEventByQuoteToken("a".repeat(64));
+    expect(result).toBeNull();
   });
 });
