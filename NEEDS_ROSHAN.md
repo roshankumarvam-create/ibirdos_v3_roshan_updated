@@ -2,6 +2,14 @@
 
 ---
 
+## P1-6/P1-7 — should editing an ingredient's name from the recipe page rename it everywhere?
+
+Fixed the actual bugs (see `FIX_LOG.md` "P1-6/P1-7") without guessing on this part. The saved recipe page's ingredient editor had a "Name" field that PATCHed `{name: ...}` to the recipe-ingredient endpoint — but `name` isn't a `RecipeIngredient` column at all; it's the shared `Ingredient` record's name, used by every other recipe, invoice, and inventory record that references it. Wiring that up as written would have meant "fix a typo while looking at one recipe" silently renames the ingredient everywhere.
+
+I made it read-only here (links out to the ingredient's own edit page instead) rather than build a global-rename side effect I wasn't sure was wanted. If you DO want inline rename-from-recipe-page to work, it's a small, well-scoped addition (route the "name" patch to `IngredientsService.update()` using `line.ingredientId` instead of the recipe-ingredient endpoint) — let me know and I'll wire it up.
+
+---
+
 ## Outstanding-shortage ledger — auto-resolve-on-receive fast-follow (not built, flagged not guessed)
 
 Built exactly as approved: immutable row per shortfall, manual "Mark resolved" action, live read-only "stock now sufficient" badge. Deliberately did NOT build auto-resolve-on-receive (a shortage row automatically clearing itself the moment enough stock arrives) — you flagged the risk yourself (recreating the exact recompute-and-lose-history trap this whole feature exists to avoid), and I agree it needs real design, not a quick hook.
