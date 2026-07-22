@@ -1167,3 +1167,24 @@ Design question you raised after URGENT-1: the real 931.5 lb shortfall `consumeI
 **NOT deployed. Live test for Roshan**: open a saved recipe, edit an ingredient's Qty or Unit inline, confirm it actually sticks (reload the page) AND that "Live ingredient cost" on the sidebar updates to match.
 
 ---
+
+### P1-8 — food-cost % vs target-margin % field clarity
+
+**Investigated the actual behavior first, per instructions.** Confirmed by reading the pricing calc in both recipe forms:
+- **"Target margin %"** genuinely drives pricing — when "Auto-reprice" is on, sell price is solved backwards from it (`sellPrice = portionCost / (1 - margin%/100)`). The user never types a price in this mode.
+- **"Goal food cost %"** is completely independent — never affects pricing in either mode. It only colors "Actual food cost %" red/green and suggests a manual "min sell price" (relevant only when Auto-reprice is off).
+- **"Actual food cost %"** and **"Margin per portion"** are always derived, never directly editable — neither form's UI said so.
+
+Neither field was labeled as input-vs-derived, and nothing indicated which one actually sets the price. Beyond mislabeling, found a real underlying design gap: the two targets never reconcile — a user can set "Goal food cost %" to 20% and "Target margin %" to 50% (mathematically incompatible), and the app will silently auto-price to the 50% margin, then flag the resulting ~50% actual food cost **red** against the user's own 20% goal, with no warning the two settings disagree.
+
+**Fix (labels/clarity only, per priority — "mostly UI clarity"):** relabeled "Actual food cost %" and "Margin per portion" as "(calculated)" everywhere (create form, edit form, saved detail sidebar); added helper text next to "Goal food cost %" (reference line only, doesn't set price) and "Target margin %" (this is what sets the price when Auto-reprice is on) in both recipe forms; added clarifying tooltips to the saved detail page's cost summary rows.
+
+**Not fixed, flagged instead:** whether the two targets should be reconciled (warn on disagreement, or collapse to one field) is a real product decision — see `NEEDS_ROSHAN.md`, three options laid out, not guessed at.
+
+**Files changed:** `apps/web/src/app/[workspace]/recipes/{new/NewRecipeClient.tsx, [id]/edit/EditRecipeClient.tsx, [id]/page.tsx}`
+**Commit:** `5cc61e6`
+**Verification:** `pnpm typecheck` (all 9 packages) clean. Pure frontend labeling/copy change, no logic touched — nothing to backtest behaviorally.
+
+**NOT deployed. Live test for Roshan**: open the create-recipe and edit-recipe forms, confirm the new helper text under "Goal food cost %" and "Target margin %" reads clearly; open a saved recipe's Cost summary sidebar and hover the "Actual food cost %" / "Goal food cost % (reference)" rows to see the new tooltips.
+
+---

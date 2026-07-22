@@ -2,6 +2,26 @@
 
 ---
 
+## P1-8 — "Goal food cost %" and "Target margin %" are two independent targets that can silently disagree
+
+Fixed the labeling/clarity part (see `FIX_LOG.md` "P1-8") — that was a real, worthwhile improvement regardless of what follows. But investigating this surfaced something bigger than labels, which I'm flagging rather than fixing myself, per your instruction: this may be a genuine design issue, not just poor copy.
+
+**Actual current behavior, confirmed by reading the code (not guessed):**
+- **"Target margin %"** is a real input that *drives* pricing — but only when "Auto-reprice" is on. In that mode, the sell price is solved backwards from this number (`sellPrice = portionCost / (1 - margin%/100)`); the user never types a price at all.
+- **"Goal food cost %"** is a *completely separate* input. It never affects pricing in either mode — it only (a) colors "Actual food cost %" red/green, and (b) suggests a "min sell price" figure that's only relevant if Auto-reprice is off and you're pricing manually.
+- **Nothing reconciles the two.** A user can set "Goal food cost %" to 20% and "Target margin %" to 50% — genuinely incompatible numbers (a 50% margin implies roughly 50% food cost, not ≤20%) — and the app will happily auto-price to hit the 50% margin, then color the resulting "Actual food cost %" **red**, flagging a number that the user's *own other setting* just produced. There's no warning that the two targets disagree, and no indication that "Target margin %" is the one that actually wins for pricing purposes.
+
+**What I did:** relabeled both fields with plain-language helper text explaining which is input vs. derived and which one actually sets the price (see the diff) — this makes the *current* behavior legible, but doesn't change it.
+
+**What I didn't do, because it's a real product call:** decide whether these should be reconciled. Options, roughly in order of how much they'd change:
+1. Leave as two independent knobs (current, now just better-labeled) — accept that they can disagree, on the theory that "goal food cost %" is more of a reporting/compliance target and "target margin %" is the operational pricing lever, and that's fine.
+2. Warn inline when the two imply meaningfully different numbers (e.g. "Your target margin implies ~48% food cost, above your 20% goal") — smallest behavior change, no pricing logic touched.
+3. Collapse to a single target field with a food-cost/margin toggle (they're two views of the same number: `margin% ≈ 100% - foodCost%`, modulo paper cost) — bigger UX change, removes the possibility of disagreement entirely but is a real redesign of this card.
+
+Let me know if you want option 2 or 3 built, or if option 1 (labels only, already shipped) is enough.
+
+---
+
 ## P1-6/P1-7 — should editing an ingredient's name from the recipe page rename it everywhere?
 
 Fixed the actual bugs (see `FIX_LOG.md` "P1-6/P1-7") without guessing on this part. The saved recipe page's ingredient editor had a "Name" field that PATCHed `{name: ...}` to the recipe-ingredient endpoint — but `name` isn't a `RecipeIngredient` column at all; it's the shared `Ingredient` record's name, used by every other recipe, invoice, and inventory record that references it. Wiring that up as written would have meant "fix a typo while looking at one recipe" silently renames the ingredient everywhere.
