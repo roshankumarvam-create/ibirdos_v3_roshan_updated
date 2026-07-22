@@ -7,6 +7,7 @@ import { CurrentCtx } from "../common/decorators/current-ctx.decorator";
 import { RequirePermission } from "../common/decorators/require-permission.decorator";
 import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 import { EventsService } from "./events.service";
+import { getPurchaseOrderPreview } from "./purchase-order.service";
 
 // BUG 4 fix: compare calendar dates (UTC), not exact instants -- an event
 // dated "today" but earlier than the current second must not be rejected
@@ -189,5 +190,14 @@ export class EventsController {
   resolveOutstandingShortage(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
                               @Param("shortageId") shortageId: string): Promise<any> {
     return this.svc.resolveOutstandingShortage(ctx, id, shortageId).then(ok);
+  }
+
+  // P1-10: purchase-order preview, grouped by vendor. Gated on vendor.read
+  // (OWNER/MANAGER only) rather than event.read -- a PO is nothing but
+  // vendor pricing, unlike the rest of this controller which CHEF/STAFF
+  // can also reach.
+  @Get(":id/purchase-order") @RequirePermission("vendor.read")
+  purchaseOrder(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
+    return getPurchaseOrderPreview(ctx, id).then(ok);
   }
 }

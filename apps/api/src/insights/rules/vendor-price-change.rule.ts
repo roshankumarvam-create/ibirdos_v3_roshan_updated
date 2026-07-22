@@ -28,8 +28,11 @@ export interface VendorPriceChangeParams {
 
 /** Cents-per-canonical-unit -> cents-per-display-unit. Falls back to the
  * canonical unit itself if no preferred display unit is set or the
- * conversion fails (e.g. an unrecognized unit string). */
-function toDisplayUnitCents(
+ * conversion fails (e.g. an unrecognized unit string). Exported for reuse
+ * by anything else that needs "price in the unit a human actually thinks
+ * in" rather than a raw per-canonical-unit figure (e.g. purchase-order
+ * generation, P1-10). */
+export function toDisplayUnitCents(
   microcentsPerCanonical: number,
   dimension: "MASS" | "VOLUME" | "COUNT",
   canonicalUnit: string,

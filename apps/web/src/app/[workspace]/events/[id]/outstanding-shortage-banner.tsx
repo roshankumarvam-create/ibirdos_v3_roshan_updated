@@ -8,6 +8,7 @@
 // until a human resolves each row. See event-ingredient-shortage.service.ts.
 
 import { useState } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { formatCents, formatStock } from "@/lib/format";
 import { Button } from "@ibirdos/ui";
@@ -45,18 +46,6 @@ export function OutstandingShortageBanner({ eventId, shortages, canSeeFinancials
     if (!res.error) {
       setRows((prev) => prev.filter((r) => r.id !== shortageId));
     }
-  };
-
-  const handleGeneratePO = () => {
-    // Stub: real PO generation/sending is a separate item (P1-10). This
-    // lists exactly what's outstanding right now -- not a disconnected
-    // placeholder -- so it's real wiring for a future PO feature to build on.
-    const lines = rows.map((r) => {
-      const qty = formatStock(r.shortCanonical, r.canonicalUnit, r.preferredDisplayUnit);
-      const cost = canSeeFinancials && r.estCostCents != null ? ` (${formatCents(r.estCostCents)})` : "";
-      return `• ${r.ingredientName} — ${qty}${cost}`;
-    });
-    alert(`Purchase order generation coming soon.\n\nWould include:\n${lines.join("\n")}`);
   };
 
   return (
@@ -117,14 +106,13 @@ export function OutstandingShortageBanner({ eventId, shortages, canSeeFinancials
         </tbody>
       </table>
 
-      <div className="mt-3 pt-3 border-t border-warning/20">
-        <button
-          className="text-xs text-text-tertiary hover:text-accent-400 underline"
-          onClick={handleGeneratePO}
-        >
-          Generate purchase order (stub)
-        </button>
-      </div>
+      {canSeeFinancials && (
+        <div className="mt-3 pt-3 border-t border-warning/20">
+          <Link href={"purchase-order" as any} className="text-xs text-text-tertiary hover:text-accent-400 underline">
+            Generate purchase order →
+          </Link>
+        </div>
+      )}
     </div>
   );
 }
