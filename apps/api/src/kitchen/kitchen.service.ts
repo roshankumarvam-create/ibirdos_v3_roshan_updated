@@ -74,6 +74,73 @@ export class KitchenService {
     });
   }
 
+  /**
+   * P1-11: completed/cancelled kitchen tasks, most-recently-finished first.
+   * KitchenTask already has everything needed except "completed by" -- no
+   * new column added for that (KitchenTask is queried via plain Prisma
+   * everywhere else, so adding an unmigrated field to schema.prisma would
+   * break every one of those queries the moment this deploys, same risk
+   * documented for quote_token/event_ingredient_shortages). Instead this
+   * reads the actor off the audit log entry writeAudit() already creates
+   * on every status change (see updateTask()) -- that data already exists
+   * for every task that's ever been completed, no migration required.
+   */
+  async listHistory(ctx: TenantContext, opts: { eventId?: string; limit?: number; cursor?: string }) {
+    const limit = Math.min(opts.limit ?? 50, 200);
+    const where: any = { workspaceId: ctx.workspaceId, status: { in: ["DONE", "CANCELLED"] } };
+    if (opts.eventId) where.eventId = opts.eventId;
+
+    const items = await prisma.kitchenTask.findMany({
+      where,
+      take: limit + 1,
+      ...(opts.cursor ? { skip: 1, cursor: { id: opts.cursor } } : {}),
+      orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+    });
+    const hasNext = items.length > limit;
+    const page = hasNext ? items.slice(0, limit) : items;
+
+    const taskIds = page.map((t) => t.id);
+    const auditRows = taskIds.length
+      ? await prisma.auditLog.findMany({
+          where: { workspaceId: ctx.workspaceId, entityType: "KitchenTask", entityId: { in: taskIds }, action: "kitchen.task_updated" },
+          orderBy: { createdAt: "desc" },
+          select: { entityId: true, actorId: true, metadata: true, createdAt: true },
+        })
+      : [];
+    // Most recent audit row per task whose metadata.status matches the
+    // task's final status -- that's the transition that actually finished it.
+    const completedByTaskId = new Map<string, { actorId: string | null; at: Date }>();
+    for (const row of auditRows) {
+      if (completedByTaskId.has(row.entityId)) continue; // already found the newest match
+      const meta = row.metadata as any;
+      const task = page.find((t) => t.id === row.entityId);
+      if (task && meta?.status === task.status) {
+        completedByTaskId.set(row.entityId, { actorId: row.actorId, at: row.createdAt });
+      }
+    }
+    const actorIds = [...new Set([...completedByTaskId.values()].map((v) => v.actorId).filter((id): id is string => !!id))];
+    const actors = actorIds.length
+      ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, displayName: true, username: true } })
+      : [];
+    const actorById = new Map(actors.map((a) => [a.id, a.displayName ?? a.username]));
+
+    // Event names, for display context (which event each task belonged to).
+    const eventIds = [...new Set(page.map((t) => t.eventId).filter((id): id is string => !!id))];
+    const events = eventIds.length
+      ? await prisma.event.findMany({ where: { id: { in: eventIds } }, select: { id: true, name: true } })
+      : [];
+    const eventNameById = new Map(events.map((e) => [e.id, e.name]));
+
+    return {
+      items: page.map((t) => ({
+        ...t,
+        eventName: t.eventId ? eventNameById.get(t.eventId) ?? null : null,
+        completedByName: actorById.get(completedByTaskId.get(t.id)?.actorId ?? "") ?? null,
+      })),
+      nextCursor: hasNext ? page[page.length - 1]?.id ?? null : null,
+    };
+  }
+
   async getTask(ctx: TenantContext, taskId: string) {
     const task = await prisma.kitchenTask.findFirst({
       where: { id: taskId, workspaceId: ctx.workspaceId },

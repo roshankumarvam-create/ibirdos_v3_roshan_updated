@@ -25,6 +25,13 @@ export class KitchenController {
     return this.svc.listForBoard(ctx, { eventId: q.eventId, station: q.station, assignedToMe: q.mine === "true" }).then((items) => ok({ items }));
   }
 
+  // P1-11: completed/cancelled task history -- separate from the active
+  // board above, which only ever shows PENDING/IN_PROGRESS/BLOCKED.
+  @Get("tasks/history") @RequirePermission("kitchen.read")
+  history(@CurrentCtx() ctx: TenantContext, @Query() q: any) {
+    return this.svc.listHistory(ctx, { eventId: q.eventId, limit: q.limit ? Number(q.limit) : undefined, cursor: q.cursor }).then(ok);
+  }
+
   @Get("tasks/:id") @RequirePermission("kitchen.read")
   getTask(@CurrentCtx() ctx: TenantContext, @Param("id") id: string) {
     return this.svc.getTask(ctx, id).then(ok);
