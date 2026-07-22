@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Inject } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException, Inject } from "@nestjs/common";
 import { Redis } from "ioredis";
 
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
@@ -9,6 +9,20 @@ import { REDIS_CLIENT } from "../common/constants/tokens";
 import { InventoryService } from "../inventory/inventory.service";
 
 const log = moduleLogger("KitchenService");
+
+/**
+ * True only for the specific "would result in negative stock" rejection
+ * InventoryService.recordTransaction() throws (see inventory.service.ts) —
+ * not for other validation failures (e.g. zero-quantity, missing
+ * ingredient), which should still propagate as real errors rather than be
+ * treated as a shortage.
+ */
+function isNegativeStockRejection(err: any): boolean {
+  if (!(err instanceof BadRequestException)) return false;
+  const body = err.getResponse?.();
+  const message = typeof body === "object" && body !== null ? (body as any).message : err.message;
+  return typeof message === "string" && message.includes("negative stock");
+}
 
 @Injectable()
 export class KitchenService {
@@ -152,8 +166,25 @@ export class KitchenService {
   /**
    * Create CONSUME inventory transactions for every ingredient in the recipe
    * scaled to the number of portions produced by this kitchen task.
-   * Each ingredient is attempted independently — a failure on one (e.g. no stock)
-   * is logged but does NOT abort the others.
+   * Each ingredient is attempted independently — a failure on one (e.g. a
+   * genuine data/unit-conversion error) is logged but does NOT abort the
+   * others.
+   *
+   * Shortage handling (URGENT-1 fix, 2026-07-22): if the amount needed
+   * exceeds current stock, InventoryService.recordTransaction() rejects the
+   * full-amount transaction (it refuses to let ANY stock go negative, by
+   * design, to protect manual/invoice/adjustment flows from fat-fingered
+   * negative entries). Previously that rejection was caught here and
+   * treated exactly like "skip this ingredient" — on a shortage, NOTHING
+   * was ever deducted for that ingredient, silently, even though the task
+   * was marked DONE and the audit log said "ingredients_consumed". Now: on
+   * that specific rejection, re-check the ingredient's current stock and
+   * consume whatever IS available (deduct-to-zero), recording the shortfall
+   * in the transaction note and in this method's audit entry. This always
+   * leaves a real CONSUME record reflecting what actually happened, and
+   * never goes negative (unresolved product question, not guessed at here:
+   * whether stock should instead be allowed to go negative to preserve the
+   * exact shortfall magnitude — see NEEDS_ROSHAN.md).
    */
   private async consumeIngredients(
     ctx: TenantContext,
@@ -198,7 +229,7 @@ export class KitchenService {
         ingredients: {
           include: {
             ingredient: {
-              select: { id: true, name: true, dimension: true, densityGPerMl: true },
+              select: { id: true, name: true, dimension: true, densityGPerMl: true, canonicalUnit: true },
             },
           },
         },
@@ -217,6 +248,8 @@ export class KitchenService {
     const scale = targetPortions / portionsYielded;
 
     let consumed = 0;
+    const shortfalls: { ingredientId: string; name: string; neededCanonical: number; availableCanonical: number }[] = [];
+
     for (const link of recipe.ingredients) {
       const ing = link.ingredient;
       try {
@@ -225,22 +258,55 @@ export class KitchenService {
           densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
         });
         const yieldPct = Number(link.yieldPctOverride ?? 100);
-        const consumedCanonical = baseCanonical * scale * (100 / Math.max(yieldPct, 1));
-        if (consumedCanonical <= 0) continue;
+        const neededCanonical = baseCanonical * scale * (100 / Math.max(yieldPct, 1));
+        if (neededCanonical <= 0) continue;
 
-        await this.inventory.recordTransaction(ctx, {
-          ingredientId: ing.id,
-          kind: "CONSUME",
-          quantityCanonical: -consumedCanonical,
-          sourceKind: "KitchenTask",
-          sourceRef: taskId,
-          notes: event
-            ? `${recipe.name} × ${targetPortions} portions — event "${event.name}"`
-            : `${recipe.name} × ${targetPortions} portions`,
-        });
-        consumed++;
+        const baseNotes = event
+          ? `${recipe.name} × ${targetPortions} portions — event "${event.name}"`
+          : `${recipe.name} × ${targetPortions} portions`;
+
+        try {
+          await this.inventory.recordTransaction(ctx, {
+            ingredientId: ing.id,
+            kind: "CONSUME",
+            quantityCanonical: -neededCanonical,
+            sourceKind: "KitchenTask",
+            sourceRef: taskId,
+            notes: baseNotes,
+          });
+          consumed++;
+        } catch (err: any) {
+          if (!isNegativeStockRejection(err)) throw err;
+
+          // Shortage: the full amount would take stock negative, which
+          // recordTransaction refuses. Consume whatever is actually
+          // available right now instead of silently consuming nothing.
+          const fresh = await prisma.ingredient.findFirst({
+            where: { id: ing.id, workspaceId: ctx.workspaceId },
+            select: { currentStockCanonical: true },
+          });
+          const availableCanonical = fresh ? Number(fresh.currentStockCanonical) : 0;
+
+          if (availableCanonical > 0) {
+            await this.inventory.recordTransaction(ctx, {
+              ingredientId: ing.id,
+              kind: "CONSUME",
+              quantityCanonical: -availableCanonical,
+              sourceKind: "KitchenTask",
+              sourceRef: taskId,
+              notes: `${baseNotes} — SHORTAGE: needed ${neededCanonical.toFixed(2)} ${ing.canonicalUnit ?? ""}, only ${availableCanonical.toFixed(2)} available, stock now 0`,
+            });
+            consumed++;
+          }
+
+          shortfalls.push({ ingredientId: ing.id, name: ing.name, neededCanonical, availableCanonical });
+          log.warn(
+            { ingredientId: ing.id, taskId, neededCanonical, availableCanonical },
+            "shortage on kitchen-task auto-consume — deducted available stock to zero",
+          );
+        }
       } catch (err: any) {
-        log.warn({ err: err.message, ingredientId: ing.id, taskId }, "ingredient consume skipped");
+        log.warn({ err: err.message, ingredientId: ing.id, taskId }, "ingredient consume skipped (non-stock error)");
       }
     }
 
@@ -248,7 +314,7 @@ export class KitchenService {
       action: "kitchen.ingredients_consumed",
       entityType: "KitchenTask",
       entityId: taskId,
-      metadata: { recipeId, targetPortions, ingredientsConsumed: consumed },
+      metadata: { recipeId, targetPortions, ingredientsConsumed: consumed, shortfalls },
     });
 
     log.info({ taskId, recipeId, targetPortions, consumed }, "inventory consumed on kitchen DONE");
