@@ -11,6 +11,7 @@ const mockIngredientCreate = vi.fn();
 const mockRecipeCreate = vi.fn();
 const mockRecipeUpdate = vi.fn();
 const mockRecipeHistCreate = vi.fn();
+const mockRecipeFindFirst = vi.fn().mockResolvedValue(null);
 
 vi.mock("@ibirdos/db", () => ({
   prisma: {
@@ -24,7 +25,7 @@ vi.mock("@ibirdos/db", () => ({
     recipe: {
       create: (...a: any[]) => mockRecipeCreate(...a),
       update: (...a: any[]) => mockRecipeUpdate(...a),
-      findFirst: vi.fn().mockResolvedValue(null),
+      findFirst: (...a: any[]) => mockRecipeFindFirst(...a),
     },
     recipeCostHistory: { create: (...a: any[]) => mockRecipeHistCreate(...a) },
   },
@@ -175,5 +176,111 @@ describe("RecipesService.importCsv", () => {
 
     const result = await svc.importCsv(ctx, { filename: "recipes.xlsx", contentBase64 });
     expect(result.recipeCount).toBe(1);
+  });
+});
+
+// =====================================================================
+// P0-1 — field-level financial redaction (recipes.service.ts `get()`).
+// The permissions package's rbac.test.ts only proves CHEF/STAFF lack
+// analytics.read at the role-matrix level; it never calls this service,
+// so it can't catch a redaction regression here. This proves the actual
+// response shape a Chef/Staff session receives from GET /recipes/:id.
+// =====================================================================
+describe("RecipesService.get — field-level redaction for Chef/Staff", () => {
+  let svc: RecipesService;
+
+  const baseRecipe = {
+    id: "rec-1",
+    name: "Test Recipe",
+    portionsYielded: 4,
+    salePriceCents: 1500,
+    actualSellPriceCents: 1500,
+    goalFoodCostPct: 30,
+    targetMarginPct: 65,
+    paperCostCents: 10,
+    cachedCostMicrocents: 500_000,
+    cachedCostPerPortionMicrocents: 125_000,
+    cachedMarginPct: 65,
+    cachedMarginCents: 975,
+    cachedCostUpdatedAt: new Date("2026-01-01"),
+    costStaleness: "FRESH",
+    costComputeError: null,
+    costHistory: [{ id: "hist-1", computedAt: new Date("2026-01-01"), costCents: 500 }],
+    ingredients: [
+      {
+        id: "link-1",
+        ingredientId: "ing-1",
+        quantity: "2",
+        unit: "lb",
+        yieldPctOverride: null,
+        prepNote: null,
+        notes: null,
+        displayOrder: 0,
+        ingredient: {
+          id: "ing-1",
+          name: "Flour",
+          category: "DRY_GOODS",
+          dimension: "MASS",
+          canonicalUnit: "g",
+          densityGPerMl: null,
+          currentCostMicrocents: 200_000n,
+          defaultYieldPct: 100,
+          preferredDisplayUnit: "lb",
+        },
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new RecipesService(mockRedis);
+    mockRecipeFindFirst.mockResolvedValue(baseRecipe as any);
+  });
+
+  it("OWNER sees real cost/price/margin fields", async () => {
+    const result = await svc.get({ ...ctx, role: "OWNER" }, "rec-1");
+    expect(result.salePriceCents).toBe(1500);
+    expect(result.cachedCostMicrocents).toBe(500_000);
+    expect(result.costHistory).toHaveLength(1);
+    expect(result.liveCostCents).toBeDefined();
+    expect(result.liveMarginPct).toBeDefined();
+    expect(result.ingredients[0].ingredient.currentCostMicrocents).toBe(200_000n);
+    expect(result.ingredients[0].lineCostCents).not.toBeNull();
+  });
+
+  it("CHEF gets no cost/price/margin fields anywhere in the response", async () => {
+    const result = await svc.get({ ...ctx, role: "CHEF" }, "rec-1");
+
+    // Top-level financial fields — must be absent (undefined), not present-as-null.
+    expect(result.salePriceCents).toBeUndefined();
+    expect(result.actualSellPriceCents).toBeUndefined();
+    expect(result.goalFoodCostPct).toBeUndefined();
+    expect(result.targetMarginPct).toBeUndefined();
+    expect(result.paperCostCents).toBeUndefined();
+    expect(result.cachedCostMicrocents).toBeUndefined();
+    expect(result.cachedMarginPct).toBeUndefined();
+    expect(result.costHistory).toBeUndefined();
+    expect(result.liveCostCents).toBeUndefined();
+    expect(result.liveFoodCostPct).toBeUndefined();
+    expect(result.liveMarginPct).toBeUndefined();
+    expect(result.liveBreakdown).toBeUndefined();
+
+    // Per-ingredient cost must also be stripped, not just the top level.
+    expect(result.ingredients[0].ingredient.currentCostMicrocents).toBeUndefined();
+    expect(result.ingredients[0].lineCostCents).toBeNull();
+
+    // Non-financial fields must still render normally — this isn't a 403,
+    // Chef needs the recipe to actually cook it.
+    expect(result.name).toBe("Test Recipe");
+    expect(result.portionsYielded).toBe(4);
+    expect(result.ingredients[0].ingredient.name).toBe("Flour");
+    expect(result.ingredients[0].quantity).toBe("2");
+  });
+
+  it("STAFF gets the same redaction as CHEF", async () => {
+    const result = await svc.get({ ...ctx, role: "STAFF" }, "rec-1");
+    expect(result.salePriceCents).toBeUndefined();
+    expect(result.ingredients[0].ingredient.currentCostMicrocents).toBeUndefined();
+    expect(result.name).toBe("Test Recipe");
   });
 });
