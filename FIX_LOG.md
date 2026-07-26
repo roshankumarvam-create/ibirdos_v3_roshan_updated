@@ -1494,3 +1494,21 @@ Investigated first (previous turn): `event_ingredient_shortages` has no vendor f
 **NOT deployed.**
 
 ---
+
+### Issue 3 — "#17 no UI to SET thresholds (REAL GAP)" — investigated, **no gap found, nothing built or changed**
+
+Per instruction ("report what exists first... don't force a fix if the current behavior is right"), traced this end-to-end before touching anything:
+
+- **Backend field:** `Ingredient.reorderThresholdCanonical` (nullable `Decimal`) exists in `schema.prisma`. Shared Zod schema (`packages/types/src/ingredient.ts`) validates it as `z.number().nonnegative().optional()` on both create and update. `IngredientsService.create()` and `.update()` both read and persist it (`ingredients.service.ts` lines 74, 236). `PATCH /ingredients/:id` and `POST /ingredients` are both live routes.
+- **Create-ingredient UI:** `ingredients/new/page.tsx` has a full "Reorder threshold" number input (line 268), unit-converted from the chosen display unit to canonical via `convertToCanonical()` before submit.
+- **Edit-ingredient UI:** `ingredients/[id]/IngredientDetailClient.tsx` has an always-visible "Reorder threshold (unit)" number input in the "Edit ingredient" card (line 392), wired to the same `PATCH /ingredients/:id` call, pre-filled from the current value.
+- **Discovery path from Inventory:** the already-deployed #17 fix's "X ingredients have no reorder threshold set" banner links to `/ingredients?missingThreshold=1`, a filtered ingredient list; each row's name links to that ingredient's detail page, where the edit form above lives.
+- **Not new:** `git log -S` on both the create-form field and the edit-form field traces them back to `a76b5c7` and `10f033d` respectively — the **original MVP commit and a pre-engagement commit**, long before this bug-fixing engagement started. This was never touched or regressed by any Phase 1/2 work.
+
+**Conclusion: the field, its validation, the service logic, and the UI to set it all already exist and have existed since day one.** This is not a missing feature. The most likely explanation for the client calling it a "REAL GAP" is **discoverability**, not absence: the inventory page shows the warning and a "Set thresholds" link, but from there it's list → click an ingredient's name → scroll to the "Edit ingredient" card → find the field among several others → save. Nothing on the inventory page itself lets you set a threshold without leaving it.
+
+**Nothing changed — no commit for this item.** If the discoverability read is right, the smallest fix would be an inline "Set threshold" quick-entry directly on the inventory page's ingredient rows (or in the filtered ingredients list), so a user acting on the warning banner doesn't have to navigate away. Left for Roshan to confirm that's actually what's wanted before building it, per "report what exists first."
+
+**NOT deployed** (nothing to deploy — no code changed).
+
+---
