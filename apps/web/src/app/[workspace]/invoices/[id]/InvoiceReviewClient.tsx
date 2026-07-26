@@ -8,7 +8,7 @@ import {
   Button, Badge,
 } from "@ibirdos/ui";
 import { api } from "@/lib/api";
-import { formatCostPerUnit, formatDate } from "@/lib/format";
+import { formatCostPerUnit, formatDateOnly, toDateOnlyInputValue } from "@/lib/format";
 import type { IngredientDTO } from "@ibirdos/types";
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
@@ -187,7 +187,7 @@ export function InvoiceReviewClient({
           </h1>
           <p className="mt-1 text-xs font-mono text-text-secondary">
             {invoice.invoiceNumber ?? `#${invoice.id.slice(0, 8)}`}
-            {invoice.invoiceDate && ` · ${formatDate(invoice.invoiceDate, workspaceTimeZone)}`}
+            {invoice.invoiceDate && ` · ${formatDateOnly(invoice.invoiceDate)}`}
             {invoice.totalCents != null && ` · $${(invoice.totalCents / 100).toFixed(2)}`}
           </p>
         </div>
@@ -542,11 +542,13 @@ function InvoiceHeaderCard({
 
   const computedSubtotal = invoice.lines.reduce((s, l) => s + Number(l.extendedPriceCents), 0);
   const [invoiceNumber, setInvoiceNumber] = useState(invoice.invoiceNumber ?? "");
-  const [invoiceDate, setInvoiceDate] = useState(
-    invoice.invoiceDate ? invoice.invoiceDate.slice(0, 10) : "",
-  );
+  // #12 fix: route through the shared date-only helper instead of a raw
+  // ISO-string slice -- same UTC-date-part extraction, but now the single
+  // source of truth shared with the header display above and the list
+  // page, instead of a third independent implementation of the same idea.
+  const [invoiceDate, setInvoiceDate] = useState(toDateOnlyInputValue(invoice.invoiceDate));
   const [dueDate, setDueDate] = useState(
-    invoice.dueDate ? invoice.dueDate.slice(0, 10) : "",
+    toDateOnlyInputValue(invoice.dueDate),
   );
   const [subtotal, setSubtotal] = useState(
     ((invoice.subtotalCents ?? computedSubtotal) / 100).toFixed(2),

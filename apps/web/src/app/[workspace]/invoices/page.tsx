@@ -4,7 +4,7 @@ import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { StatusBadge } from "@/components/common/status-badge";
-import { formatCents, formatDate, relativeTime } from "@/lib/format";
+import { formatCents, formatDateOnly, relativeTime } from "@/lib/format";
 
 interface InvoiceListItem {
   id: string;
@@ -96,7 +96,7 @@ export default async function InvoicesPage() {
                     {inv.vendor?.name ?? inv.vendorNameRaw ?? "—"}
                   </td>
                   <td className="px-5 py-3 text-text-secondary text-xs">
-                    {inv.invoiceDate ? formatDate(inv.invoiceDate, user.workspaceTimeZone) : "—"}
+                    {inv.invoiceDate ? formatDateOnly(inv.invoiceDate) : "—"}
                   </td>
                   <td className="px-5 py-3">
                     <StatusBadge

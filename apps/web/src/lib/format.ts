@@ -1,4 +1,8 @@
-import { UNITS, normalizeUnit, formatWorkspaceDate as sharedFormatDate, formatWorkspaceDateTime as sharedFormatDateTime, formatWorkspaceTime as sharedFormatTime } from "@ibirdos/types";
+import {
+  UNITS, normalizeUnit,
+  formatWorkspaceDate as sharedFormatDate, formatWorkspaceDateTime as sharedFormatDateTime, formatWorkspaceTime as sharedFormatTime,
+  formatDateOnly as sharedFormatDateOnly, toDateOnlyInputValue as sharedToDateOnlyInputValue,
+} from "@ibirdos/types";
 
 /**
  * Convert a canonical quantity (g, ml, each) to the preferred display unit and format it.
@@ -69,6 +73,19 @@ export function formatNumber(value: number | string | null | undefined, decimals
 // bug" for why this replaced the old UTC-only pin.
 export function formatDate(iso: string | Date | null | undefined, timeZone: string) {
   return sharedFormatDate(iso, timeZone);
+}
+
+/**
+ * For DATE-ONLY values (a printed calendar date stored as UTC midnight,
+ * e.g. Invoice.invoiceDate), NOT real instants -- see packages/types/src/
+ * datetime.ts for why this must not go through formatDate/workspace tz.
+ */
+export function formatDateOnly(iso: string | Date | null | undefined) {
+  return sharedFormatDateOnly(iso);
+}
+
+export function toDateOnlyInputValue(iso: string | Date | null | undefined) {
+  return sharedToDateOnlyInputValue(iso);
 }
 
 export function formatDateTime(iso: string | Date | null | undefined, timeZone: string) {
