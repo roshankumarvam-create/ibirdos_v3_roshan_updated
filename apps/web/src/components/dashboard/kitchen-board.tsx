@@ -85,6 +85,19 @@ export function KitchenBoard({ workspaceSlug, workspaceTimeZone }: { workspaceSl
   }
   const activeStations = STATIONS.filter((s) => byStation[s]?.length);
 
+  // #18 fix: the guard above only caught zero tasks TOTAL -- a board where
+  // every task is DONE/CANCELLED (data.length > 0) fell through to an empty
+  // grid with no message at all, since activeStations ends up empty too.
+  if (activeStations.length === 0) {
+    return (
+      <Card>
+        <div className="p-12 text-center text-text-tertiary text-sm">
+          No active kitchen tasks. Tasks are auto-created when an event's kitchen packet is generated.
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
       {activeStations.map((station) => (
