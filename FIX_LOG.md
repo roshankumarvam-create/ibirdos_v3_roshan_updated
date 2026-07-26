@@ -4,6 +4,163 @@ Format per issue: Root cause → Fix → Files changed → Commit → Verificati
 
 ---
 
+## DEPLOY-2 — P0-1/P0-3/P0-4 deployed and proven live on cafe-71 (2026-07-26)
+
+**Status: DONE.** The three P0 fixes (commits `74dc060`, `e80e13c`, `95cb826`) were committed but not deployed as of the start of this session -- client was still seeing the old, buggy values on cafe-71. Deployed and verified live before starting anything else, per instruction.
+
+**Deploy steps:**
+1. `git push origin master` -- pushed all 3 commits (`9bd3916..95cb826`).
+2. API: Railway's GitHub webhook is still broken (per prior `DEPLOY-1` finding) -- confirmed the live deployment before this session was still commit `9bd3916` (`cliCaller: claude_code`, i.e. the last manual deploy, not webhook-triggered). Ran `railway up -c -y -s ibirdos_v3_roshan_updated` manually. Build succeeded (Railpack, `pnpm -r --filter @ibirdos/api... build`), new deployment `fdaefd6a-ffac-439d-b195-d9a851b4415c` went live, `GET /api/v1/health` → 200 `{"status":"ok",...}`.
+3. Web: Vercel's webhook is NOT broken -- confirmed it auto-deployed within ~2 minutes of the git push, no manual `vercel --prod` needed. `vercel inspect https://workspace.ibirdos.com --logs` confirms `Cloning ... Branch: master, Commit: 95cb826` (exact HEAD match), status Ready, `curl` → 200.
+
+**Live verification against cafe-71 (workspace `roshancafe99999`, id `cmrt5jccr00l79uv86uqao2vv`):** the client's original reported event no longer exists in the workspace (data has since been cleaned up/changed) and no ingredient named Asparagus/Arugula/Tofu exists there anymore, so the exact original rows couldn't be re-read. Instead, reproduced his exact case end-to-end as new data through the real API against the real production workspace (login → CSRF token → create ingredients → set precise per-canonical-unit prices via `updatePrice` → create recipe (50 sale-price-cents/portion, 4 ingredient lines) → create event (50 portions, 10% markup, $100 labor) → mark paid) -- then read the actual numbers back from both the API and the real rendered production page (`curl` against `https://workspace.ibirdos.com/roshancafe99999/events/<id>` with the session cookie), not just the API.
+
+| Check | Expected (client's numbers) | Live (rendered page) | Match |
+|---|---|---|---|
+| Quote total | $443.75 | $443.75 | exact |
+| Profit | $140.68 | **$140.70** | within $0.02 (see note) |
+| Shortage count | 3 ingredients | **3** (banner AND table agree) | exact |
+| Shortage total | $123.00 | **$122.98** | within $0.02 (see note) |
+| Asparagus (4 lb) | $33.48 | $33.48 | exact |
+| Arugula (2 lb) | $14.52 | $14.52 | exact |
+| Tofu (15 lb) | $75.00 | $74.98 | within $0.02 (see note) |
+
+**The $0.02 note:** ingredient prices are stored as integer microcents-per-canonical-unit (0.001-cent granularity) -- an existing, deliberate precision floor unrelated to these fixes (same rounding the P1-A fix's own tests tolerate). $5.00/lb converts to a repeating-decimal cents-per-gram value that rounds to the nearest microcent (1102 vs the true 1102.310...), landing 2 cents low on the Tofu line, which propagates through to the shortage total and (since this recipe's food cost includes the same ingredients) the food-cost figure and therefore profit. Confirmed this is exactly and only that rounding, not a formula error: old (buggy, pre-fix) formula on these exact numbers would have shown profit = revenue − food = 44375 − 20305 = **$240.70** (matches the client's reported $240.68 pattern to the same $0.02); the fix correctly subtracts the $100 labor cost, landing at **$140.70**, a full $100 lower, matching the fix's intended effect exactly.
+
+Both the shortage banner and the ingredient-requirements table showed identical counts (3) and identical total ($122.98) on the same rendered page -- direct proof P0-3's live-computation fix is deployed and working (previously the banner would read a stale, possibly-different count from the frozen `Event.inventoryShortages` snapshot).
+
+Test data (4 ingredients, 1 recipe, 1 event, all prefixed `CAFE71-VERIFY-`/`CAFE71-P0-VERIFY-`) created for this verification was soft-deleted immediately after, per standard cleanup.
+
+**Conclusion: all three P0s confirmed live and correct.** Proceeding to Phase 2 per instruction.
+
+---
+
+## Phase 2 — client's numbered priority list (2026-07-26, unattended)
+
+Investigated every item with parallel Explore agents first (root cause + deploy-status check before touching anything), then fixed in priority order, each as its own commit. NOT deployed — committed only, per instruction.
+
+### #9/#11 — Event shows "draft"+"Paid" together; never advances past draft — FIXED
+
+**Root cause:** two gaps. (a) The prior BUG-1 fix (DRAFT->CONFIRMED inside `markAsPaid()`) only applies going forward from when it shipped -- any event paid before that never got the retroactive bump. Confirmed live on cafe-71: 4 events ("zdvs", two "smith", "smith 2") sitting at `status=DRAFT`, `paymentStatus=PAID` -- the exact reported combination. (b) Nothing else ever advances `status` at all -- no auto-advance on kitchen tasks completing, and a full grep of the web app found zero UI callers of the existing `PATCH /events/:id/status` endpoint, so there was no manual path either. Also found `updateStatus()` accepted any status with no legality check (COMPLETED could be moved back to DRAFT).
+
+**Fix:** `isValidEventStatusTransition()` (real transition table, terminal COMPLETED/CANCELLED, enforced in `updateStatus()`); `maybeAdvanceEventStatusOnTasksComplete()` (auto-advances to COMPLETED when every SERVICE task is DONE, called from `KitchenService.updateTask()`); `EventsService.onApplicationBootstrap()` (one-time idempotent repair for existing stale DRAFT+PAID rows, same pattern as the existing ingredient-price repair).
+
+**Files:** `apps/api/src/events/events.service.ts`, `apps/api/src/kitchen/kitchen.service.ts`, `apps/api/src/events/events.service.spec.ts` (+13 tests).
+**Commit:** `bc8f641`
+**Verification:** `pnpm typecheck` clean. `events.service.spec.ts` cannot execute in this environment (pre-existing `@ibirdos/config` vitest resolution gap, confirmed pre-existing via `git stash` earlier this session, unrelated) -- verified via clean `tsc --noEmit` and manual review. **Needs live verification**: confirm the 4 named cafe-71 events show CONFIRMED (not DRAFT) after next deploy; mark all SERVICE tasks DONE on a test event and confirm it auto-advances to COMPLETED; attempt an illegal transition (e.g. COMPLETED -> DRAFT) via the API and confirm a 400.
+
+### #10 — Past-event margin blank on list, 35% on detail — FIXED
+
+**Root cause:** list page read the stored `computedMarginPct` column directly; that column is only written by `rollupCosts()`, which only runs from `markAsPaid()`, `addStaff()`, or kitchen-packet generation. An event with a real quote/food-cost that never hit any of those three call sites has a permanently NULL stored margin, even though the detail page computes a real number live from the same fields. Same "two places, one live one stale" pattern as the P0s.
+
+**Fix:** `list()` now computes margin live via `computeEventProfit()` from fields already fetched in the same query -- no extra query needed.
+
+**Files:** `apps/api/src/events/events.service.ts`, `apps/api/src/events/events.service.spec.ts` (+2 tests).
+**Commit:** `9f6b076`
+**Verification:** `pnpm typecheck` clean; same vitest-execution caveat as above, verified via `tsc` + manual review. **Needs live verification**: find a past PAID event whose list-page margin was previously blank, confirm it now shows a real percentage matching the detail page.
+
+### #12 — Invoice date shows Jul 5 on list, Jul 6 on detail — FIXED
+
+**Root cause:** `Invoice.invoiceDate` is a printed calendar date stored as a UTC-midnight instant, not a real moment in time. Both the list page and the detail page's header ran it through `formatWorkspaceDate` (the shared, correct formatter for real instants like `startsAt`/`createdAt`), which converts through the workspace timezone and rolls the calendar date backward by one day for any workspace west of UTC (cafe-71 is `America/Los_Angeles`, UTC-7/8). The detail page's editable date input used a raw `.slice(0, 10)` of the ISO string instead (no timezone conversion at all) and showed the TRUE stored day -- the disagreement was between the (wrong) timezone-converted header and the (right) raw input, not two independently-wrong values.
+
+**Fix:** added `formatDateOnly()`/`toDateOnlyInputValue()` to the shared `packages/types/src/datetime.ts` -- reads the calendar date straight off the UTC components, no timezone conversion. Applied to the invoice list, the detail header, and the editable `invoiceDate`/`dueDate` inputs (`dueDate` is the same class of value, fixed alongside). Commit `88b33ca` (referenced in the brief) turned out to be a docs-only `FIX_LOG.md` entry, not the formatter itself -- the real shared timezone formatter already existed from an earlier commit; this adds the date-only sibling it was missing.
+
+**Files:** `packages/types/src/datetime.ts`, `packages/types/__tests__/datetime.test.ts` (new, 9 tests incl. Pacific Time reproduction), `apps/web/src/lib/format.ts`, `apps/web/src/app/[workspace]/invoices/page.tsx`, `apps/web/src/app/[workspace]/invoices/[id]/InvoiceReviewClient.tsx`.
+**Commit:** `98c0eac`
+**Verification:** `pnpm typecheck` clean (both apps). `packages/types/__tests__/datetime.test.ts` actually executed (9/9 passing) -- this one isn't blocked by the `@ibirdos/config` gap. **Needs live verification**: open a real invoice with a printed date, confirm list, detail header, and the editable date field all show the same day.
+
+### #6 — Daily sales shows "No Business" on days with real sales — FIXED
+
+**Root cause:** `status` defaulted to `NO_BUSINESS` unconditionally whenever not explicitly set, with zero relation to `grossSales`/`netSales` on the same request -- codified as the (wrong) intended behavior in an existing spec test. The New Entry form's status pill also defaulted to "No Business" and was always submitted explicitly, so a backend-only fix wouldn't have changed what the client sees.
+
+**Fix:** `deriveDefaultDailySalesStatus()` -- `NO_BUSINESS` only when both gross and net sales are genuinely zero, else `CLOSED_WON`; applied at create, replace, and add-merge (re-derived from merged totals). Frontend pill now auto-follows entered sales until the user manually overrides it.
+
+**Files:** `apps/api/src/daily-sales/daily-sales.service.ts`, `apps/api/src/daily-sales/daily-sales.service.spec.ts` (1 test corrected, +2 new), `apps/web/src/app/[workspace]/daily-sales/new/page.tsx`.
+**Commit:** `ab44871`
+**Verification:** `pnpm typecheck` clean; vitest-execution caveat as above for the `.spec.ts` file. **Needs live verification**: create a new daily-sales entry with real gross/net sales, don't touch the status pill, confirm it saves as "Closed / Won" not "No Business."
+
+### #8 — $0.01 tender variance displays as "Balanced" — FIXED
+
+**Root cause:** `balanced: Math.abs(tenderTotal - netSales) < 0.01` in three separate places (backend `calcVariance()`, frontend `getVarianceTier()`, and a third bespoke check in `daily-sales-list.tsx`) -- a tolerance the same size as the smallest real variance it needed to catch, so a genuine one-cent mismatch (float subtraction landing at `-0.00999999999999801`) silently passed as balanced.
+
+**Fix:** round to whole cents first, then compare for exact equality, in all three places.
+
+**Files:** `apps/api/src/daily-sales/daily-sales.service.ts`, `apps/api/src/daily-sales/daily-sales.service.spec.ts` (+2 tests), `apps/web/src/lib/variance.ts`, `apps/web/src/__tests__/variance.test.ts` (existing tolerance-based tests corrected, +2 new), `apps/web/src/components/daily-sales/daily-sales-list.tsx`.
+**Commit:** `94e3c62`
+**Verification:** `pnpm typecheck` clean. `apps/web/src/__tests__/variance.test.ts` actually executed -- 10/10 passing (frontend-only, not blocked by the vitest `@ibirdos/config` gap). **Needs live verification**: enter a daily-sales record with a real $0.01 tender/net-sales mismatch, confirm it shows "-$0.01" / a variance tier, not "Balanced."
+
+### #17 — Reorder thresholds unset, but UI claims "all stock levels OK" — FIXED
+
+**Root cause:** an ingredient with no `reorderThresholdCanonical` can never trigger a low-stock alert -- `checkLowStock()` treats a null threshold as "nothing to check," not "confirmed fine." The inventory page's header only counted alerts among ingredients that DO have a threshold, and showed "all stock levels OK" whenever that count was zero -- overstating what was actually verified when most/all ingredients have no threshold. The count needed to distinguish the two cases (`missingThresholdCount`) was already fetched for a separate banner but never gated this header. **Not built:** the reorder-suggestion engine -- still blocked on consumption data, per the existing `NEEDS_ROSHAN.md` entry; this only fixes the misleading claim.
+
+**Fix:** `inventoryStatusMessage()` -- real alert count when >0, else "N ingredients have no threshold set" when thresholds are missing, else "all stock levels OK". Extracted to a plain lib file for unit testing (this repo's web vitest config doesn't resolve the `@/` alias for files with Next.js-specific imports).
+
+**Files:** `apps/web/src/lib/inventory-status.ts` (new), `apps/web/src/__tests__/inventory-status-message.test.ts` (new, 3 tests), `apps/web/src/app/[workspace]/inventory/InventoryClient.tsx`.
+**Commit:** `4344394`
+**Verification:** `pnpm typecheck` clean. Test actually executed -- 3/3 passing.
+
+### #14 — Ingredient cost displays 4 decimals instead of 2 — FIXED
+
+**Root cause:** `formatCostPerUnit()`'s fallback branch (fires when `canonicalUnit`/`preferredDisplayUnit` don't normalize against the known unit table -- both free-form strings, not DB-validated) used `.toFixed(4)` instead of rounding to cents like the primary branch and every other price display.
+
+**Fix:** `.toFixed(2)`. Display-layer only -- full precision stays in `currentCostMicrocents`.
+
+**Files:** `apps/web/src/lib/format.ts`, `apps/web/src/__tests__/format.test.ts` (new, 6 tests).
+**Commit:** `7d57734`
+**Verification:** `pnpm typecheck` clean. Test actually executed -- 6/6 passing.
+
+### #18 — Kitchen board blank when tasks exist but all are done — FIXED
+
+**Root cause:** the empty-state guard only fired on zero tasks total; a board where every task was DONE/CANCELLED fell through to a blank grid (filtered `activeStations` ends up empty too, but nothing checked for that).
+
+**Fix:** check `activeStations.length`, not just the raw fetch length.
+
+**Files:** `apps/web/src/components/dashboard/kitchen-board.tsx`.
+**Commit:** `dada947`
+**Verification:** `pnpm typecheck` clean. No test (JSX-only, no component-render test infra in this repo).
+
+### #16 — No way to see the exact timestamp behind "6d ago" — FIXED
+
+**Fix:** added `title={formatDateTime(...)}` alongside every `relativeTime()` call site (waste log, yield log, inventory alerts, inventory transactions, invoice list) -- native browser tooltip on hover.
+
+**Files:** `apps/web/src/app/[workspace]/waste-yield/page.tsx`, `apps/web/src/app/[workspace]/inventory/InventoryClient.tsx`, `apps/web/src/app/[workspace]/invoices/page.tsx`.
+**Commit:** `2464a66`
+**Verification:** `pnpm typecheck` clean. No test (attribute-only change).
+
+### #15 — Inventory transaction Source column shows raw ids — FIXED
+
+**Root cause:** rendered `sourceRef ?? sourceKind` directly; the backend never resolved `sourceRef` against the Invoice/Event/KitchenTask table it points to.
+
+**Fix:** `resolveSourceLabels()` -- batched lookup producing "Invoice 120624947" / "Event Test Event" / a kitchen task's title / "Manual adjustment", mirroring the existing sourceRef→invoiceNumber resolution already used for ingredient price history. Raw id kept on the row, shown on hover.
+
+**Files:** `apps/api/src/inventory/inventory.service.ts`, `apps/api/src/inventory/inventory.service.spec.ts` (+4 tests), `apps/web/src/app/[workspace]/inventory/InventoryClient.tsx`.
+**Commit:** `ad6e9eb`
+**Verification:** `pnpm typecheck` clean. Vitest-execution caveat as noted throughout for `.spec.ts` files -- verified via `tsc` + manual review.
+
+### #13 — No Log Waste / Record Yield buttons anywhere — FIXED (genuinely not built, not a deploy/role gap)
+
+**Deploy-status finding first, as instructed:** `git show 514a7ce --stat` confirms that commit (described as "waste-for-Chef") only gates pre-existing Edit/Delete/Adjust buttons behind permission checks -- an unrelated fix (BUG-C), not this feature. It's merged into HEAD. OWNER holds both `waste.create` and `yield.create` in the permission matrix, so this was never hiding buttons from Roshan's own account either. **Conclusion: genuinely not built**, not a deploy gap or role bug.
+
+What already existed: `POST /yield-waste/waste` (backend, `waste.create`) was reachable via a "Write-off (spoilage/waste)" option buried inside the generic `/inventory/adjust` form -- functional but not discoverable from the Waste & Yield pages. `POST /yield-waste/yield` (`yield.create`) had zero UI callers anywhere -- fully built and ready, orphaned.
+
+**Fix:** "Log waste" button on the Waste & Yield page linking to the existing adjust form with a new `?type=WRITE_OFF` pre-select param (reuses the tested endpoint, no new backend surface). New minimal "Record yield" form (`/waste-yield/record`) calling the existing, previously-orphaned endpoint. Both gated on the same permissions the backend already enforces.
+
+**Files:** `apps/web/src/app/[workspace]/inventory/adjust/AdjustClient.tsx`, `apps/web/src/app/[workspace]/waste-yield/page.tsx`, `apps/web/src/app/[workspace]/waste-yield/record/page.tsx` (new), `apps/web/src/app/[workspace]/waste-yield/record/RecordYieldClient.tsx` (new).
+**Commit:** `c555350`
+**Verification:** `pnpm typecheck` clean. `next build` succeeded, new `/waste-yield/record` route confirmed in the build output. **Needs live verification**: as OWNER/CHEF, click "Log waste" and confirm it lands on the adjust form with Write-off pre-selected; click "Record yield," submit a real yield observation, confirm it appears in "Recent yield observations" on the main page.
+
+### #22 — Vendor page missing invoice history/totals/payment status — FIXED
+
+**Scope check confirmed small, as instructed:** `GET /invoices` already supported a `vendorId` filter server-side -- no backend change or migration needed.
+
+**Fix:** added invoice count, last invoice date, running total, unpaid total, and a per-invoice table (linking to each invoice's detail page) to the vendor detail page. Deliberately did NOT use `Invoice.balanceDue` for "unpaid balance" -- confirmed it's never computed/written anywhere in `invoices.service.ts` (always its 0 default), so it would show a permanently-wrong "$0.00 unpaid." Derived the unpaid total from `totalCents` + `paymentStatus` instead (both fields the app actually maintains). Skipped a separate "view all invoices" link -- the invoices list page doesn't read a `vendorId` query param, so it would have been a dead-end; the on-page table (up to 100 invoices) serves as the history view instead.
+
+**Files:** `apps/web/src/app/[workspace]/vendors/[id]/page.tsx`.
+**Commit:** `8bd28f0`
+**Verification:** `pnpm typecheck` clean. `next build` succeeded.
+
+---
+
 ## DEPLOY-1: Why is production stale? (steps 1–2 of the deploy investigation)
 
 **Status:** Step 1 DONE — root cause found, and it is NOT what was reported to me. Step 2 DONE for the two commit hashes as given (they don't check out) and for today's P0-1..P0-4 work; a full 100-commit line-by-line P0/P1 mapping was not built because the premise (large-scale API staleness) didn't hold — see below for what a corrected, narrower step 2 actually shows.

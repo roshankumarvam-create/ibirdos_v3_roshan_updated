@@ -2,6 +2,74 @@
 
 ---
 
+## Phase 2 unattended run (2026-07-26) — items #5, #7, #19, #20, #21: investigated, not fixed, per instruction
+
+Five items from the client's numbered list. For each: current behavior only, real options where the code supports more than one reading, no recommendation picked, no code changed.
+
+### #5 — What should "COGS" mean on the reports?
+
+Found **three distinct figures**, all currently in play under COGS-adjacent labels, and **none of them is based on actual inventory consumption**:
+
+1. **`purchasesCents`** (`apps/api/src/analytics/analytics.service.ts:54-59`) — sums `invoice.totalCents` for CONFIRMED invoices in range. All purchase categories, not food-only. Feeds the Dashboard.
+2. **Reports "Food Cost vs Sales"** (`apps/api/src/reports/reports.service.ts:96`) — sums invoice LINE `extendedPriceCents` where `category: "FOOD_INGREDIENT"`. The code's own comment says it plainly: *"Food cost stays revenue-only on the sales side -- invoices already cover ingredient purchases."* This is **purchases of food-category line items**, labeled "COGS as % of net sales" on the reports index page.
+3. **Event-level `computedFoodCostCents`** (used in Prime Cost report, `reports.service.ts:192-197`) — a recipe-based theoretical cost per event, summed alongside the POS-derived figure above as if they were the same kind of number.
+
+A repo-wide check for anywhere a report/analytics figure is built from actual `CONSUME` inventory transactions (real usage) found nothing -- CONSUME transactions exist only for stock depletion (events/kitchen/inventory services), never aggregated into a cost report.
+
+**Real options, based on what the code actually supports:**
+1. **Purchases-based** (what's mostly live today) -- COGS = money spent on food-category invoice lines in the period. Simple, matches cash-basis accounting, but overstates COGS in any period where you bought more than you used (stocking up) and understates it when drawing down existing inventory.
+2. **Actual-consumption-based** -- COGS = value of ingredients actually depleted via CONSUME transactions. More accurate to "what did the food actually cost," but **no code computes this today** -- would be new work, and (per the existing P1-14 entry above) real CONSUME data has only existed since 2026-07-22, so there's limited history to build/validate it against yet.
+3. **Recipe-theoretical** (what event `computedFoodCostCents` already is) -- COGS = what the menu *should* have cost per the recipe, independent of actual purchases or waste. Useful for margin planning, not a true "cost of goods sold."
+
+Not picking one -- these have real, different implications for margin/profitability numbers you're already looking at.
+
+### #7 — What do "Gross" and "Net" actually compute in Daily Sales?
+
+**Both are independently-entered, freely-editable input fields with no formula connecting them.** Confirmed via the create/update schemas (`apps/api/src/daily-sales/daily-sales.controller.ts:25-30`) and the service (`daily-sales.service.ts` -- persists whatever is submitted at every write path, no subtraction of tax/discounts/voids/refunds from gross to produce net, anywhere).
+
+The only formula touching `netSales` at all is the **tender variance check** (`daily-sales.service.ts:309-316`, the same code fixed for #8 this run): `variance = tenderTotal - netSales`. Net sales is checked against the sum of tenders, never derived from gross.
+
+Frontend: both the New Entry form and the edit page present "Gross sales" and "Net sales" as two separate required manual number inputs -- whoever enters a day's numbers is expected to already know both figures (e.g. from a POS end-of-day report) and type them in independently. Nothing warns if net > gross, or if net doesn't reconcile against gross minus the tax/discounts/voids/refunds also entered on the same form.
+
+No rename or recalculation done -- reporting current behavior only, per instruction.
+
+### #19 — Kitchen task "Station" always shows "Other"
+
+**Not a missing feature, not a deploy gap -- a real gap between what the enum HAS and what you actually asked for.**
+
+The schema already has a real, properly-typed enum (`packages/db/prisma/schema.prisma:1124-1137`, `KitchenTask.station`, indexed): `GRILL, SAUTE, FRY, PASTRY, PREP, PIZZA, SALAD, GARDE_MANGER, EXPO, OTHER`. That's an à-la-carte restaurant's hot-line stations. **None of the stations you asked for exist as enum values**: Prep (the one overlap), Hot line, Cold prep, Packing, Service, Dish, Receiving -- those read as a catering operation's stations, a different shape entirely (packing/receiving especially have no à-la-carte analog).
+
+Separately, and more mechanically: neither place that creates a `KitchenTask` row (`kitchen.service.ts`'s event-explode path, or `events.service.ts`'s `markAsPaid()` task generation) ever sets `station` at all -- every task silently falls through to the column default of `OTHER`, even for the 10 stations that DO already exist. `commit 640f50a` (referenced in the brief) is unrelated -- it's a purchase-order/vendor-grouping feature, contains zero mentions of "station."
+
+**This is a two-part decision, not a code bug to fix blind:**
+1. Do you want the CATERING station list (Prep, Hot line, Cold prep, Packing, Service, Dish, Receiving), replacing or alongside the current à-la-carte list? Changing enum VALUES is an additive Postgres operation (`ALTER TYPE ... ADD VALUE`, same safe pattern as other pending migrations in this repo) but still needs your call on the exact list, since it changes what shows up in every station filter/dropdown going forward.
+2. Once the list is right: what actually determines a task's station -- the recipe (a fixed property of what's being made), the menu item, or a manual per-task assignment made by whoever's running the kitchen board that day? That's a real workflow decision, not obvious from the code.
+
+Not guessing at either. Once you tell me the station list and the assignment source, this is a small, mechanical fix (the wiring gap is trivial; the enum values need your input).
+
+### #20 — Portion weight/yield mismatch (112 oz ÷ 10 ≠ 12)
+
+Three yield-related fields exist on Recipe and **are never reconciled with each other anywhere in the code**:
+- `portionsYielded` (count of portions) -- `apps/api/src/recipes/recipes.service.ts:150,435`.
+- `portionWeightG` / `portionVolumeMl` (weight/volume of ONE portion) -- independently settable, `recipes.service.ts:232-233,451-452`.
+- `totalYieldCanonical` (Decimal(14,4), total yield across all portions) -- independently settable, `recipes.service.ts:90,234,453`; only validated as `positive()`, no cross-check against the other two.
+
+`computeBreakdown()` (`recipes.service.ts:806-816`, the function that computes per-portion cost) divides `totalMicrocents / portionsYielded` only -- `totalYieldCanonical` and `portionWeightG` are never divided or multiplied against `portionsYielded` or each other anywhere. So a recipe can have `totalYieldCanonical = 112` (oz), `portionsYielded = 10`, and a separately-typed `portionWeightG` implying "12 oz/portion" (112 ÷ 10 = 11.2, not 12) -- **each field is stored and displayed independently, with zero validation connecting them.** This is exactly the mismatch reported; not a rounding bug, a genuine "three numbers that were each typed in separately and nothing checks they agree" situation.
+
+Separately, `defaultYieldPct`/`yieldPctOverride` (per-ingredient trim-loss %, `recipes.service.ts:757-758`) is a completely different concept -- applied during recipe COSTING (raw-to-cooked ingredient conversion), not to portion count/weight at all. Doesn't explain this mismatch.
+
+**Not guessing at intended behavior** -- possible directions: (a) make `portionWeightG` derived (`totalYieldCanonical / portionsYielded`, read-only) instead of independently editable, (b) keep all three independently editable but add a validation warning when they disagree by more than a rounding tolerance, (c) leave as-is and treat this as user-entry error to catch via a UI hint. Real product decision about which fields are the source of truth.
+
+### #21 — Recipe shows "—" for pack size/conversion — investigated, no fix needed for the safety concern raised
+
+**Confirmed: genuine data-capture gap, not a display bug.** The AI recipe-extraction path (`packages/ai/src/recipe-conversion.ts:75-106`) computes `ozEquivalent`, `lowConfidence`, and `conversionNote` during extraction -- but `RecipesService.addIngredient()` (`recipes.service.ts:531-542`, the only place a `RecipeIngredient` row gets created) never writes `qtyNative`/`unitNative`/`ozEquivalent`/`lowConfidence`/`conversionNote`/`sizeQualifier` to the database. The AI's computed values are discarded before ever reaching storage. The frontend (`IngredientsEditor.tsx:160,227`) correctly renders "—" for what's actually stored (null) -- it's not misreading real data.
+
+**The specific safety concern you asked about is already handled correctly, no fix needed:** `recipe-cost.helper.ts`'s `computeLiveRecipeCost()` never reads any of the missing fields -- it converts directly via `toCanonical(quantity, unit, ...)`, which uses fields that ARE correctly persisted (`quantity`, `unit`). If that conversion fails, the error is caught and surfaced as `breakdown[].error` with `lineCostCents: null`, **excluded from the total** -- not silently zeroed or wrongly costed. A missing pack-size/conversion note does not currently produce a misleading cost number.
+
+**What's left, if you want it:** persisting the AI's already-computed `conversionNote`/`ozEquivalent`/`lowConfidence` so recipe editors can see "the AI extracted this from a case-of-24 label" context, instead of blank fields. This touches multiple entry points (`create()`, `addIngredient()`, CSV import, the recipe-extraction controller) -- flagging as a real but non-urgent enhancement rather than building it unattended, since the thing you were actually worried about (bad numbers) isn't happening.
+
+---
+
 ## Billing — does "5 seats included free" apply to Solo Chef too?
 
 The brief says "5 staff seats included free; seat #6 onward bills $15/month each" without saying whether that's the same for both plans or Core-Restaurant-only. Solo Chef is named and priced ($99/mo) like a single-operator plan, which reads like it might be meant to cap much lower (1 seat?) rather than also including 5 free seats — but I don't want to guess at a number that changes what a real customer gets billed.
