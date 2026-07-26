@@ -7,7 +7,9 @@ vi.mock("@ibirdos/logger", () => ({
 const mockEventFindFirst = vi.fn();
 const mockEventFindMany = vi.fn();
 const mockEventUpdate = vi.fn();
+const mockEventUpdateMany = vi.fn();
 const mockInvoiceLineFindMany = vi.fn();
+const mockKitchenTaskFindMany = vi.fn();
 const mockWriteAudit = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@ibirdos/db", () => ({
@@ -16,9 +18,13 @@ vi.mock("@ibirdos/db", () => ({
       findFirst: (...args: any[]) => mockEventFindFirst(...args),
       findMany: (...args: any[]) => mockEventFindMany(...args),
       update: (...args: any[]) => mockEventUpdate(...args),
+      updateMany: (...args: any[]) => mockEventUpdateMany(...args),
     },
     invoiceLine: {
       findMany: (...args: any[]) => mockInvoiceLineFindMany(...args),
+    },
+    kitchenTask: {
+      findMany: (...args: any[]) => mockKitchenTaskFindMany(...args),
     },
   },
   Prisma: { Decimal: class Decimal { constructor(v: any) { Object.assign(this, { v }); } } },
@@ -30,8 +36,11 @@ vi.mock("../common/constants/tokens", () => ({ REDIS_CLIENT: "REDIS_CLIENT" }));
 vi.mock("../recipes/recipes.service", () => ({ RecipesService: class {} }));
 vi.mock("../notifications/notifications.service", () => ({ NotificationsService: class {} }));
 
-import { EventsService, computeMarginPct, computeLiveQuoteTotalCents } from "./events.service";
-import { NotFoundException } from "@nestjs/common";
+import {
+  EventsService, computeMarginPct, computeLiveQuoteTotalCents,
+  isValidEventStatusTransition, maybeAdvanceEventStatusOnTasksComplete,
+} from "./events.service";
+import { NotFoundException, BadRequestException } from "@nestjs/common";
 
 const ctx = { workspaceId: "ws1", userId: "u1", role: "OWNER" as const };
 
@@ -312,6 +321,111 @@ describe("EventsService.ingredientRequirements — P0-3/P0-4: multi-shortage + u
       expect(r.lastUnitPriceCents).toBeNull();
       expect(r.vendorId).toBeNull();
     }
+  });
+});
+
+describe("isValidEventStatusTransition — #9/#11: enforce a real state machine", () => {
+  it("allows the normal forward chain", () => {
+    expect(isValidEventStatusTransition("DRAFT", "CONFIRMED")).toBe(true);
+    expect(isValidEventStatusTransition("CONFIRMED", "PREP_IN_PROGRESS")).toBe(true);
+    expect(isValidEventStatusTransition("PREP_IN_PROGRESS", "IN_SERVICE")).toBe(true);
+    expect(isValidEventStatusTransition("IN_SERVICE", "COMPLETED")).toBe(true);
+  });
+
+  it("allows CONFIRMED to skip straight to COMPLETED/IN_SERVICE (kitchen board is optional)", () => {
+    expect(isValidEventStatusTransition("CONFIRMED", "IN_SERVICE")).toBe(true);
+    expect(isValidEventStatusTransition("CONFIRMED", "COMPLETED")).toBe(true);
+  });
+
+  it("allows cancellation from any non-terminal state", () => {
+    for (const from of ["DRAFT", "CONFIRMED", "PREP_IN_PROGRESS", "IN_SERVICE"]) {
+      expect(isValidEventStatusTransition(from, "CANCELLED")).toBe(true);
+    }
+  });
+
+  it("rejects going backwards", () => {
+    expect(isValidEventStatusTransition("COMPLETED", "DRAFT")).toBe(false);
+    expect(isValidEventStatusTransition("IN_SERVICE", "CONFIRMED")).toBe(false);
+    expect(isValidEventStatusTransition("CONFIRMED", "DRAFT")).toBe(false);
+  });
+
+  it("rejects skipping straight from DRAFT to COMPLETED", () => {
+    expect(isValidEventStatusTransition("DRAFT", "COMPLETED")).toBe(false);
+  });
+
+  it("treats COMPLETED and CANCELLED as terminal", () => {
+    expect(isValidEventStatusTransition("COMPLETED", "CANCELLED")).toBe(false);
+    expect(isValidEventStatusTransition("CANCELLED", "COMPLETED")).toBe(false);
+  });
+
+  it("allows same-status as a no-op (idempotent PATCH)", () => {
+    for (const s of ["DRAFT", "CONFIRMED", "PREP_IN_PROGRESS", "IN_SERVICE", "COMPLETED", "CANCELLED"]) {
+      expect(isValidEventStatusTransition(s, s)).toBe(true);
+    }
+  });
+});
+
+describe("EventsService.updateStatus — rejects illegal transitions with a 400", () => {
+  let svc: EventsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
+  });
+
+  it("throws BadRequestException for COMPLETED -> DRAFT", async () => {
+    mockEventFindFirst.mockResolvedValue({ id: "ev1", status: "COMPLETED", menuItems: [] });
+    await expect(svc.updateStatus(ctx, "ev1", "DRAFT")).rejects.toThrow(BadRequestException);
+    expect(mockEventUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows a legal transition through", async () => {
+    mockEventFindFirst.mockResolvedValue({ id: "ev1", status: "CONFIRMED", menuItems: [], frozenAt: new Date() });
+    mockEventUpdate.mockResolvedValue({ id: "ev1", status: "IN_SERVICE" });
+    await svc.updateStatus(ctx, "ev1", "IN_SERVICE");
+    expect(mockEventUpdate).toHaveBeenCalled();
+  });
+});
+
+describe("maybeAdvanceEventStatusOnTasksComplete — #11: auto-advance to COMPLETED when the event is actually served", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("advances CONFIRMED -> COMPLETED when every SERVICE task is DONE", async () => {
+    mockEventFindFirst.mockResolvedValue({ status: "CONFIRMED" });
+    mockKitchenTaskFindMany.mockResolvedValue([{ status: "DONE" }, { status: "DONE" }]);
+    mockEventUpdate.mockResolvedValue({ id: "ev1", status: "COMPLETED" });
+
+    await maybeAdvanceEventStatusOnTasksComplete(ctx, "ev1");
+
+    expect(mockEventUpdate).toHaveBeenCalledWith({ where: { id: "ev1" }, data: { status: "COMPLETED" } });
+  });
+
+  it("does nothing when a SERVICE task is still pending", async () => {
+    mockEventFindFirst.mockResolvedValue({ status: "CONFIRMED" });
+    mockKitchenTaskFindMany.mockResolvedValue([{ status: "DONE" }, { status: "PENDING" }]);
+
+    await maybeAdvanceEventStatusOnTasksComplete(ctx, "ev1");
+
+    expect(mockEventUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the event has no SERVICE tasks at all", async () => {
+    mockEventFindFirst.mockResolvedValue({ status: "CONFIRMED" });
+    mockKitchenTaskFindMany.mockResolvedValue([]);
+
+    await maybeAdvanceEventStatusOnTasksComplete(ctx, "ev1");
+
+    expect(mockEventUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the event is already terminal (CANCELLED)", async () => {
+    mockEventFindFirst.mockResolvedValue({ status: "CANCELLED" });
+    mockKitchenTaskFindMany.mockResolvedValue([{ status: "DONE" }]);
+
+    await maybeAdvanceEventStatusOnTasksComplete(ctx, "ev1");
+
+    expect(mockEventUpdate).not.toHaveBeenCalled();
+    expect(mockKitchenTaskFindMany).not.toHaveBeenCalled();
   });
 });
 

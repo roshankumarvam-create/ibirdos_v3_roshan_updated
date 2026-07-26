@@ -8,6 +8,7 @@ import { canViewFinancials } from "@ibirdos/permissions";
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { InventoryService } from "../inventory/inventory.service";
 import { recordShortage } from "../events/event-ingredient-shortage.service";
+import { maybeAdvanceEventStatusOnTasksComplete } from "../events/events.service";
 import { getDueAtMap, setDueAt } from "./kitchen-task-due.service";
 
 const log = moduleLogger("KitchenService");
@@ -269,6 +270,17 @@ export class KitchenService {
     if (patch.status === "DONE" && task.status !== "DONE" && task.recipeId && task.targetPortions && task.taskType !== "SERVICE") {
       await this.consumeIngredients(ctx, task.recipeId, task.targetPortions, taskId, task.eventId).catch((err) =>
         log.warn({ err: err.message, taskId }, "inventory consume encountered errors — partial consume applied"),
+      );
+    }
+
+    // #11 fix: a SERVICE task reaching DONE means that recipe was actually
+    // served -- if every SERVICE task for this event is now DONE/CANCELLED,
+    // advance the event out of whatever kitchen-lifecycle status it was
+    // stuck at. No-ops harmlessly if the event isn't in a state COMPLETED
+    // is a legal transition from, or if tasks remain.
+    if (patch.status === "DONE" && task.status !== "DONE" && task.taskType === "SERVICE" && task.eventId) {
+      await maybeAdvanceEventStatusOnTasksComplete(ctx, task.eventId).catch((err: any) =>
+        log.warn({ err: err.message, taskId }, "event status auto-advance failed"),
       );
     }
 

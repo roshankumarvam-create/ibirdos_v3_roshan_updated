@@ -1,4 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException, ServiceUnavailableException, Inject } from "@nestjs/common";
+import {
+  Injectable, NotFoundException, BadRequestException, ServiceUnavailableException, Inject,
+  OnApplicationBootstrap,
+} from "@nestjs/common";
 import { Prisma } from "@ibirdos/db";
 type Decimal = Prisma.Decimal;
 const Decimal = Prisma.Decimal;
@@ -23,13 +26,39 @@ import { listOutstandingForEvent, resolveShortage } from "./event-ingredient-sho
 const log = moduleLogger("EventsService");
 
 @Injectable()
-export class EventsService {
+export class EventsService implements OnApplicationBootstrap {
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly recipes: RecipesService,
     private readonly notifications: NotificationsService,
     private readonly inventory: InventoryService,
   ) {}
+
+  /**
+   * #9 fix: one-time, idempotent repair for events paid BEFORE the
+   * DRAFT->CONFIRMED-on-payment fix (BUG 1, commit history predates this
+   * session) existed or ran -- markAsPaid() only advances status at the
+   * moment payment happens, so any event that was already PAID while
+   * sitting at DRAFT never got bumped retroactively. Confirmed live on
+   * cafe-71 (4 events: "zdvs", "smith", "smith 2", and a third "smith" --
+   * all paymentStatus PAID, status DRAFT, the exact "shows draft and Paid
+   * together" complaint). Same transformation markAsPaid() already applies
+   * going forward, run once per boot, same pattern as
+   * IngredientsService.repairPricesFromInventoryTransactions().
+   */
+  async onApplicationBootstrap() {
+    try {
+      const result = await prisma.event.updateMany({
+        where: { paymentStatus: "PAID", status: "DRAFT" as any, deletedAt: null },
+        data: { status: "CONFIRMED" as any },
+      });
+      if (result.count > 0) {
+        log.info({ count: result.count }, "repaired stale DRAFT+PAID events -> CONFIRMED");
+      }
+    } catch (err: any) {
+      log.warn({ err: err.message }, "startup event-status repair failed — non-fatal");
+    }
+  }
 
   // -----------------------------------------------------------------
   // Status transitions — freeze costs on PAID / COMPLETED / ARCHIVED
@@ -43,6 +72,18 @@ export class EventsService {
       },
     });
     if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+
+    // #9/#11 fix: updateStatus() previously accepted ANY status value with
+    // no regard for the event's current status -- a COMPLETED event could
+    // be moved back to DRAFT, or DRAFT straight to COMPLETED, skipping the
+    // entire kitchen lifecycle. isValidEventStatusTransition() is the one
+    // place that decides what's legal; see its comment for the table.
+    if (!isValidEventStatusTransition(event.status, newStatus)) {
+      throw new BadRequestException({
+        code: "invalid_status_transition",
+        message: `Cannot move event from ${event.status} to ${newStatus}`,
+      });
+    }
 
     const freezeStatuses = ["CONFIRMED", "PREP_IN_PROGRESS", "IN_SERVICE", "COMPLETED", "CANCELLED"];
     const shouldFreeze = freezeStatuses.includes(newStatus) && !(event as any).frozenAt;
@@ -1401,6 +1442,76 @@ ${publicQuoteUrl ? `<p style="margin-top:24px"><a href="${publicQuoteUrl}" style
     log.info({ eventId }, "event soft-deleted");
     return { deleted: true };
   }
+}
+
+/**
+ * #9/#11: the one place that decides which EventStatus (kitchen/operational
+ * lifecycle) transitions are legal. This is a SEPARATE axis from
+ * paymentStatus (UNPAID/PAID, set only by markAsPaid()) and from the
+ * quote/frozen signals (quotedPriceCents, frozenAt, quoteSentAt) -- this
+ * table only governs `status`. Before this existed, updateStatus() applied
+ * whatever value was passed with no validation at all, so a COMPLETED
+ * event could be moved back to DRAFT, or DRAFT could jump straight to
+ * COMPLETED skipping the whole kitchen workflow.
+ *
+ * COMPLETED and CANCELLED are terminal. Same-status is always allowed (a
+ * no-op PATCH shouldn't 400). CONFIRMED can skip straight to IN_SERVICE or
+ * COMPLETED -- not every event uses the kitchen-task board, so requiring a
+ * PREP_IN_PROGRESS stopover for events that never generate prep tasks
+ * would make the board mandatory when it isn't.
+ */
+const EVENT_STATUS_TRANSITIONS: Record<string, string[]> = {
+  DRAFT: ["CONFIRMED", "CANCELLED"],
+  CONFIRMED: ["PREP_IN_PROGRESS", "IN_SERVICE", "COMPLETED", "CANCELLED"],
+  PREP_IN_PROGRESS: ["IN_SERVICE", "COMPLETED", "CANCELLED"],
+  IN_SERVICE: ["COMPLETED", "CANCELLED"],
+  COMPLETED: [],
+  CANCELLED: [],
+};
+
+export function isValidEventStatusTransition(from: string, to: string): boolean {
+  if (from === to) return true;
+  return EVENT_STATUS_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
+ * #11 fix: nothing previously advanced an event's kitchen-lifecycle status
+ * past whatever it was at creation except markAsPaid()'s one-time
+ * DRAFT->CONFIRMED bump -- an event whose kitchen tasks were ALL finished
+ * (every SERVICE task DONE, i.e. the event was actually served) still sat
+ * at DRAFT/CONFIRMED/PREP_IN_PROGRESS forever, with no auto-advance and no
+ * manual UI to do it either (grepped the whole web app -- nothing calls
+ * PATCH /events/:id/status). Called from KitchenService.updateTask() every
+ * time a SERVICE task is marked DONE. Exported as a plain function (not a
+ * DI method) and imported directly by kitchen.service.ts, matching the
+ * existing event-ingredient-shortage.service.ts pattern -- avoids adding a
+ * KitchenModule -> EventsModule dependency edge for one call site.
+ */
+export async function maybeAdvanceEventStatusOnTasksComplete(ctx: TenantContext, eventId: string): Promise<void> {
+  const event = await prisma.event.findFirst({
+    where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
+    select: { status: true },
+  });
+  if (!event || !isValidEventStatusTransition(event.status, "COMPLETED")) return;
+
+  const serviceTasks = await prisma.kitchenTask.findMany({
+    where: { workspaceId: ctx.workspaceId, eventId, taskType: "SERVICE" },
+    select: { status: true },
+  });
+  // No SERVICE tasks at all (e.g. event never used the kitchen-task board)
+  // -- nothing here to signal "served," leave status alone.
+  if (serviceTasks.length === 0) return;
+  const allServed = serviceTasks.every((t) => t.status === "DONE" || t.status === "CANCELLED");
+  if (!allServed) return;
+
+  await prisma.event.update({ where: { id: eventId }, data: { status: "COMPLETED" as any } });
+  await writeAudit(ctx, {
+    action: "event.status_changed",
+    entityType: "Event",
+    entityId: eventId,
+    metadata: { from: event.status, to: "COMPLETED", trigger: "all_service_tasks_done" },
+  });
+  log.info({ eventId }, "event auto-advanced to COMPLETED — all SERVICE tasks done");
 }
 
 /**
