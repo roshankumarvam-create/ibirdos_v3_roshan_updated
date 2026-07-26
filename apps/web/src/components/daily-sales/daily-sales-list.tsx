@@ -119,7 +119,10 @@ export function DailySalesList({ workspaceSlug, workspaceTimeZone }: { workspace
         <tbody className="divide-y divide-bg-border">
           {groups.map((group) => {
             const isCollapsed = collapsed.has(group.dateKey);
-            const groupBalanced = Math.abs(group.totalTenders - group.totalNet) < 0.01;
+            // #8 fix: round to whole cents before comparing -- see variance.ts's
+            // getVarianceTier() comment for why a raw `< 0.01` epsilon can
+            // misclassify a real one-cent mismatch as balanced.
+            const groupBalanced = Math.round((group.totalTenders - group.totalNet) * 100) === 0;
             return (
               <>
                 {/* Date group header row */}
@@ -152,7 +155,7 @@ export function DailySalesList({ workspaceSlug, workspaceTimeZone }: { workspace
                   const rowTenderTotal = row.tenders.reduce((s, t) => s + parseFloat(String(t.amount)), 0);
                   const rowNet = parseFloat(String(row.netSales));
                   const rowVariance = rowTenderTotal - rowNet;
-                  const rowBalanced = Math.abs(rowVariance) < 0.01;
+                  const rowBalanced = Math.round(rowVariance * 100) === 0;
                   const statusInfo = STATUS_BADGE[row.status] ?? STATUS_BADGE.NO_BUSINESS;
                   return (
                     <tr

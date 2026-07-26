@@ -334,14 +334,28 @@ export class DailySalesService {
     return this.calcVariance(record);
   }
 
+  /**
+   * #8 fix: `balanced` was `Math.abs(tenderTotal - netSales) < 0.01` --
+   * comparing a RAW (unrounded) floating-point subtraction against a
+   * tolerance the exact same size as the smallest real variance it's
+   * supposed to catch. A genuine one-cent mismatch (e.g. tenders summing
+   * to $57.50 against netSales $57.51) can land at
+   * -0.00999999999999801 in IEEE-754 floating point -- which IS less
+   * than 0.01, so a real $0.01 discrepancy silently reported "Balanced."
+   * Fix: round to whole cents FIRST (matching the smallest unit real
+   * currency actually has), then compare for exact equality -- no
+   * epsilon needed once both sides are integers, so no tolerance window
+   * remains to swallow a real cent-level variance.
+   */
   private calcVariance(record: { netSales: any; tenders: Array<{ amount: any }> }) {
     const netSales = Number(record.netSales);
     const tenderTotal = record.tenders.reduce((sum, t) => sum + Number(t.amount), 0);
+    const varianceCents = Math.round((tenderTotal - netSales) * 100);
     return {
       netSales,
       tenderTotal: parseFloat(tenderTotal.toFixed(2)),
-      variance: parseFloat((tenderTotal - netSales).toFixed(2)),
-      balanced: Math.abs(tenderTotal - netSales) < 0.01,
+      variance: varianceCents / 100,
+      balanced: varianceCents === 0,
     };
   }
 }

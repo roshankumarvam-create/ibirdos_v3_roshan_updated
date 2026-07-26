@@ -301,6 +301,33 @@ describe("DailySalesService", () => {
     expect(variance.balanced).toBe(false);
   });
 
+  it("#8 fix: a real one-cent variance must NOT be reported balanced (the exact reported bug)", async () => {
+    // 45.30 + 12.20 = 57.5 in floating point; netSales 57.51 -> raw
+    // difference is -0.00999999999999801, which the OLD `< 0.01` epsilon
+    // check treated as balanced. This is the literal repro.
+    mockFindFirst.mockResolvedValue(makeRecord({
+      netSales: 57.51,
+      tenders: [{ amount: 45.30 }, { amount: 12.20 }],
+    }));
+
+    const variance = await svc.getVariance(ctx, "ds1");
+    expect(variance.balanced).toBe(false);
+    expect(variance.variance).toBe(-0.01);
+  });
+
+  it("#8 fix: an exact zero-cent difference (real floating point noise from summing tenders) is still balanced", async () => {
+    // 0.1 + 0.2 !== 0.3 in floating point -- confirms the rounding fix
+    // doesn't turn genuinely-balanced days into false variances.
+    mockFindFirst.mockResolvedValue(makeRecord({
+      netSales: 0.3,
+      tenders: [{ amount: 0.1 }, { amount: 0.2 }],
+    }));
+
+    const variance = await svc.getVariance(ctx, "ds1");
+    expect(variance.balanced).toBe(true);
+    expect(variance.variance).toBe(0);
+  });
+
   it("get: throws NotFoundException for unknown id", async () => {
     mockFindFirst.mockResolvedValue(null);
     await expect(svc.get(ctx, "nope")).rejects.toThrow(NotFoundException);
