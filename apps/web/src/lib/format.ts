@@ -33,7 +33,13 @@ export function formatCostPerUnit(
   const displayUnit = preferredDisplayUnit ?? canonicalUnit;
   const normalized = normalizeUnit(displayUnit);
   const unitDef = normalized ? UNITS[normalized] : null;
-  if (!unitDef) return `$${(Number(costCentsPerCanonical) / 100).toFixed(4)}/${canonicalUnit}`;
+  // #14 fix: this fallback branch (fires whenever canonicalUnit/
+  // preferredDisplayUnit doesn't normalize against the known UNITS table --
+  // both are free-form strings, not validated at the DB layer) previously
+  // showed 4 raw decimals ($16.9183/each) instead of rounding to cents like
+  // every other price display. Full precision is still kept internally
+  // (currentCostMicrocents) -- this only rounds what's shown.
+  if (!unitDef) return `$${(Number(costCentsPerCanonical) / 100).toFixed(2)}/${canonicalUnit}`;
   const dollarsPerPreferred = (Number(costCentsPerCanonical) / 100) * unitDef.toCanonical;
   return `$${dollarsPerPreferred.toFixed(2)}/${normalized}`;
 }
