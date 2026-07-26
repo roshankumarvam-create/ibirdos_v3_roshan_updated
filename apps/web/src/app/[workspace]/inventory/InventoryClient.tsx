@@ -6,6 +6,7 @@ import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { api } from "@/lib/api";
 import { formatCents, formatStock, formatCostPerUnit, relativeTime } from "@/lib/format";
+import { inventoryStatusMessage } from "@/lib/inventory-status";
 
 interface Alert {
   id: string;
@@ -135,10 +136,7 @@ function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjus
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Inventory</h1>
           <p className="mt-1 text-xs font-mono text-text-secondary">
-            Append-only ledger ·{" "}
-            {alertCount > 0
-              ? `${alertCount} item${alertCount === 1 ? "" : "s"} need attention`
-              : "all stock levels OK"}
+            Append-only ledger · {inventoryStatusMessage(alertCount, missingThresholdCount)}
           </p>
         </div>
         <div className="flex gap-2">
