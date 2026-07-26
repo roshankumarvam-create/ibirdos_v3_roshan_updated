@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { computeEventProfit } from "../src/money";
+import {
+  computeEventProfit, getMarginWarningLevel,
+  MARGIN_WARNING_THRESHOLD_PCT, MARGIN_CRITICAL_THRESHOLD_PCT,
+} from "../src/money";
 
 describe("computeEventProfit — P0-1: profit must subtract labor cost, not just food cost", () => {
   it("reproduces the client's exact cafe-71 numbers: $443.75 quote (incl. $100 labor), $203.07 food -> $140.68 profit, not $240.68", () => {
@@ -66,5 +69,51 @@ describe("computeEventProfit — P0-1: profit must subtract labor cost, not just
     const result = computeEventProfit({ revenueCents: 10000, foodCostCents: 8000, laborCostCents: 5000 });
     expect(result.profitCents).toBe(-3000);
     expect(result.marginPct).toBeCloseTo(-30, 2);
+  });
+});
+
+describe("getMarginWarningLevel — issue #2: below-target-margin warning, never built before this", () => {
+  it("reproduces the client's reported numbers: ~59% and ~65% food cost (no labor) both fire a warning", () => {
+    // 59% food cost -> 41% margin -> below the 45% warning threshold.
+    const at59 = computeEventProfit({ revenueCents: 10000, foodCostCents: 5900, laborCostCents: 0 });
+    expect(at59.marginPct).toBeCloseTo(41, 2);
+    expect(getMarginWarningLevel(at59.marginPct)).toBe("warning");
+
+    // 65% food cost -> 35% margin -> also below 45%.
+    const at65 = computeEventProfit({ revenueCents: 10000, foodCostCents: 6500, laborCostCents: 0 });
+    expect(at65.marginPct).toBeCloseTo(35, 2);
+    expect(getMarginWarningLevel(at65.marginPct)).toBe("warning");
+  });
+
+  it("threshold boundary: exactly 45% is NOT a warning (strictly below only)", () => {
+    expect(getMarginWarningLevel(MARGIN_WARNING_THRESHOLD_PCT)).toBe("none");
+    expect(getMarginWarningLevel(45)).toBe("none");
+  });
+
+  it("threshold boundary: just under 45% IS a warning", () => {
+    expect(getMarginWarningLevel(44.99)).toBe("warning");
+  });
+
+  it("threshold boundary: exactly 25% is warning, not critical (strictly below only)", () => {
+    expect(getMarginWarningLevel(MARGIN_CRITICAL_THRESHOLD_PCT)).toBe("warning");
+    expect(getMarginWarningLevel(25)).toBe("warning");
+  });
+
+  it("threshold boundary: just under 25% IS critical", () => {
+    expect(getMarginWarningLevel(24.99)).toBe("critical");
+  });
+
+  it("healthy margin (>= 45%) shows no warning", () => {
+    expect(getMarginWarningLevel(50)).toBe("none");
+    expect(getMarginWarningLevel(100)).toBe("none");
+  });
+
+  it("negative margin is critical", () => {
+    expect(getMarginWarningLevel(-10)).toBe("critical");
+  });
+
+  it("null/undefined margin (no quote yet) shows no warning -- nothing to warn about", () => {
+    expect(getMarginWarningLevel(null)).toBe("none");
+    expect(getMarginWarningLevel(undefined)).toBe("none");
   });
 });

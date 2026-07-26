@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Button, Card, CardHeader, CardTitle, CardBody } from "@ibirdos/ui";
-import { computeEventProfit } from "@ibirdos/types";
+import { computeEventProfit, getMarginWarningLevel, MARGIN_WARNING_THRESHOLD_PCT, MARGIN_CRITICAL_THRESHOLD_PCT } from "@ibirdos/types";
 import { formatCents } from "@/lib/format";
 import { api } from "@/lib/api";
 import type { Route } from "next";
@@ -392,11 +392,17 @@ export default function NewEventPage() {
   // charge (client's reported $240.68 vs. the correct $140.68). Shared
   // formula with the saved event page and the backend P&L -- see
   // packages/types/src/money.ts.
-  const { profitCents: totalProfitCentsOrNull } = computeEventProfit({
+  const { profitCents: totalProfitCentsOrNull, marginPct: totalMarginPct } = computeEventProfit({
     revenueCents: totalCents, foodCostCents: totalFoodCostCents, laborCostCents: laborTotalCents,
   });
   const totalProfitCents = totalProfitCentsOrNull ?? 0;
   const foodCostPct = totalCents > 0 ? (totalFoodCostCents / totalCents) * 100 : null;
+  // Issue #2 fix: this quote-builder screen previously showed foodCostPct
+  // as plain text with no color/warning at all -- the client's exact
+  // report ("opened a high-food-cost event, saw NO below-target-margin
+  // warning") applies here even more than the saved event page, which at
+  // least tinted the Margin % KPI card. See packages/types/src/money.ts.
+  const marginWarningLevel = getMarginWarningLevel(totalMarginPct);
 
   // Recompute non-manual portions when guest count changes
   useEffect(() => {
@@ -682,6 +688,23 @@ export default function NewEventPage() {
                   {formatCents(totalProfitCents)}
                 </span>
               </div>
+              {totalMarginPct != null && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-text-secondary">Margin</span>
+                  <span className={`font-mono ${
+                    marginWarningLevel === "critical" ? "text-danger" : marginWarningLevel === "warning" ? "text-warning" : "text-text-secondary"
+                  }`}>
+                    {totalMarginPct.toFixed(1)}%
+                  </span>
+                </div>
+              )}
+              {marginWarningLevel !== "none" && (
+                <div className={`mt-1 rounded px-2 py-1.5 text-[11px] ${
+                  marginWarningLevel === "critical" ? "bg-danger/10 text-danger" : "bg-warning/10 text-warning"
+                }`}>
+                  {marginWarningLevel === "critical" ? "Margin critically low" : "Below target margin"} — below {marginWarningLevel === "critical" ? MARGIN_CRITICAL_THRESHOLD_PCT : MARGIN_WARNING_THRESHOLD_PCT}% after food and labor cost.
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { canViewFinancials } from "@ibirdos/permissions";
-import { computeEventProfit } from "@ibirdos/types";
+import { computeEventProfit, getMarginWarningLevel, MARGIN_WARNING_THRESHOLD_PCT, MARGIN_CRITICAL_THRESHOLD_PCT } from "@ibirdos/types";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { StatusBadge } from "@/components/common/status-badge";
 import { formatCents, formatPct, formatDateTime, formatDate } from "@/lib/format";
@@ -241,6 +241,7 @@ export default async function EventDetailPage({
   const { profitCents, marginPct } = computeEventProfit({
     revenueCents: profitBaseCents, foodCostCents: foodCostCents, laborCostCents: totalLaborCents,
   });
+  const marginWarningLevel = getMarginWarningLevel(marginPct);
 
   const prepTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "PREP");
   const serviceTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "SERVICE");
@@ -327,6 +328,25 @@ export default async function EventDetailPage({
           shortages={outstandingShortages}
           canSeeFinancials={canSeeFinancials}
         />
+      )}
+
+      {/* Issue #2 fix: explicit, clearly-labeled warning instead of the
+          Margin % KPI card's color tint alone -- the tint was easy to miss
+          (no text, easy to skim past) and didn't exist at all on the
+          create-quote page (see events/new/page.tsx). marginWarningLevel
+          uses the same 45%/25% thresholds the KPI tone below already
+          quietly encoded -- see getMarginWarningLevel()'s comment in
+          packages/types/src/money.ts for why those numbers, not new ones. */}
+      {canSeeFinancials && marginWarningLevel !== "none" && (
+        <div className={`rounded-md border px-5 py-4 ${marginWarningLevel === "critical" ? "border-danger/40 bg-danger/5" : "border-warning/40 bg-warning/5"}`}>
+          <div className={`text-sm font-semibold ${marginWarningLevel === "critical" ? "text-danger" : "text-warning"}`}>
+            {marginWarningLevel === "critical" ? "Margin critically low" : "Below target margin"} — {formatPct(marginPct!)}
+          </div>
+          <p className="mt-1 text-xs text-text-secondary">
+            This quote's margin is below {marginWarningLevel === "critical" ? `${MARGIN_CRITICAL_THRESHOLD_PCT}%` : `${MARGIN_WARNING_THRESHOLD_PCT}%`}
+            {" "}after food and labor cost. Consider adjusting the markup, menu, or labor estimate before sending.
+          </p>
+        </div>
       )}
 
       {/* KPI row -- Revenue/Food cost/Labor cost/Profit/Margin are omitted

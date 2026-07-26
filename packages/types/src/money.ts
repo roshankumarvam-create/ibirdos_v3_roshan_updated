@@ -51,3 +51,38 @@ export function computeEventProfit(inputs: EventProfitInputs): EventProfitResult
   const marginPct = (profitCents / revenueCents) * 100;
   return { profitCents, marginPct };
 }
+
+// ---------------------------------------------------------------------
+// Client-reported issue #2: "opened a high-food-cost event, saw NO
+// below-target-margin warning." Investigated first -- no such warning
+// (banner, text, alert) exists anywhere in the codebase or FIX_LOG.md
+// history under any name; #2 was never part of either the original P0
+// batch (#1/#3/#4) or the Phase 2 priority list (started at #9/#11) --
+// genuinely never built, not a deploy gap. The only existing signal was
+// silent color-tinting on the saved event page's Margin %/Profit KpiCard
+// (events/[id]/page.tsx: `marginPct < 25 ? "danger" : marginPct < 45 ?
+// "warning" : "default"`) -- present only on the SAVED page, absent
+// entirely from the create-quote page, and a color change alone doesn't
+// read as a warning (easy to miss, no text, no accessibility fallback).
+//
+// No event-level or workspace-level "target margin" exists anywhere to
+// read a real threshold from (only Recipe.goalFoodCostPct/targetMarginPct,
+// per-recipe, already flagged in NEEDS_ROSHAN.md as unreconciled -- not
+// reused here to avoid introducing a fourth conflicting "target"
+// concept). These two numbers make the ALREADY-HARDCODED KPI-tone
+// thresholds explicit and named, instead of inventing a new business
+// number: 45% margin was already the "warning" cutoff, 25% the
+// "danger"/critical cutoff, both silently baked into the tone logic above.
+// ---------------------------------------------------------------------
+
+export const MARGIN_WARNING_THRESHOLD_PCT = 45;
+export const MARGIN_CRITICAL_THRESHOLD_PCT = 25;
+
+export type MarginWarningLevel = "none" | "warning" | "critical";
+
+export function getMarginWarningLevel(marginPct: number | null | undefined): MarginWarningLevel {
+  if (marginPct == null) return "none";
+  if (marginPct < MARGIN_CRITICAL_THRESHOLD_PCT) return "critical";
+  if (marginPct < MARGIN_WARNING_THRESHOLD_PCT) return "warning";
+  return "none";
+}
