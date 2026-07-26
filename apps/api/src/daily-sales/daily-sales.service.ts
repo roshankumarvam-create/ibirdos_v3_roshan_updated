@@ -26,6 +26,35 @@ export function deriveDefaultDailySalesStatus(
   return grossSales > 0 || netSales > 0 ? "CLOSED_WON" : "NO_BUSINESS";
 }
 
+/**
+ * Issue #2 (round 2) fix: the original #6 fix only replaced the DEFAULT
+ * when status was omitted -- "an explicit status always wins" was a
+ * deliberate design choice at the time, but live testing on cafe-71
+ * (record `cms1qzpri001vzxk7z7v0rgk1`, grossSales/netSales both $0.01,
+ * status explicitly NO_BUSINESS) proved that choice wrong: confirmed via
+ * a direct backend test that deriveDefaultDailySalesStatus() itself works
+ * correctly when status is omitted, so the live bad record could only
+ * have gotten there via an EXPLICIT status value -- either a manually
+ * clicked "No Business" pill before sales figures were entered, or a
+ * future importer/API caller passing it directly. The client's own words
+ * for the original bug were an unconditional rule ("non-zero sales can
+ * never be No Business"), not "unless explicitly overridden" -- so this
+ * is now an enforced invariant, checked at every write path (create,
+ * replace, add-merge, update), not just a default.
+ */
+export function assertStatusConsistentWithSales(
+  status: string,
+  grossSales: number,
+  netSales: number,
+): void {
+  if (status === "NO_BUSINESS" && (grossSales > 0 || netSales > 0)) {
+    throw new BadRequestException({
+      code: "inconsistent_status",
+      message: `Cannot mark a day "No Business" when gross sales ($${grossSales.toFixed(2)}) or net sales ($${netSales.toFixed(2)}) are non-zero.`,
+    });
+  }
+}
+
 export interface CreateDailySalesInput {
   saleDate: string;           // YYYY-MM-DD
   grossSales: number;
@@ -86,6 +115,12 @@ export class DailySalesService {
       }
 
       if (mode === "add") {
+        const mergedGrossSales = Number(existing.grossSales) + input.grossSales;
+        const mergedNetSales = Number(existing.netSales) + input.netSales;
+        const effectiveStatus = (input.status as any)
+          ?? deriveDefaultDailySalesStatus(mergedGrossSales, mergedNetSales);
+        assertStatusConsistentWithSales(effectiveStatus, mergedGrossSales, mergedNetSales);
+
         // Sum numeric fields + merge tenders
         const updated = await prisma.$transaction(async (tx) => {
           // Merge tenders: sum by tenderType
@@ -107,8 +142,8 @@ export class DailySalesService {
           return tx.dailySales.update({
             where: { id: existing.id },
             data: {
-              grossSales: Number(existing.grossSales) + input.grossSales,
-              netSales: Number(existing.netSales) + input.netSales,
+              grossSales: mergedGrossSales,
+              netSales: mergedNetSales,
               tax: Number(existing.tax) + input.tax,
               discounts: Number(existing.discounts) + (input.discounts ?? 0),
               voids: Number(existing.voids) + (input.voids ?? 0),
@@ -121,11 +156,7 @@ export class DailySalesService {
               // adding real sales onto a record that started at NO_BUSINESS
               // (e.g. created with zero figures, then a real POS export
               // merged in later) must not leave it stuck at NO_BUSINESS.
-              status: (input.status as any)
-                ?? deriveDefaultDailySalesStatus(
-                  Number(existing.grossSales) + input.grossSales,
-                  Number(existing.netSales) + input.netSales,
-                ),
+              status: effectiveStatus,
               tenders: {
                 create: Array.from(mergedTenders.entries()).map(([tenderType, v]) => ({
                   workspaceId: ctx.workspaceId,
@@ -149,6 +180,10 @@ export class DailySalesService {
       }
 
       if (mode === "replace") {
+        const replaceStatus = (input.status as any)
+          ?? deriveDefaultDailySalesStatus(input.grossSales, input.netSales);
+        assertStatusConsistentWithSales(replaceStatus, input.grossSales, input.netSales);
+
         // Delete existing (cascade tenders), create new
         const record = await prisma.$transaction(async (tx) => {
           await tx.tenderEntry.deleteMany({ where: { dailySalesId: existing.id } });
@@ -169,7 +204,7 @@ export class DailySalesService {
               deliveryAppSales: input.deliveryAppSales ?? 0,
               notes: input.notes ?? null,
               sourceFileUrl: input.sourceFileUrl ?? null,
-              status: (input.status as any) ?? deriveDefaultDailySalesStatus(input.grossSales, input.netSales),
+              status: replaceStatus,
               shift: input.shift ?? null,
               tenders: input.tenders?.length
                 ? {
@@ -197,6 +232,10 @@ export class DailySalesService {
     }
 
     // No existing record — normal create
+    const createStatus = (input.status as any)
+      ?? deriveDefaultDailySalesStatus(input.grossSales, input.netSales);
+    assertStatusConsistentWithSales(createStatus, input.grossSales, input.netSales);
+
     const record = await prisma.dailySales.create({
       data: {
         workspaceId: ctx.workspaceId,
@@ -213,7 +252,7 @@ export class DailySalesService {
         deliveryAppSales: input.deliveryAppSales ?? 0,
         notes: input.notes ?? null,
         sourceFileUrl: input.sourceFileUrl ?? null,
-        status: (input.status as any) ?? deriveDefaultDailySalesStatus(input.grossSales, input.netSales),
+        status: createStatus,
         shift: input.shift ?? null,
         tenders: input.tenders?.length
           ? {
@@ -269,9 +308,19 @@ export class DailySalesService {
   async update(ctx: TenantContext, id: string, input: UpdateDailySalesInput) {
     const existing = await prisma.dailySales.findFirst({
       where: { id, workspaceId: ctx.workspaceId },
-      select: { id: true },
+      select: { id: true, grossSales: true, netSales: true, status: true },
     });
     if (!existing) throw new NotFoundException({ code: "not_found", message: "Daily sales record not found" });
+
+    // Validate against the EFFECTIVE post-update values, not just whatever
+    // field(s) this particular PATCH happens to touch -- a status-only
+    // patch must be checked against the sales figures already on the
+    // record, and a sales-only patch must be checked against whatever
+    // status (existing or newly supplied) would remain in effect.
+    const effectiveGrossSales = input.grossSales !== undefined ? input.grossSales : Number(existing.grossSales);
+    const effectiveNetSales = input.netSales !== undefined ? input.netSales : Number(existing.netSales);
+    const effectiveStatus = input.status !== undefined ? (input.status as any) : existing.status;
+    assertStatusConsistentWithSales(effectiveStatus, effectiveGrossSales, effectiveNetSales);
 
     const updated = await prisma.dailySales.update({
       where: { id },

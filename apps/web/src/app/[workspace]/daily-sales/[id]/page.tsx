@@ -86,6 +86,15 @@ export default function DailySalesDetailPage() {
 
   const [saleDate, setSaleDate] = useState("");
   const [status, setStatus] = useState<DailySalesStatus>("NO_BUSINESS");
+  // Issue #2 (round 2): the create page already auto-follows sales figures
+  // (see new/page.tsx) so a fresh record never starts out mislabeled, but
+  // this edit page had no equivalent -- editing grossSales/netSales on an
+  // existing record left `status` exactly as loaded, so adding real sales
+  // to a day that started as "No Business" saved it as still "No Business"
+  // (the live cafe-71 repro: $0.01 sales, status stuck at NO_BUSINESS).
+  // Mirror the same statusTouched pattern here so the status pill tracks
+  // the sales figures unless the user has explicitly picked one.
+  const [statusTouched, setStatusTouched] = useState(false);
   const [shift, setShift] = useState<ShiftType>("");
   const [grossSales, setGrossSales] = useState("");
   const [netSales, setNetSales] = useState("");
@@ -133,6 +142,12 @@ export default function DailySalesDetailPage() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => {
+    if (statusTouched) return;
+    const hasSales = (parseFloat(grossSales) || 0) > 0 || (parseFloat(netSales) || 0) > 0;
+    setStatus(hasSales ? "CLOSED_WON" : "NO_BUSINESS");
+  }, [grossSales, netSales, statusTouched]);
 
   const tenderTotal = tenders.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
   const net = parseFloat(netSales) || 0;
@@ -190,6 +205,7 @@ export default function DailySalesDetailPage() {
 
   function handleCancelEdit() {
     if (record) populateFormFields(record);
+    setStatusTouched(false);
     setError(null);
     setMode("view");
   }
@@ -344,7 +360,7 @@ export default function DailySalesDetailPage() {
               <button
                 key={opt.value}
                 type="button"
-                onClick={() => setStatus(opt.value)}
+                onClick={() => { setStatus(opt.value); setStatusTouched(true); }}
                 className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${status === opt.value ? opt.active : opt.inactive}`}
               >
                 {opt.label}

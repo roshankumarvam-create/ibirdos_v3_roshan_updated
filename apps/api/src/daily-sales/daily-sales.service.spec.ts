@@ -31,7 +31,7 @@ vi.mock("@ibirdos/db", () => ({
 }));
 
 import { DailySalesService } from "./daily-sales.service";
-import { NotFoundException, ConflictException } from "@nestjs/common";
+import { NotFoundException, ConflictException, BadRequestException } from "@nestjs/common";
 
 const ctx = { workspaceId: "ws1", userId: "u1", role: "OWNER" as const };
 
@@ -347,5 +347,115 @@ describe("DailySalesService", () => {
     const created = mockCreate.mock.calls[0]![0].data;
     expect(created.workspaceId).toBe("ws-other");
     expect(created.enteredById).toBe("u2");
+  });
+
+  describe("issue #2 (round 2) fix: NO_BUSINESS can never be saved alongside real sales", () => {
+    it("create: explicit status=NO_BUSINESS with non-zero grossSales is rejected", async () => {
+      mockFindFirst.mockResolvedValue(null);
+
+      await expect(
+        svc.create(ctx, {
+          saleDate: "2024-01-15",
+          grossSales: 1,
+          netSales: 0,
+          tax: 0,
+          status: "NO_BUSINESS",
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it("create: explicit status=NO_BUSINESS with non-zero netSales is rejected (the exact live repro: $0.01 net sales)", async () => {
+      mockFindFirst.mockResolvedValue(null);
+
+      await expect(
+        svc.create(ctx, {
+          saleDate: "2024-01-15",
+          grossSales: 0.01,
+          netSales: 0.01,
+          tax: 0.01,
+          status: "NO_BUSINESS",
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it("create: explicit status=NO_BUSINESS with genuinely zero sales is still allowed", async () => {
+      mockFindFirst.mockResolvedValue(null);
+      mockCreate.mockResolvedValue(makeRecord({ status: "NO_BUSINESS" }));
+
+      await svc.create(ctx, {
+        saleDate: "2024-01-15",
+        grossSales: 0,
+        netSales: 0,
+        tax: 0,
+        status: "NO_BUSINESS",
+      });
+
+      expect(mockCreate).toHaveBeenCalledOnce();
+    });
+
+    it("create mode=replace: explicit status=NO_BUSINESS with non-zero sales is rejected before the delete/create transaction runs", async () => {
+      const existing = makeRecord({ id: "old-id" });
+      mockFindFirst.mockResolvedValue(existing);
+
+      await expect(
+        svc.create(ctx, {
+          saleDate: "2024-01-15",
+          grossSales: 5,
+          netSales: 5,
+          tax: 0,
+          status: "NO_BUSINESS",
+        }, "replace"),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it("create mode=add: status is validated against the MERGED total, not just the incoming delta", async () => {
+      // Existing record already has real sales; incoming delta is zero but
+      // caller explicitly (and wrongly) sends status=NO_BUSINESS. The
+      // merged total is still non-zero, so this must be rejected even
+      // though the delta alone looks like "no new business."
+      const existing = makeRecord({ id: "old-id", grossSales: 500, netSales: 450 });
+      mockFindFirst.mockResolvedValue(existing);
+
+      await expect(
+        svc.create(ctx, {
+          saleDate: "2024-01-15",
+          grossSales: 0,
+          netSales: 0,
+          tax: 0,
+          status: "NO_BUSINESS",
+        }, "add"),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it("update: setting status=NO_BUSINESS on a record that already has real sales is rejected", async () => {
+      mockFindFirst.mockResolvedValue({ id: "ds1", grossSales: 1000, netSales: 900, status: "CLOSED_WON" });
+
+      await expect(
+        svc.update(ctx, "ds1", { status: "NO_BUSINESS" }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it("update: adding real sales onto a NO_BUSINESS record without also changing status is rejected", async () => {
+      mockFindFirst.mockResolvedValue({ id: "ds1", grossSales: 0, netSales: 0, status: "NO_BUSINESS" });
+
+      await expect(
+        svc.update(ctx, "ds1", { grossSales: 50, netSales: 50 }),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it("update: sales and status changed together consistently is allowed", async () => {
+      mockFindFirst.mockResolvedValue({ id: "ds1", grossSales: 0, netSales: 0, status: "NO_BUSINESS" });
+      mockUpdate.mockResolvedValue(makeRecord({ grossSales: 50, netSales: 50, status: "CLOSED_WON" }));
+
+      await svc.update(ctx, "ds1", { grossSales: 50, netSales: 50, status: "CLOSED_WON" });
+
+      expect(mockUpdate).toHaveBeenCalledOnce();
+    });
   });
 });
