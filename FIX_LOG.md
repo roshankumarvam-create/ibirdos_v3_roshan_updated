@@ -1451,3 +1451,46 @@ Investigated first (previous turn): `event_ingredient_shortages` has no vendor f
 **NOT deployed.**
 
 ---
+
+## Round 2: three new issues found by the client on the deployed build (commit `249724e`)
+
+### Issue 1 — "#2 below-margin warning not showing"
+
+**Root cause, investigated before touching anything:** searched exhaustively (grep across the codebase, `FIX_LOG.md`, `NEEDS_ROSHAN.md`) for any prior below-margin-warning implementation under any name and found nothing. Re-traced the client's original numbering from the very first message of this engagement — #1/#3/#4 were the three P0s, Phase 2 started at #9/#11 — and #2 was never assigned to either batch. **It's genuinely never built, not a deploy gap or a threshold miss.** The only existing signal anywhere was silent color-tinting on the *saved* event page's Margin % KPI card (`events/[id]/page.tsx`: `marginPct < 25 ? "danger" : marginPct < 45 ? "warning" : "default"`) — present only after an event is saved, entirely absent from the create-quote screen, and a color tint alone (no text) is easy to miss and has no accessibility fallback. On the client's own numbers (~59%/~65% food cost, no labor → ~41%/~35% margin), this silent tint *would* have fired if it existed on the quote screen, but it doesn't.
+
+**Fix:** added `getMarginWarningLevel()` to the shared `packages/types/src/money.ts`, using the same 45%/25% thresholds already hardcoded into the KPI tone logic above (not invented — there is no event-level or workspace-level "target margin" field anywhere in the schema to read a real threshold from; the only "target" concept that exists is `Recipe.goalFoodCostPct`/`targetMarginPct`, which is per-recipe and already flagged in `NEEDS_ROSHAN.md` as unreconciled, so it wasn't reused here to avoid a fourth conflicting "target" number). Rendered an explicit, clearly-labeled banner (not just a color) on **both** the event detail page and the quote-builder (`events/new`) page when margin falls below target — "Below target margin" (warning, <45%) or "Margin critically low" (critical, <25%), gated behind `canViewFinancials` same as the rest of the financial UI.
+
+**Tests:** 8 new tests in `packages/types/__tests__/money.test.ts` — reproduces the client's exact 59%/65% numbers (both fire "warning"), boundary at exactly 45% (→ "none", strictly-below only), just under 45% (→ "warning"), exactly 25% (→ "warning", not "critical" — strictly-below only), just under 25% (→ "critical"), healthy margin (→ "none"), negative margin (→ "critical"), null/undefined (→ "none", nothing to warn about pre-quote). 17/17 total passing.
+
+**Files changed:** `packages/types/{src/money.ts, __tests__/money.test.ts}`, `apps/web/src/app/[workspace]/events/{[id]/page.tsx, new/page.tsx}`
+**Commit:** `f05c675`
+**Verification:** `npx vitest run packages/types/__tests__/money.test.ts` 17/17 passing. `npx tsc --noEmit` clean on `apps/web`.
+
+**NOT deployed.**
+
+---
+
+### Issue 2 — "#6 'No Business'/'No shift' with $1 sales" — investigated as a possibly-different bug, per instruction
+
+**Three independent things on that screenshot, confirmed by reading the actual logic, not guessed:**
+- **"No Business"** comes from the `DailySales.status` enum field (`NO_BUSINESS | CLOSED_WON | LOST | FOLLOW_UP`) — an explicit, freely-settable value.
+- **"No shift"** comes from the separate, optional `DailySales.shift` field (`BREAKFAST | LUNCH | DINNER | LATE_NIGHT | OTHER | null`) being `null` — purely "nobody filled this optional field in," with zero connection to `status` or to sales figures.
+- **"No tenders recorded"** comes from an empty `tenders` array on the record — also independent.
+
+**"No shift" is correct as-is for that record — not a bug.** It's just an optional field that was left blank; there's no rule anywhere (client-stated or in the code) that a shift is required or auto-derived from sales. Nothing to fix here — safe to tell the client this one's working as intended.
+
+**"No Business" with $1 sales, however, is the same underlying defect as the original #6, not a new one — investigated live to make sure.** Found a **live** cafe-71 record (`cms1qzpri001vzxk7z7v0rgk1`, `grossSales`/`netSales` both `$0.01`, created 42 minutes *after* the Phase-2 API deploy, so confirmed NOT stale pre-fix data) still saved with `status: "NO_BUSINESS"`. Directly tested the backend with `POST /daily-sales`, status omitted, real sales — confirmed `deriveDefaultDailySalesStatus()` itself still works correctly (returned `CLOSED_WON`). That isolated the gap: the original #6 fix only replaced the *default* when `status` was omitted from the request; it explicitly documented "an explicit status always wins" as the design. Checked the two client-facing forms: the **create** page (`daily-sales/new/page.tsx`) already auto-follows sales figures into `status` unless the user manually touches the pill (from the original #6 fix) — but the **edit** page (`daily-sales/[id]/page.tsx`) had no equivalent logic at all, and always sends `status` explicitly in its PATCH payload. So: create a day with $0 sales (correctly defaults to `NO_BUSINESS`) → later edit it to add real sales without touching the status pill → saved as still `NO_BUSINESS`, exactly reproducing the live record found. The client's original bug statement was unconditional ("non-zero sales can never be No Business"), not "unless a status was explicitly set," so this is upgraded from a soft default to a hard invariant.
+
+**Fix:** added `assertStatusConsistentWithSales(status, grossSales, netSales)` to `daily-sales.service.ts`, throwing `BadRequestException` if `NO_BUSINESS` would be persisted alongside non-zero gross or net sales. Enforced at **all four** write paths, not just the one that broke: normal `create()`, `mode=replace`, `mode=add` (validated against the **merged** totals, so a zero-delta merge onto an already-nonzero record can't sneak through), and `update()` (which now also selects `grossSales`/`netSales`/`status` on the existing record so the *effective* post-patch values — whichever fields the PATCH actually touches — get validated, not just whatever the request happens to include). Also gave the edit page the same sales-figures-drive-status auto-follow behavior the create page already had (`statusTouched` pattern), so a user editing sales in the normal course of business doesn't hit the new backend rejection at all — the status pill just correctly follows along, same as on create. As a side effect, opening the edit page for an existing inconsistent record now visibly self-corrects the status field in the form (though it isn't persisted until saved).
+
+**Tests:** 7 new tests in `daily-sales.service.spec.ts` — explicit `NO_BUSINESS` + non-zero grossSales rejected; explicit `NO_BUSINESS` + non-zero netSales rejected (the exact live repro, $0.01/$0.01); explicit `NO_BUSINESS` with genuinely zero sales still allowed; `mode=replace` rejected before the delete/create transaction runs; `mode=add` validated against the merged total, not just the incoming delta; `update()` rejects setting `NO_BUSINESS` on a record that already has real sales; `update()` rejects adding real sales onto a `NO_BUSINESS` record without also changing status; consistent combined update allowed. 24/24 total passing.
+
+**Files changed:** `apps/api/src/daily-sales/{daily-sales.service.ts, daily-sales.service.spec.ts}`, `apps/web/src/app/[workspace]/daily-sales/[id]/page.tsx`
+**Commit:** `240277e`
+**Verification:** `npx vitest run apps/api/src/daily-sales/daily-sales.service.spec.ts` 24/24 passing. `npx tsc --noEmit` clean on `apps/api` and `apps/web`.
+
+**Not yet decided:** the live record `cms1qzpri001vzxk7z7v0rgk1` on cafe-71 still has `status: NO_BUSINESS` with real sales — the code fix prevents new occurrences and self-corrects the moment someone opens it in the edit form, but the bad value itself hasn't been touched in the database. Flagging for Roshan rather than unilaterally editing live tenant data.
+
+**NOT deployed.**
+
+---
