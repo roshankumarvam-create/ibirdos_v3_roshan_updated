@@ -214,6 +214,49 @@ export function lineCostMicrocents(
   return canonicalQty * pricePerCanonicalMicrocents;
 }
 
+// ---------------------------------------------------------------------
+// Invoice-line price -> cents per canonical unit
+// ---------------------------------------------------------------------
+// THE conversion from "what an invoice line says it cost" to "cost per
+// canonical unit" -- used both to update an ingredient's currentCost-
+// Microcents on invoice confirm, and to estimate what it would cost to
+// buy more of a short ingredient. Previously duplicated inline in
+// invoices.service.ts's confirm() (which fed currentCostMicrocents)
+// while the event-shortage cost estimate used currentCostMicrocents
+// directly instead of ever looking at this conversion -- two different
+// price sources for what should be the same question ("what does this
+// cost per lb/g/each"), which is why a shortage estimate could show a
+// wildly different number than the invoice-derived "Last price" column
+// right next to it. Handles pack/case lines (e.g. "1 case of 24 x 1 lb"
+// -> packSize=24, packUnit="lb") the same way invoice confirm always has.
+
+export interface InvoiceLinePriceInput {
+  extendedPriceCents: number;
+  quantity: number;
+  unit: string;
+  packSize?: number | null;
+  packUnit?: string | null;
+}
+
+export function pricePerCanonicalCentsFromLine(
+  line: InvoiceLinePriceInput,
+  ctx: IngredientUnitContext,
+): number {
+  const totalUnitQty = line.packSize ? line.quantity * line.packSize : line.quantity;
+  const resolvedUnit = line.packSize ? (line.packUnit ?? line.unit) : line.unit;
+
+  let canonicalQty = totalUnitQty;
+  try {
+    canonicalQty = toCanonical(totalUnitQty, resolvedUnit, ctx);
+  } catch {
+    // unknown unit -- fall back to the raw quantity, same as invoice confirm()
+  }
+
+  return canonicalQty > 0
+    ? line.extendedPriceCents / canonicalQty
+    : line.extendedPriceCents / (line.quantity || 1);
+}
+
 /** Format a canonical quantity as the ingredient's preferred display unit. */
 export function formatCanonical(
   canonicalQty: number,

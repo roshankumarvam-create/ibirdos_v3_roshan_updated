@@ -92,6 +92,16 @@ export function ShortageBanner({ eventId, shortages, alreadyAcknowledged, canSee
             </tr>
           ))}
         </tbody>
+        {canSeeFinancials && (
+          <tfoot>
+            <tr className="border-t border-danger/20 font-medium">
+              <td className="py-1.5 text-text-primary" colSpan={4}>Total est. cost to reorder</td>
+              <td className="py-1.5 text-right tabular-nums text-danger">
+                {formatCents(shortages.reduce((sum, s) => sum + (s.estCostCents ?? 0), 0))}
+              </td>
+            </tr>
+          </tfoot>
+        )}
       </table>
     </div>
   );

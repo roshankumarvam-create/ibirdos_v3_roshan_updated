@@ -123,12 +123,21 @@ interface EventDetail {
 interface IngredientRequirement {
   ingredientId: string;
   ingredientName: string;
+  canonicalUnit: string;
   displayUnit: string;
+  requiredCanonical: number;
   requiredDisplay: number;
+  currentStockCanonical: number;
   currentStockDisplay: number;
+  gap: number;
   gapDisplay: number;
   isShort: boolean;
+  // Omitted from the API response entirely (not sent as null) for roles
+  // without financial visibility -- see canViewFinancials() in
+  // events.service.ts's ingredientRequirements().
   lastUnitPriceCents: number | null;
+  vendorId?: string | null;
+  estCostCents?: number | null;
 }
 
 const STATUS_TONE: Record<string, "neutral" | "info" | "success" | "warning" | "danger"> = {
@@ -158,7 +167,25 @@ export default async function EventDetailPage({
   const outstandingShortages = outstandingRes.data ?? [];
 
   const isPaid = event.paymentStatus === "PAID";
-  const shortages = (event.inventoryShortages ?? []) as Shortage[];
+  // P0-3 fix: previously read event.inventoryShortages, a snapshot frozen
+  // once at markAsPaid() time and never refreshed -- it could disagree
+  // with the ingredient-requirements table below (which is always live)
+  // any time stock moved after payment. Both now derive from the exact
+  // same `requirements` fetch, so they can't disagree again.
+  const shortages: Shortage[] = requirements
+    .filter((r) => r.isShort)
+    .map((r) => ({
+      ingredientId: r.ingredientId,
+      name: r.ingredientName,
+      neededCanonical: r.requiredCanonical,
+      haveCanonical: r.currentStockCanonical,
+      shortCanonical: r.gap,
+      canonicalUnit: r.canonicalUnit,
+      preferredDisplayUnit: r.displayUnit,
+      vendorId: r.vendorId ?? null,
+      lastUnitPriceCents: r.lastUnitPriceCents,
+      estCostCents: r.estCostCents ?? null,
+    }));
   const shortagesActive = shortages.length > 0 && !event.shortageAcknowledged;
   // Staff-assignment labor when assignments exist; fall back to the simple estimate field
   // (laborTotalCents is set at event creation via laborHoursEstimate × laborRateCentsPerHour,
@@ -267,10 +294,13 @@ export default async function EventDetailPage({
         </div>
       </div>
 
-      {/* Shortage banner — shown when PAID and shortages exist. Pre-emptive
-          check computed once at markAsPaid() time (Event.inventoryShortages) --
-          drives the "Acknowledge, proceed anyway" soft gate. Not touched by
-          the outstanding-shortage work below. */}
+      {/* Shortage banner — shown when PAID and shortages exist. Live as of
+          this page load (derived from the same `requirements` fetch as the
+          ingredient-requirements table below, see the `shortages` derivation
+          above) -- drives the "Acknowledge, proceed anyway" soft gate. P0-3
+          fix: this used to read Event.inventoryShortages, a snapshot frozen
+          once at markAsPaid() time, which could disagree with the table.
+          Not touched by the outstanding-shortage work below. */}
       {isPaid && shortages.length > 0 && (
         <ShortageBanner
           eventId={event.id}
@@ -420,6 +450,7 @@ export default async function EventDetailPage({
                     <th className="text-right px-5 py-2 font-medium">Have</th>
                     <th className="text-right px-5 py-2 font-medium">Gap</th>
                     {canSeeFinancials && <th className="text-right px-5 py-2 font-medium">Last price</th>}
+                    {canSeeFinancials && <th className="text-right px-5 py-2 font-medium">Est. cost to reorder</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-bg-border">
@@ -449,9 +480,25 @@ export default async function EventDetailPage({
                           {req.lastUnitPriceCents ? formatCents(req.lastUnitPriceCents) : "—"}
                         </td>
                       )}
+                      {canSeeFinancials && (
+                        <td className="px-5 py-2 text-right tabular-nums text-xs">
+                          {req.isShort && req.estCostCents != null ? formatCents(req.estCostCents) : "—"}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
+                {canSeeFinancials && shortItems.length > 0 && (
+                  <tfoot>
+                    <tr className="border-t border-bg-border font-medium">
+                      <td className="px-5 py-2 text-text-primary" colSpan={4}>Total est. cost to reorder</td>
+                      <td className="px-5 py-2 text-right tabular-nums" />
+                      <td className="px-5 py-2 text-right tabular-nums">
+                        {formatCents(shortItems.reduce((sum, r) => sum + (r.estCostCents ?? 0), 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             )}
           </Card>

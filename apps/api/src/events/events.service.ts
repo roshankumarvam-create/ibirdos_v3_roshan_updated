@@ -8,7 +8,7 @@ import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
 import {
   toCanonical, formatCanonical, formatWorkspaceDate, formatInWorkspaceTz,
-  computeEventProfit,
+  computeEventProfit, pricePerCanonicalCentsFromLine,
 } from "@ibirdos/types";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
@@ -687,91 +687,28 @@ export class EventsService {
     );
 
     // --- Inventory availability check ---
-    const ingAgg = new Map<string, {
-      ingredientId: string; name: string;
-      canonicalUnit: string; dimension: string; preferredDisplayUnit: string | null;
-      neededCanonical: number; currentStockCanonical: number;
-      currentCostMicrocents: number;
-      vendorId: string | null;
-    }>();
-
-    for (const ri of allRecipeIngredients) {
-      const ing = ri.ingredient;
-      const mi = event.menuItems.find((m: any) => m.recipeId === ri.recipeId);
-      if (!mi) continue;
-      const effectivePortions = mi.portions * (mi.perItemMultiplier ? Number(mi.perItemMultiplier) : eventMultiplier);
-      const scale = effectivePortions / (mi.recipe.portionsYielded ?? 1);
-
-      try {
-        const baseCanonical = toCanonical(Number(ri.quantity), ri.unit, {
-          dimension: ing.dimension,
-          densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
-        });
-        const yieldPct = Number((ri as any).yieldPctOverride ?? ing.defaultYieldPct ?? 100);
-        const needed = baseCanonical * scale * (100 / Math.max(yieldPct, 1));
-
-        const existing = ingAgg.get(ing.id);
-        if (existing) {
-          existing.neededCanonical += needed;
-        } else {
-          ingAgg.set(ing.id, {
-            ingredientId: ing.id, name: ing.name,
-            canonicalUnit: ing.canonicalUnit, dimension: ing.dimension,
-            preferredDisplayUnit: ing.preferredDisplayUnit,
-            neededCanonical: needed,
-            currentStockCanonical: Number(ing.currentStockCanonical),
-            currentCostMicrocents: ing.currentCostMicrocents != null ? Number(ing.currentCostMicrocents) : 0,
-            vendorId: ing.currentVendorId ?? null,
-          });
-        }
-      } catch {
-        // skip
-      }
-    }
-
-    // Fetch last unit price per ingredient
-    const ingIdList = Array.from(ingAgg.keys());
-    const lastPrices = await prisma.invoiceLine.findMany({
-      where: {
-        workspaceId: ctx.workspaceId,
-        committedIngredientId: { in: ingIdList },
-        excluded: false,
-        category: "FOOD_INGREDIENT",
-      },
-      orderBy: { createdAt: "desc" },
-      distinct: ["committedIngredientId"],
-      select: { committedIngredientId: true, unitPriceCents: true, invoice: { select: { vendorId: true } } },
-    });
-    const priceByIng = new Map(lastPrices.map((l) => [l.committedIngredientId!, l]));
-
-    const shortages: any[] = [];
-    for (const entry of ingAgg.values()) {
-      const gap = entry.neededCanonical - entry.currentStockCanonical;
-      if (gap <= 0) continue;
-      const lastLine = priceByIng.get(entry.ingredientId);
-      // P1-A fix: this codebase's convention is 1 cent = 1000 microcents
-      // (see ingredients.service.ts updatePrice(), insights-generator.worker.ts),
-      // not 1,000,000 -- dividing by 1,000,000 made every shortage cost
-      // ~1000x too small (9 cases x $43.78 showed as $0.39 instead of
-      // $394.02) and destroyed sub-cent precision before rounding, since
-      // the true value was scaled down by an extra factor of 1000 before
-      // Math.round() ever saw it.
-      const estCostCents = entry.currentCostMicrocents > 0
-        ? Math.round((gap * entry.currentCostMicrocents) / 1_000)
-        : null;
-      shortages.push({
-        ingredientId: entry.ingredientId,
-        name: entry.name,
-        neededCanonical: +entry.neededCanonical.toFixed(4),
-        haveCanonical: +entry.currentStockCanonical.toFixed(4),
-        shortCanonical: +gap.toFixed(4),
-        canonicalUnit: entry.canonicalUnit,
-        preferredDisplayUnit: entry.preferredDisplayUnit,
-        vendorId: lastLine?.invoice?.vendorId ?? entry.vendorId ?? null,
-        lastUnitPriceCents: lastLine?.unitPriceCents ?? null,
-        estCostCents,
-      });
-    }
+    // P0-3/P0-4: reuses computeIngredientRequirements() -- the exact same
+    // live computation the ingredient-requirements table and (as of this
+    // fix) the shortage banner both read from. This snapshot into
+    // Event.inventoryShortages below is now purely a point-in-time audit
+    // record of "what was short when payment was taken" -- the UI no
+    // longer treats it as the source of truth for "what's short now",
+    // so it can never again silently disagree with the live table.
+    const requirementRows = await this.computeIngredientRequirements(ctx, eventId);
+    const shortages = requirementRows
+      .filter((r) => r.isShort)
+      .map((r) => ({
+        ingredientId: r.ingredientId,
+        name: r.ingredientName,
+        neededCanonical: +r.requiredCanonical.toFixed(4),
+        haveCanonical: +r.currentStockCanonical.toFixed(4),
+        shortCanonical: r.gap,
+        canonicalUnit: r.canonicalUnit,
+        preferredDisplayUnit: r.preferredDisplayUnit,
+        vendorId: r.vendorId,
+        lastUnitPriceCents: r.lastUnitPriceCents,
+        estCostCents: r.estCostCents,
+      }));
 
     // Freeze revenue alongside cost, first payment only. Fill-only-if-null: never
     // overwrite an explicit quotedTotalOverrideCents or a previously-set
@@ -1094,12 +1031,35 @@ export class EventsService {
   }
 
   /**
-   * Ingredient shortage/requirements for an event -- gated only by event.read
-   * (CHEF/STAFF legitimately hold it, for kitchen prep visibility), but the
-   * last-purchase price and vendor are financial data and must be stripped
-   * for those roles. Quantities/gaps stay visible either way.
+   * P0-3/P0-4: THE single computation of "what does this event need vs.
+   * what's in stock, and what would a shortfall cost to fix" -- live,
+   * computed fresh on every call. Previously this exact aggregation
+   * (toCanonical + yield% + gap) was duplicated between this method and
+   * markAsPaid()'s shortage snapshot, with markAsPaid()'s copy run once
+   * at payment time and never refreshed. That's why the shortage banner
+   * (fed by the frozen snapshot) and the requirements table (fed by this
+   * method) could show different counts for the same event -- one was
+   * live, one was stale. Both now read from this one method; markAsPaid()
+   * calls it too, so there is exactly one place this math is written.
+   *
+   * estCostCents prefers the ingredient's last actual invoice price
+   * (what it would really cost to buy more right now, converted to
+   * cents-per-canonical-unit via pricePerCanonicalCentsFromLine -- the
+   * same conversion invoice confirm() uses to set currentCostMicrocents),
+   * falling back to the ingredient's catalog currentCostMicrocents only
+   * when there's no purchase history yet. Using the catalog cost as the
+   * ONLY source (the old markAsPaid() behavior) meant a shortage estimate
+   * could go stale or near-zero for an ingredient whose catalog cost was
+   * never refreshed, even with a recent, accurate invoice price sitting
+   * right there.
    */
-  async ingredientRequirements(ctx: TenantContext, eventId: string): Promise<any[]> {
+  private async computeIngredientRequirements(ctx: TenantContext, eventId: string): Promise<Array<{
+    ingredientId: string; ingredientName: string;
+    canonicalUnit: string; dimension: string; preferredDisplayUnit: string | null;
+    requiredCanonical: number; currentStockCanonical: number; gap: number; isShort: boolean;
+    lastUnitPriceCents: number | null; vendorId: string | null; vendorSku: string | null;
+    estCostCents: number | null;
+  }>> {
     const event = await prisma.event.findFirst({
       where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
       include: {
@@ -1132,8 +1092,11 @@ export class EventsService {
     const agg = new Map<string, {
       ingredientId: string; ingredientName: string;
       canonicalUnit: string; dimension: string; preferredDisplayUnit: string | null;
+      densityGPerMl: number | null;
       requiredCanonical: number;
       currentStockCanonical: number;
+      currentCostMicrocents: number;
+      vendorId: string | null;
     }>();
 
     for (const mi of event.menuItems) {
@@ -1159,8 +1122,11 @@ export class EventsService {
               ingredientId: ing.id, ingredientName: ing.name,
               canonicalUnit: ing.canonicalUnit, dimension: ing.dimension,
               preferredDisplayUnit: ing.preferredDisplayUnit,
+              densityGPerMl: ing.densityGPerMl != null ? Number(ing.densityGPerMl) : null,
               requiredCanonical: needed,
               currentStockCanonical: Number(ing.currentStockCanonical),
+              currentCostMicrocents: ing.currentCostMicrocents != null ? Number(ing.currentCostMicrocents) : 0,
+              vendorId: ing.currentVendorId ?? null,
             });
           }
         } catch {
@@ -1192,11 +1158,67 @@ export class EventsService {
       },
     });
     const lineByIngredient = new Map(lastInvoiceLines.map((l) => [l.committedIngredientId!, l]));
-    const canSeeCost = canViewFinancials(ctx.role);
 
     return Array.from(agg.values()).map((entry) => {
       const gap = entry.requiredCanonical - entry.currentStockCanonical;
+      const isShort = gap > 0;
       const lastLine = lineByIngredient.get(entry.ingredientId);
+
+      let estCostCents: number | null = null;
+      if (isShort) {
+        let pricePerCanonicalCents: number | null = null;
+        if (lastLine) {
+          // quantity/packSize are Prisma Decimal columns -- convert to plain
+          // numbers before the arithmetic (same conversion invoice confirm()
+          // does for this exact math, see invoices.service.ts).
+          pricePerCanonicalCents = pricePerCanonicalCentsFromLine(
+            {
+              extendedPriceCents: lastLine.extendedPriceCents,
+              quantity: Number(lastLine.quantity),
+              unit: lastLine.unit,
+              packSize: lastLine.packSize != null ? Number(lastLine.packSize) : null,
+              packUnit: lastLine.packUnit,
+            },
+            { dimension: entry.dimension as any, densityGPerMl: entry.densityGPerMl },
+          );
+        }
+        if (pricePerCanonicalCents == null && entry.currentCostMicrocents > 0) {
+          // Fallback: no purchase history for this ingredient yet -- use the
+          // catalog cost. 1 cent = 1000 microcents (P1-A fix convention).
+          pricePerCanonicalCents = entry.currentCostMicrocents / 1_000;
+        }
+        estCostCents = pricePerCanonicalCents != null ? Math.round(gap * pricePerCanonicalCents) : null;
+      }
+
+      return {
+        ingredientId: entry.ingredientId,
+        ingredientName: entry.ingredientName,
+        canonicalUnit: entry.canonicalUnit,
+        dimension: entry.dimension,
+        preferredDisplayUnit: entry.preferredDisplayUnit,
+        requiredCanonical: entry.requiredCanonical,
+        currentStockCanonical: entry.currentStockCanonical,
+        gap: +gap.toFixed(4),
+        isShort,
+        lastUnitPriceCents: lastLine?.unitPriceCents ?? null,
+        vendorId: lastLine?.invoice?.vendorId ?? entry.vendorId ?? null,
+        vendorSku: lastLine?.descriptionRaw ?? null,
+        estCostCents,
+      };
+    }).sort((a, b) => (b.isShort ? 1 : 0) - (a.isShort ? 1 : 0));
+  }
+
+  /**
+   * Ingredient shortage/requirements for an event -- gated only by event.read
+   * (CHEF/STAFF legitimately hold it, for kitchen prep visibility), but the
+   * last-purchase price, vendor, and cost estimate are financial data and
+   * must be stripped for those roles. Quantities/gaps stay visible either way.
+   */
+  async ingredientRequirements(ctx: TenantContext, eventId: string): Promise<any[]> {
+    const rows = await this.computeIngredientRequirements(ctx, eventId);
+    const canSeeCost = canViewFinancials(ctx.role);
+
+    return rows.map((entry) => {
       const displayUnit = entry.preferredDisplayUnit ?? entry.canonicalUnit;
       const displayFactor = (() => {
         try { return toCanonical(1, displayUnit, { dimension: entry.dimension as any }); } catch { return 1; }
@@ -1211,14 +1233,15 @@ export class EventsService {
         requiredDisplay: +(entry.requiredCanonical / displayFactor).toFixed(2),
         currentStockCanonical: entry.currentStockCanonical,
         currentStockDisplay: +(entry.currentStockCanonical / displayFactor).toFixed(2),
-        gap: +gap.toFixed(4),
-        gapDisplay: +(gap / displayFactor).toFixed(2),
-        isShort: gap > 0,
-        lastUnitPriceCents: canSeeCost ? (lastLine?.unitPriceCents ?? null) : null,
-        vendorId: canSeeCost ? (lastLine?.invoice?.vendorId ?? null) : null,
-        vendorSku: canSeeCost ? (lastLine?.descriptionRaw ?? null) : null,
+        gap: entry.gap,
+        gapDisplay: +(entry.gap / displayFactor).toFixed(2),
+        isShort: entry.isShort,
+        lastUnitPriceCents: canSeeCost ? entry.lastUnitPriceCents : null,
+        vendorId: canSeeCost ? entry.vendorId : null,
+        vendorSku: canSeeCost ? entry.vendorSku : null,
+        estCostCents: canSeeCost ? entry.estCostCents : null,
       };
-    }).sort((a, b) => (b.isShort ? 1 : 0) - (a.isShort ? 1 : 0));
+    });
   }
 
   // -----------------------------------------------------------------

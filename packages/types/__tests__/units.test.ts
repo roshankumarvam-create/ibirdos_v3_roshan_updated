@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   toCanonical, lineCostMicrocents, formatCanonical,
   normalizeUnit, UnitConversionError, UNITS,
+  pricePerCanonicalCentsFromLine,
 } from "../src/units";
 
 describe("toCanonical — mass (canonical g)", () => {
@@ -77,4 +78,56 @@ describe("UNITS registry completeness", () => {
   it("mass units", () => { for (const u of ["g","kg","mg","oz","lb"]) expect(UNITS[u]).toBeDefined(); });
   it("volume units", () => { for (const u of ["ml","l","tsp","tbsp","cup","pint","qt","gal","floz"]) expect(UNITS[u]).toBeDefined(); });
   it("count units", () => { for (const u of ["each","dozen","pack","case","box"]) expect(UNITS[u]).toBeDefined(); });
+});
+
+describe("pricePerCanonicalCentsFromLine — P0-4: same price-conversion path invoice confirm() uses, now reused for shortage-cost estimates", () => {
+  it("lb line, canonical unit g: $7.26 for 1 lb -> cents/g", () => {
+    // Arugula's own reported case: 1 lb invoice line @ $7.26, canonical unit g.
+    const centsPerG = pricePerCanonicalCentsFromLine(
+      { extendedPriceCents: 726, quantity: 1, unit: "lb" },
+      { dimension: "MASS" },
+    );
+    expect(centsPerG).toBeCloseTo(726 / 453.592, 4);
+    // Reproduces the client's exact expectation: 2 lb short x $7.26/lb = $14.52
+    const gapGrams = 2 * 453.592;
+    expect(Math.round(gapGrams * centsPerG)).toBe(1452);
+  });
+
+  it("each line, canonical unit each: no conversion needed", () => {
+    const centsPerEach = pricePerCanonicalCentsFromLine(
+      { extendedPriceCents: 500, quantity: 15, unit: "each" },
+      { dimension: "COUNT" },
+    );
+    expect(centsPerEach).toBeCloseTo(500 / 15, 4);
+  });
+
+  it("case line (packSize/packUnit): $150 for 1 case of 30 lb -> cents/g, matches Tofu's reported 15 lb x $5.00 = $75.00", () => {
+    // 1 case, 30 lb per case, $150 total -> $5.00/lb -- exactly the client's Tofu figure.
+    const centsPerG = pricePerCanonicalCentsFromLine(
+      { extendedPriceCents: 15000, quantity: 1, unit: "case", packSize: 30, packUnit: "lb" },
+      { dimension: "MASS" },
+    );
+    expect(centsPerG).toBeCloseTo(500 / 453.592, 4); // $5.00/lb expressed as cents/g
+    const gapGrams = 15 * 453.592;
+    expect(Math.round(gapGrams * centsPerG)).toBe(7500); // $75.00
+  });
+
+  it("microcent-scale precision: a fractional-cent-per-gram spice price doesn't collapse to 0 or lose precision from rounding mid-calculation", () => {
+    // $0.002/g (a cheap bulk spice) x a large gap should still resolve to a
+    // sane cent value, not round to zero the way the old P1-A divisor bug did.
+    const centsPerG = pricePerCanonicalCentsFromLine(
+      { extendedPriceCents: 200, quantity: 100000, unit: "g" },
+      { dimension: "MASS" },
+    );
+    expect(centsPerG).toBeCloseTo(0.002, 6);
+    expect(Math.round(5000 * centsPerG)).toBe(10); // 5000 g short x $0.002/g = $0.10
+  });
+
+  it("unknown unit falls back to raw quantity instead of throwing (matches invoice confirm() behavior)", () => {
+    const centsPerUnit = pricePerCanonicalCentsFromLine(
+      { extendedPriceCents: 1000, quantity: 4, unit: "blorgs" },
+      { dimension: "MASS" },
+    );
+    expect(centsPerUnit).toBe(250); // 1000 / 4, no conversion applied
+  });
 });

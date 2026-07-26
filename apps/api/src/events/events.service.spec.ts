@@ -7,6 +7,7 @@ vi.mock("@ibirdos/logger", () => ({
 const mockEventFindFirst = vi.fn();
 const mockEventFindMany = vi.fn();
 const mockEventUpdate = vi.fn();
+const mockInvoiceLineFindMany = vi.fn();
 const mockWriteAudit = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@ibirdos/db", () => ({
@@ -15,6 +16,9 @@ vi.mock("@ibirdos/db", () => ({
       findFirst: (...args: any[]) => mockEventFindFirst(...args),
       findMany: (...args: any[]) => mockEventFindMany(...args),
       update: (...args: any[]) => mockEventUpdate(...args),
+    },
+    invoiceLine: {
+      findMany: (...args: any[]) => mockInvoiceLineFindMany(...args),
     },
   },
   Prisma: { Decimal: class Decimal { constructor(v: any) { Object.assign(this, { v }); } } },
@@ -197,5 +201,116 @@ describe("computeLiveQuoteTotalCents — BUG 3: labor IS billed, must be include
   it("treats null/undefined labor as 0", () => {
     expect(computeLiveQuoteTotalCents(simpleMenu, 0, null)).toBe(378_900);
     expect(computeLiveQuoteTotalCents(simpleMenu, 0, undefined)).toBe(378_900);
+  });
+});
+
+describe("EventsService.ingredientRequirements — P0-3/P0-4: multi-shortage + unified cost source", () => {
+  let svc: EventsService;
+
+  // One recipe, three short ingredients, each with a real invoice line --
+  // reproduces the client's exact cafe-71 numbers: Asparagus 4 lb short
+  // @ $8.37/lb = $33.48, Arugula 2 lb short @ $7.26/lb = $14.52, Tofu
+  // 15 lb short (bought by the case, 30 lb/case @ $150/case = $5.00/lb)
+  // = $75.00. Total $123.00.
+  function ingredient(id: string, name: string, shortLb: number) {
+    return {
+      quantity: shortLb, unit: "lb", yieldPctOverride: null,
+      ingredient: {
+        id, name, dimension: "MASS", canonicalUnit: "g", densityGPerMl: null,
+        preferredDisplayUnit: "lb", currentStockCanonical: 0, reorderThresholdCanonical: null,
+        currentCostMicrocents: 0, currentVendorId: null, defaultYieldPct: 100,
+      },
+    };
+  }
+
+  const shortageEvent = {
+    id: "ev1", workspaceId: "ws1", deletedAt: null, portionMultiplier: 1,
+    menuItems: [
+      {
+        portions: 1, perItemMultiplier: null,
+        recipe: {
+          portionsYielded: 1,
+          ingredients: [
+            ingredient("asparagus", "Asparagus", 4),
+            ingredient("arugula", "Arugula", 2),
+            ingredient("tofu", "Tofu", 15),
+          ],
+        },
+      },
+    ],
+  };
+
+  const shortageInvoiceLines = [
+    { committedIngredientId: "asparagus", unitPriceCents: 837, extendedPriceCents: 837, quantity: 1, unit: "lb", packSize: null, packUnit: null, descriptionRaw: "ASP-4", invoice: { vendorId: "v1" } },
+    { committedIngredientId: "arugula", unitPriceCents: 726, extendedPriceCents: 726, quantity: 1, unit: "lb", packSize: null, packUnit: null, descriptionRaw: "ARU-2", invoice: { vendorId: "v1" } },
+    // Bought by the case: 1 case = 30 lb for $150 -> $5.00/lb, same
+    // pack/case conversion invoice confirm() already used to set
+    // currentCostMicrocents -- now reused for the shortage estimate too.
+    { committedIngredientId: "tofu", unitPriceCents: 15000, extendedPriceCents: 15000, quantity: 1, unit: "case", packSize: 30, packUnit: "lb", descriptionRaw: "TOFU-CASE", invoice: { vendorId: "v1" } },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
+    mockEventFindFirst.mockResolvedValue(shortageEvent);
+    mockInvoiceLineFindMany.mockResolvedValue(shortageInvoiceLines);
+  });
+
+  it("returns ALL shortages, not just one -- this is the exact banner-vs-table count mismatch reported (banner said 1, table said 3)", async () => {
+    const result = await svc.ingredientRequirements(ctx, "ev1");
+    const shortItems = result.filter((r) => r.isShort);
+    expect(shortItems).toHaveLength(3);
+    expect(shortItems.map((r) => r.ingredientName).sort()).toEqual(["Arugula", "Asparagus", "Tofu"]);
+  });
+
+  it("prices each shortage from the last invoice line (not the ingredient's possibly-stale catalog cost), reproducing the client's exact per-line and total figures", async () => {
+    const result = await svc.ingredientRequirements(ctx, "ev1");
+    const byName = Object.fromEntries(result.map((r) => [r.ingredientName, r]));
+
+    expect(byName["Asparagus"].estCostCents).toBe(3348); // $33.48
+    expect(byName["Arugula"].estCostCents).toBe(1452); // $14.52
+    expect(byName["Tofu"].estCostCents).toBe(7500); // $75.00 (case/pack conversion)
+
+    const total = result.filter((r) => r.isShort).reduce((sum, r) => sum + (r.estCostCents ?? 0), 0);
+    expect(total).toBe(12_300); // $123.00
+  });
+
+  it("falls back to the ingredient's catalog currentCostMicrocents when there's no invoice history", async () => {
+    mockInvoiceLineFindMany.mockResolvedValue([]); // no purchase history at all
+    const eventWithCatalogCost = {
+      ...shortageEvent,
+      menuItems: [{
+        portions: 1, perItemMultiplier: null,
+        recipe: {
+          portionsYielded: 1,
+          ingredients: [{
+            quantity: 2, unit: "lb", yieldPctOverride: null,
+            ingredient: {
+              id: "salt", name: "Salt", dimension: "MASS", canonicalUnit: "g", densityGPerMl: null,
+              preferredDisplayUnit: "lb", currentStockCanonical: 0, reorderThresholdCanonical: null,
+              currentCostMicrocents: 220.5, currentVendorId: null, defaultYieldPct: 100, // 0.2205 cents/g = $1.00/lb
+            },
+          }],
+        },
+      }],
+    };
+    mockEventFindFirst.mockResolvedValue(eventWithCatalogCost);
+
+    const result = await svc.ingredientRequirements(ctx, "ev1");
+    const salt = result.find((r) => r.ingredientName === "Salt")!;
+    expect(salt.isShort).toBe(true);
+    expect(salt.estCostCents).toBeCloseTo(200, 0); // 2 lb short @ ~$1.00/lb
+  });
+
+  it("financial fields (including estCostCents) are stripped for CHEF/STAFF, quantities stay visible", async () => {
+    const chefCtx = { workspaceId: "ws1", userId: "u2", role: "CHEF" as const };
+    const result = await svc.ingredientRequirements(chefCtx, "ev1");
+    const shortItems = result.filter((r) => r.isShort);
+    expect(shortItems).toHaveLength(3); // count still visible -- this is the P0-3 fix, not a redaction bug
+    for (const r of shortItems) {
+      expect(r.estCostCents).toBeNull();
+      expect(r.lastUnitPriceCents).toBeNull();
+      expect(r.vendorId).toBeNull();
+    }
   });
 });
