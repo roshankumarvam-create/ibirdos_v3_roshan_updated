@@ -91,6 +91,13 @@ interface EventDetail {
   notes: string | null;
   frozenAt: string | null;
   paymentStatus: string;
+  // inventoryCheckedAt is still used below (displayed as "when did this
+  // happen" on the Kitchen tasks generated card). inventoryShortages is
+  // NOT -- it's a write-only, deprecated-for-display audit snapshot from
+  // markAsPaid(); the `shortages` array actually rendered on this page is
+  // derived from the live `requirements` fetch instead, see below. Do not
+  // read this field again expecting a live value -- see the
+  // Event.inventoryShortages doc comment in schema.prisma.
   inventoryCheckedAt: string | null;
   inventoryShortages: Shortage[] | null;
   shortageAcknowledged: boolean;

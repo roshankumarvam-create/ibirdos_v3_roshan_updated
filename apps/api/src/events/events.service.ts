@@ -745,6 +745,15 @@ export class EventsService {
           frozenIngredientPricesCents: ingredientSnap,
         }),
         ...(needsRevenueFreeze && liveQuoteTotalCents > 0 ? { quotedPriceCents: liveQuoteTotalCents } : {}),
+        // inventoryShortages is DEPRECATED for display -- write-only from
+        // here on. Nothing reads it for display anymore (ShortageBanner and
+        // the requirements table both compute live via
+        // computeIngredientRequirements() as of the P0-3 fix). Kept as a
+        // point-in-time "what was short when payment was taken" audit
+        // record only -- do NOT wire a new read path to it expecting a live
+        // value; see the schema.prisma doc comment for the full
+        // explanation. inventoryCheckedAt is NOT deprecated -- it's still
+        // legitimately displayed as a "when did this happen" timestamp.
         inventoryCheckedAt: new Date(),
         inventoryShortages: shortages as any,
       } as any,

@@ -533,9 +533,24 @@ model Event {
   markupPct              Decimal                @default(0) @map("markup_pct") @db.Decimal(5, 2)
   /// Manual override for the total quote (replaces computed total when set)
   quotedTotalOverrideCents Int?                 @map("quoted_total_override_cents")
-  /// When inventory availability was last checked against this event's requirements
+  /// Timestamp of markAsPaid()'s one-time shortage/task-generation pass
+  /// below -- still legitimately displayed as "when did this happen"
+  /// (e.g. the Kitchen tasks generated card), NOT a live "shortages last
+  /// verified at" claim. See inventoryShortages' comment: the shortage
+  /// data itself is display-deprecated, this timestamp is not.
   inventoryCheckedAt     DateTime?              @map("inventory_checked_at")
+  /// DEPRECATED (display) -- write-only audit snapshot, NOT a live value.
   /// [{ingredientId, name, neededCanonical, haveCanonical, shortCanonical, vendorId, lastUnitPriceCents}]
+  /// as computed once inside EventsService.markAsPaid(), never refreshed
+  /// afterward. Confirmed (see FIX_LOG.md P0-3) this was accidental
+  /// staleness, not an intentional "freeze shortage state at quote time"
+  /// design -- unlike frozenRecipeCostsCents/frozenIngredientPricesCents
+  /// below, nothing here protects a billed dollar amount. No code path
+  /// reads this field for display anymore: the shortage banner and the
+  /// ingredient-requirements table both compute live via
+  /// EventsService.computeIngredientRequirements() instead. Still written
+  /// by markAsPaid() as a point-in-time "what was short when payment was
+  /// taken" audit record -- do not read this for "what's short now."
   inventoryShortages     Json?                  @map("inventory_shortages")
   shortageAcknowledged   Boolean                @default(false) @map("shortage_acknowledged")
   /// BUG 5: unguessable token resolving GET /public/quote/:token to this event only
