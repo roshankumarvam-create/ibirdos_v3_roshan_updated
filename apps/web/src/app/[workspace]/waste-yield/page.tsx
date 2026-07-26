@@ -1,7 +1,8 @@
 import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
-import { Card, CardHeader, CardTitle, CardBody, Badge } from "@ibirdos/ui";
+import { can } from "@ibirdos/permissions";
+import { Card, CardHeader, CardTitle, CardBody, Badge, Button } from "@ibirdos/ui";
 import { formatCents, relativeTime, formatDateTime } from "@/lib/format";
 import { WasteChart } from "@/components/charts/waste-chart";
 
@@ -12,6 +13,13 @@ interface YieldEntry { id: string; rawCanonical: string; yieldCanonical: string;
 export default async function WasteYieldPage() {
   const user = await requireSession();
   const c = await cookies();
+  // #13 fix: no discoverable path to log waste or record a yield existed
+  // anywhere in the app. Waste-logging already worked as a buried option
+  // inside the generic inventory-adjust form (WRITE_OFF -> the same
+  // POST /yield-waste/waste this button links to via ?type=WRITE_OFF);
+  // yield-recording had no UI at all until the new /waste-yield/record page.
+  const canRecordWaste = can(user.role, "waste.create");
+  const canRecordYield = can(user.role, "yield.create");
   const [byReason, recentWaste, recentYield] = await Promise.all([
     api.get<{ items: WasteByReason[] }>("/analytics/waste/by-reason?days=30", { cookies: c }),
     api.get<{ items: WasteEntry[] }>("/yield-waste/waste?limit=20", { cookies: c }),
@@ -24,9 +32,25 @@ export default async function WasteYieldPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold tracking-tight">Waste & yield</h1>
-        <p className="mt-1 text-xs font-mono text-text-secondary">{formatCents(totalWaste)} wasted in last 30 days · default yields auto-adjust from observations</p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Waste & yield</h1>
+          <p className="mt-1 text-xs font-mono text-text-secondary">{formatCents(totalWaste)} wasted in last 30 days · default yields auto-adjust from observations</p>
+        </div>
+        {(canRecordWaste || canRecordYield) && (
+          <div className="flex gap-2 shrink-0">
+            {canRecordWaste && (
+              <a href={`/${user.workspaceSlug}/inventory/adjust?type=WRITE_OFF` as any}>
+                <Button variant="secondary">Log waste</Button>
+              </a>
+            )}
+            {canRecordYield && (
+              <a href={`/${user.workspaceSlug}/waste-yield/record` as any}>
+                <Button>Record yield</Button>
+              </a>
+            )}
+          </div>
+        )}
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

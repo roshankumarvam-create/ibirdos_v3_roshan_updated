@@ -41,6 +41,12 @@ function AdjustForm({ canAdjustInventory, canRecordWaste }: Props) {
   const { workspace } = useParams<{ workspace: string }>();
   const searchParams = useSearchParams();
   const preselectedId = searchParams.get("ingredientId");
+  // #13 fix: lets "Log Waste" links (e.g. from the Waste & Yield page) land
+  // directly on the Write-off type instead of the RECEIVE default -- the
+  // waste-logging capability already existed here (WRITE_OFF -> POST
+  // /yield-waste/waste, same endpoint a dedicated form would use), it just
+  // had no discoverable entry point from where a chef would actually look.
+  const preselectedType = searchParams.get("type") as AdjustmentType | null;
 
   const backUrl = preselectedId
     ? (`/${workspace}/ingredients/${preselectedId}` as any)
@@ -57,7 +63,9 @@ function AdjustForm({ canAdjustInventory, canRecordWaste }: Props) {
 
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [ingredientId, setIngredientId] = useState(preselectedId ?? "");
-  const [type, setType] = useState<AdjustmentType>(availableTypes[0] ?? "RECEIVE");
+  const [type, setType] = useState<AdjustmentType>(
+    preselectedType && availableTypes.includes(preselectedType) ? preselectedType : (availableTypes[0] ?? "RECEIVE"),
+  );
   const [wasteReason, setWasteReason] = useState<WasteReason>("SPOILAGE");
   const [quantity, setQuantity] = useState("");
   const [unit, setUnit] = useState("");
