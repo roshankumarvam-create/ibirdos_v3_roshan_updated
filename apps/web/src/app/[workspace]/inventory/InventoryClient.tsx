@@ -30,6 +30,7 @@ interface Tx {
   costMicrocents: string | null;
   sourceKind: string;
   sourceRef: string | null;
+  sourceLabel?: string;
   createdAt: string;
   ingredient: { id: string; name: string; canonicalUnit: string; preferredDisplayUnit: string | null };
 }
@@ -390,8 +391,12 @@ function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjus
                           {formatCents(totalCostCents)}
                         </td>
                       )}
-                      <td className="px-5 py-3 text-text-tertiary text-xs font-mono">
-                        {tx.sourceRef ?? tx.sourceKind}
+                      {/* #15 fix: friendly label (e.g. "Invoice 120624947",
+                          "Event Test Event", "Manual adjustment") instead of
+                          the raw sourceKind/sourceRef id -- the raw id is
+                          still available on hover for audit purposes. */}
+                      <td className="px-5 py-3 text-text-tertiary text-xs" title={tx.sourceRef ?? undefined}>
+                        {tx.sourceLabel ?? tx.sourceRef ?? tx.sourceKind}
                       </td>
                       <td className="px-5 py-3 text-right">
                         {/* Reverse always goes through inventory.adjust server-side

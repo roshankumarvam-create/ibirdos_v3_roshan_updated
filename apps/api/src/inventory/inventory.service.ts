@@ -152,24 +152,89 @@ export class InventoryService {
     const where: any = { workspaceId: ctx.workspaceId };
     if (opts.ingredientId) where.ingredientId = opts.ingredientId;
     if (opts.kind) where.kind = opts.kind;
-    const items = await prisma.inventoryTransaction.findMany({
+    const rawItems = await prisma.inventoryTransaction.findMany({
       where, take: limit + 1,
       ...(opts.cursor ? { skip: 1, cursor: { id: opts.cursor } } : {}),
       orderBy: { createdAt: "desc" },
       include: { ingredient: { select: { id: true, name: true, canonicalUnit: true, preferredDisplayUnit: true } } },
     });
+    const items = rawItems.length > limit ? rawItems.slice(0, limit) : rawItems;
     const canSeeCost = canViewFinancials(ctx.role);
+    const sourceLabelById = await this.resolveSourceLabels(ctx, items);
+
     return {
-      items: (items.length > limit ? items.slice(0, limit) : items).map((t) => ({
+      items: items.map((t) => ({
         ...t,
         quantityCanonical: Number(t.quantityCanonical),
         balanceAfterCanonical: Number(t.balanceAfterCanonical),
         // Total transaction cost is financial data — CHEF/STAFF hold
         // inventory.read for stock levels only, never dollar amounts.
         costMicrocents: canSeeCost ? (t.costMicrocents?.toString() ?? null) : null,
+        // #15 fix: friendly label for the Source column ("Invoice 120624947",
+        // "Event Test Event", "Manual adjustment") instead of the raw
+        // sourceKind/sourceRef ids. sourceRef itself is left untouched on
+        // the row for anyone who needs the actual id (audit/detail view).
+        sourceLabel: sourceLabelById.get(t.id) ?? t.sourceKind,
       })),
-      nextCursor: items.length > limit ? items[limit - 1]?.id ?? null : null,
+      nextCursor: rawItems.length > limit ? rawItems[limit - 1]?.id ?? null : null,
     };
+  }
+
+  /**
+   * #15 fix: batched friendly-label resolution for the transaction list's
+   * Source column. sourceKind is a plain string ("Invoice"/"Event"/
+   * "KitchenTask"/"Manual"), sourceRef the raw id of that record --
+   * neither was ever resolved to a human-readable name before this,
+   * mirroring the existing pattern in ingredients.service.ts that already
+   * resolves sourceRef -> invoiceNumber for price history.
+   */
+  private async resolveSourceLabels(
+    ctx: TenantContext,
+    items: Array<{ id: string; sourceKind: string; sourceRef: string | null }>,
+  ): Promise<Map<string, string>> {
+    const invoiceIds: string[] = [];
+    const eventIds: string[] = [];
+    const kitchenTaskIds: string[] = [];
+    for (const t of items) {
+      if (!t.sourceRef) continue;
+      if (t.sourceKind === "Invoice") invoiceIds.push(t.sourceRef);
+      else if (t.sourceKind === "Event") eventIds.push(t.sourceRef);
+      else if (t.sourceKind === "KitchenTask") kitchenTaskIds.push(t.sourceRef);
+    }
+
+    const [invoices, events, kitchenTasks] = await Promise.all([
+      invoiceIds.length
+        ? prisma.invoice.findMany({ where: { id: { in: invoiceIds }, workspaceId: ctx.workspaceId }, select: { id: true, invoiceNumber: true } })
+        : Promise.resolve([]),
+      eventIds.length
+        ? prisma.event.findMany({ where: { id: { in: eventIds }, workspaceId: ctx.workspaceId }, select: { id: true, name: true } })
+        : Promise.resolve([]),
+      kitchenTaskIds.length
+        ? prisma.kitchenTask.findMany({ where: { id: { in: kitchenTaskIds }, workspaceId: ctx.workspaceId }, select: { id: true, title: true } })
+        : Promise.resolve([]),
+    ]);
+    const invoiceById = new Map(invoices.map((i) => [i.id, i.invoiceNumber]));
+    const eventById = new Map(events.map((e) => [e.id, e.name]));
+    const taskById = new Map(kitchenTasks.map((k) => [k.id, k.title]));
+
+    const labelById = new Map<string, string>();
+    for (const t of items) {
+      if (t.sourceKind === "Manual" || !t.sourceRef) {
+        labelById.set(t.id, "Manual adjustment");
+      } else if (t.sourceKind === "Invoice") {
+        const num = invoiceById.get(t.sourceRef);
+        labelById.set(t.id, num ? `Invoice ${num}` : "Invoice");
+      } else if (t.sourceKind === "Event") {
+        const name = eventById.get(t.sourceRef);
+        labelById.set(t.id, name ? `Event ${name}` : "Event");
+      } else if (t.sourceKind === "KitchenTask") {
+        const title = taskById.get(t.sourceRef);
+        labelById.set(t.id, title ?? "Kitchen task");
+      } else {
+        labelById.set(t.id, t.sourceKind);
+      }
+    }
+    return labelById;
   }
 
   async listLowStockAlerts(ctx: TenantContext, status: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" = "OPEN"): Promise<any> {

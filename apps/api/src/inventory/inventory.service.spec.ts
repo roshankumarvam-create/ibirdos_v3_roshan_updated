@@ -11,8 +11,12 @@ const mockIngredientFindFirst = vi.fn();
 const mockIngredientCreate = vi.fn();
 const mockIngredientUpdate = vi.fn();
 const mockTransactionCreate = vi.fn();
+const mockTransactionFindMany = vi.fn();
 const mockPrismaTransaction = vi.fn();
 const mockLowStockUpdateMany = vi.fn().mockResolvedValue({});
+const mockInvoiceFindMany = vi.fn();
+const mockEventFindMany = vi.fn();
+const mockKitchenTaskFindMany = vi.fn();
 
 vi.mock("@ibirdos/db", () => ({
   prisma: {
@@ -22,7 +26,13 @@ vi.mock("@ibirdos/db", () => ({
       create: (...a: any[]) => mockIngredientCreate(...a),
       update: (...a: any[]) => mockIngredientUpdate(...a),
     },
-    inventoryTransaction: { create: (...a: any[]) => mockTransactionCreate(...a) },
+    inventoryTransaction: {
+      create: (...a: any[]) => mockTransactionCreate(...a),
+      findMany: (...a: any[]) => mockTransactionFindMany(...a),
+    },
+    invoice: { findMany: (...a: any[]) => mockInvoiceFindMany(...a) },
+    event: { findMany: (...a: any[]) => mockEventFindMany(...a) },
+    kitchenTask: { findMany: (...a: any[]) => mockKitchenTaskFindMany(...a) },
     $transaction: (...a: any[]) => mockPrismaTransaction(...a),
     lowStockAlert: {
       updateMany: (...a: any[]) => mockLowStockUpdateMany(...a),
@@ -228,5 +238,69 @@ describe("InventoryService.importCsv", () => {
 
     const result = await svc.importCsv(ctx, { filename: "test.xlsx", contentBase64 });
     expect(result.rowsImported).toBe(1);
+  });
+});
+
+describe("InventoryService.listTransactions — #15: friendly source labels, not raw ids", () => {
+  let svc: InventoryService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new InventoryService(mockRedis);
+  });
+
+  const ingredientSelect = { id: "ing1", name: "Flour", canonicalUnit: "g", preferredDisplayUnit: "lb" };
+
+  it("resolves Invoice source to 'Invoice <number>'", async () => {
+    mockTransactionFindMany.mockResolvedValue([
+      { id: "tx1", sourceKind: "Invoice", sourceRef: "inv1", quantityCanonical: "1", balanceAfterCanonical: "1", costMicrocents: null, ingredient: ingredientSelect },
+    ]);
+    mockInvoiceFindMany.mockResolvedValue([{ id: "inv1", invoiceNumber: "120624947" }]);
+    mockEventFindMany.mockResolvedValue([]);
+    mockKitchenTaskFindMany.mockResolvedValue([]);
+
+    const result = await svc.listTransactions(ctx, {});
+
+    expect(result.items[0]!.sourceLabel).toBe("Invoice 120624947");
+    expect(result.items[0]!.sourceRef).toBe("inv1"); // raw id still present, not stripped
+  });
+
+  it("resolves Event source to 'Event <name>'", async () => {
+    mockTransactionFindMany.mockResolvedValue([
+      { id: "tx1", sourceKind: "Event", sourceRef: "ev1", quantityCanonical: "1", balanceAfterCanonical: "1", costMicrocents: null, ingredient: ingredientSelect },
+    ]);
+    mockInvoiceFindMany.mockResolvedValue([]);
+    mockEventFindMany.mockResolvedValue([{ id: "ev1", name: "Test Event" }]);
+    mockKitchenTaskFindMany.mockResolvedValue([]);
+
+    const result = await svc.listTransactions(ctx, {});
+
+    expect(result.items[0]!.sourceLabel).toBe("Event Test Event");
+  });
+
+  it("labels a Manual adjustment (no sourceRef) as 'Manual adjustment'", async () => {
+    mockTransactionFindMany.mockResolvedValue([
+      { id: "tx1", sourceKind: "Manual", sourceRef: null, quantityCanonical: "1", balanceAfterCanonical: "1", costMicrocents: null, ingredient: ingredientSelect },
+    ]);
+    mockInvoiceFindMany.mockResolvedValue([]);
+    mockEventFindMany.mockResolvedValue([]);
+    mockKitchenTaskFindMany.mockResolvedValue([]);
+
+    const result = await svc.listTransactions(ctx, {});
+
+    expect(result.items[0]!.sourceLabel).toBe("Manual adjustment");
+  });
+
+  it("falls back to a generic label if the referenced record can't be found (e.g. deleted)", async () => {
+    mockTransactionFindMany.mockResolvedValue([
+      { id: "tx1", sourceKind: "Invoice", sourceRef: "inv-deleted", quantityCanonical: "1", balanceAfterCanonical: "1", costMicrocents: null, ingredient: ingredientSelect },
+    ]);
+    mockInvoiceFindMany.mockResolvedValue([]); // lookup found nothing
+    mockEventFindMany.mockResolvedValue([]);
+    mockKitchenTaskFindMany.mockResolvedValue([]);
+
+    const result = await svc.listTransactions(ctx, {});
+
+    expect(result.items[0]!.sourceLabel).toBe("Invoice");
   });
 });
