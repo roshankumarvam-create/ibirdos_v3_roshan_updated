@@ -355,10 +355,26 @@ export class EventsService {
     const canSeeFinancials = canViewFinancials(ctx.role);
     return {
       items: page.map((e: any) => {
+        // #10 fix: the stored computedMarginPct column is only written by
+        // rollupCosts(), which only runs from markAsPaid(), addStaff(), and
+        // kitchen-packet generation -- an event that has a real quote and
+        // food cost but never hit any of those three call sites (e.g. paid
+        // via a path where the revenue-freeze branch was skipped, no staff
+        // ever assigned, no kitchen packet ever generated) has a NULL
+        // stored margin forever, even though the same numbers the detail
+        // page uses are sitting right here. Same "two places, one live one
+        // stale" pattern as P0-1/P0-3/P0-4 -- compute live from the same
+        // computeEventProfit() helper instead of trusting the stored column.
+        const effectiveRevenueCents = e.quotedTotalOverrideCents ?? e.quotedPriceCents;
+        const { marginPct } = computeEventProfit({
+          revenueCents: effectiveRevenueCents,
+          foodCostCents: e.computedFoodCostCents ?? 0,
+          laborCostCents: e.computedLaborCostCents ?? 0,
+        });
         const shaped = {
           ...e,
           portionMultiplier: e.portionMultiplier != null ? Number(e.portionMultiplier) : null,
-          computedMarginPct: e.computedMarginPct != null ? Number(e.computedMarginPct) : null,
+          computedMarginPct: marginPct,
         };
         return canSeeFinancials ? shaped : this.redactEventFinancials(shaped);
       }),

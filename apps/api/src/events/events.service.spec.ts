@@ -314,3 +314,37 @@ describe("EventsService.ingredientRequirements — P0-3/P0-4: multi-shortage + u
     }
   });
 });
+
+describe("EventsService.list — #10: margin computed live, not read from a possibly-null stored column", () => {
+  let svc: EventsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
+  });
+
+  it("computes margin from quotedPriceCents/food/labor even when computedMarginPct is stored as null", async () => {
+    mockEventFindMany.mockResolvedValue([{
+      id: "ev1", status: "CONFIRMED", paymentStatus: "PAID",
+      quotedPriceCents: 44375, computedFoodCostCents: 20305, computedLaborCostCents: 10000,
+      computedMarginPct: null, // the stale/never-rolled-up stored value -- must NOT show as blank
+      quotedTotalOverrideCents: null, portionMultiplier: 1,
+    }]);
+
+    const result = await svc.list(ctx, {});
+
+    expect(result.items[0].computedMarginPct).toBeCloseTo(31.706, 2); // NOT null
+  });
+
+  it("still shows null for an event with no quote at all (nothing to compute)", async () => {
+    mockEventFindMany.mockResolvedValue([{
+      id: "ev1", status: "DRAFT", paymentStatus: "UNPAID",
+      quotedPriceCents: null, computedFoodCostCents: 0, computedLaborCostCents: 0,
+      computedMarginPct: null, quotedTotalOverrideCents: null, portionMultiplier: 1,
+    }]);
+
+    const result = await svc.list(ctx, {});
+
+    expect(result.items[0].computedMarginPct).toBeNull();
+  });
+});
