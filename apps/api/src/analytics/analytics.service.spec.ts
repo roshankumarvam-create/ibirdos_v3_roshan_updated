@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@ibirdos/db", () => ({
   prisma: {
     event: { findMany: vi.fn() },
+    invoice: { findMany: vi.fn() },
+    wasteEntry: { findMany: vi.fn() },
   },
 }));
 
@@ -54,5 +56,46 @@ describe("AnalyticsService.eventStats — P0-4: paid event revenue not reaching 
     await service.eventStats(ctx, range);
     const where = vi.mocked(prisma.event.findMany).mock.calls[0]![0]!.where as any;
     expect(where.workspaceId).toBe("ws1");
+  });
+});
+
+describe("AnalyticsService.profitAndLoss — P0-1: same computeEventProfit() formula as rollupCosts() and the event pages", () => {
+  let service: AnalyticsService;
+
+  beforeEach(() => {
+    service = new AnalyticsService();
+    vi.clearAllMocks();
+    vi.mocked(prisma.invoice.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.wasteEntry.findMany).mockResolvedValue([]);
+  });
+
+  it("reproduces the client's exact cafe-71 numbers aggregated at the P&L level: $443.75 revenue, $203.07 food, $100 labor -> $140.68 gross profit", async () => {
+    vi.mocked(prisma.event.findMany).mockResolvedValue([
+      { quotedPriceCents: 44375, computedFoodCostCents: 20307, computedLaborCostCents: 10000 },
+    ] as any);
+
+    const result = await service.profitAndLoss(ctx, 30);
+
+    expect(result.grossProfitCents).toBe(14068); // $140.68 -- not $240.68
+    expect(result.grossMarginPct).toBeCloseTo(31.70, 2);
+  });
+
+  it("zero labor across the window: gross profit is just revenue minus food cost", async () => {
+    vi.mocked(prisma.event.findMany).mockResolvedValue([
+      { quotedPriceCents: 44375, computedFoodCostCents: 20307, computedLaborCostCents: 0 },
+    ] as any);
+
+    const result = await service.profitAndLoss(ctx, 30);
+
+    expect(result.grossProfitCents).toBe(24068); // $240.68 -- correct here BECAUSE labor is genuinely zero
+  });
+
+  it("returns null (not a nonsensical negative number) when there's no revenue in the window", async () => {
+    vi.mocked(prisma.event.findMany).mockResolvedValue([]);
+
+    const result = await service.profitAndLoss(ctx, 30);
+
+    expect(result.grossProfitCents).toBeNull();
+    expect(result.grossMarginPct).toBeNull();
   });
 });

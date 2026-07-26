@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Button, Card, CardHeader, CardTitle, CardBody } from "@ibirdos/ui";
+import { computeEventProfit } from "@ibirdos/types";
 import { formatCents } from "@/lib/format";
 import { api } from "@/lib/api";
 import type { Route } from "next";
@@ -384,7 +385,17 @@ export default function NewEventPage() {
     if (mi.cachedCostCents == null || !mi.portionsYielded) return sum;
     return sum + Math.round((mi.cachedCostCents / mi.portionsYielded) * mi.portions);
   }, 0);
-  const totalProfitCents = totalCents - totalFoodCostCents;
+  // P0-1 fix: totalCents already includes labor as billed revenue (BUG-3),
+  // so profit must subtract labor back out as a cost -- this widget
+  // previously did `totalCents - totalFoodCostCents` with no labor
+  // subtraction at all, overstating "Est. profit" by exactly the labor
+  // charge (client's reported $240.68 vs. the correct $140.68). Shared
+  // formula with the saved event page and the backend P&L -- see
+  // packages/types/src/money.ts.
+  const { profitCents: totalProfitCentsOrNull } = computeEventProfit({
+    revenueCents: totalCents, foodCostCents: totalFoodCostCents, laborCostCents: laborTotalCents,
+  });
+  const totalProfitCents = totalProfitCentsOrNull ?? 0;
   const foodCostPct = totalCents > 0 ? (totalFoodCostCents / totalCents) * 100 : null;
 
   // Recompute non-manual portions when guest count changes

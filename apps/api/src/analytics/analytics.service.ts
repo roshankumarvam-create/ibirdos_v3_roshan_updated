@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { prisma, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
+import { computeEventProfit } from "@ibirdos/types";
 
 const log = moduleLogger("AnalyticsService");
 
@@ -27,6 +28,14 @@ export class AnalyticsService {
       }),
     ]);
 
+    // P0-1: same computeEventProfit() formula as rollupCosts() (per-event,
+    // frozen) and the event pages (per-event, live) -- this is the same
+    // subtraction aggregated across events, so the Dashboard KPI can never
+    // disagree with what an individual event page shows for the same window.
+    const { marginPct: eventMarginPct } = computeEventProfit({
+      revenueCents: events.revenueCents, foodCostCents: events.foodCostCents, laborCostCents: events.laborCostCents,
+    });
+
     return {
       windowDays: days,
       purchasesCents: purchases,
@@ -36,9 +45,7 @@ export class AnalyticsService {
       eventRevenueCents: events.revenueCents,
       eventFoodCostCents: events.foodCostCents,
       eventLaborCostCents: events.laborCostCents,
-      eventMarginPct: events.revenueCents > 0
-        ? ((events.revenueCents - events.foodCostCents - events.laborCostCents) / events.revenueCents) * 100
-        : null,
+      eventMarginPct,
       openLowStockAlerts: openAlerts,
       recentPriceChanges,
     };
@@ -215,6 +222,15 @@ export class AnalyticsService {
     const purchases = await this.totalPurchasesCents(ctx, range);
     const waste = await this.totalWasteCents(ctx, range);
 
+    // P0-1: THE same computeEventProfit() formula used by rollupCosts()
+    // (the frozen per-event margin) and by the event detail/create pages
+    // (the live estimate) -- "estimated" and "frozen" P&L now share one
+    // formula, so they can't drift the way the create-event page's
+    // profit widget did (revenue - food, missing the labor subtraction).
+    const { profitCents: grossProfitCents, marginPct: grossMarginPct } = computeEventProfit({
+      revenueCents: events.revenueCents, foodCostCents: events.foodCostCents, laborCostCents: events.laborCostCents,
+    });
+
     return {
       windowDays: days,
       revenue: { eventRevenueCents: events.revenueCents },
@@ -224,10 +240,13 @@ export class AnalyticsService {
         eventFoodCostCents: events.foodCostCents,
       },
       labor: { eventLaborCents: events.laborCostCents },
-      grossProfitCents: events.revenueCents - events.foodCostCents - events.laborCostCents,
-      grossMarginPct: events.revenueCents > 0
-        ? ((events.revenueCents - events.foodCostCents - events.laborCostCents) / events.revenueCents) * 100
-        : null,
+      // grossProfitCents/grossMarginPct are null when there's no revenue in
+      // the window (events.revenueCents === 0) -- previously grossProfitCents
+      // was always a number (0 - food - labor, a nonsensical negative COGS
+      // figure with zero revenue) while grossMarginPct was null in the same
+      // case; both now agree since they come from the same helper call.
+      grossProfitCents,
+      grossMarginPct,
       foodCostPct: events.revenueCents > 0 ? (events.foodCostCents / events.revenueCents) * 100 : null,
       laborPct: events.revenueCents > 0 ? (events.laborCostCents / events.revenueCents) * 100 : null,
     };

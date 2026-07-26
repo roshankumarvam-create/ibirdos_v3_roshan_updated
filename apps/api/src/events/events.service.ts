@@ -6,7 +6,10 @@ import { Redis } from "ioredis";
 
 import { prisma, writeAudit, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
-import { toCanonical, formatCanonical, formatWorkspaceDate, formatInWorkspaceTz } from "@ibirdos/types";
+import {
+  toCanonical, formatCanonical, formatWorkspaceDate, formatInWorkspaceTz,
+  computeEventProfit,
+} from "@ibirdos/types";
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { RecipesService } from "../recipes/recipes.service";
@@ -1389,14 +1392,20 @@ export function computeLiveQuoteTotalCents(
 // crash rollupCosts(), regardless of how lopsided the real numbers are.
 const MARGIN_PCT_DB_BOUND = 999.99;
 
-/** Pure margin computation — extracted for unit testing. */
+/**
+ * Margin percentage for DB storage (NUMERIC(5,2), clamped). Thin wrapper
+ * around computeEventProfit() -- the shared formula also used by the
+ * live/frontend profit display and the analytics P&L -- adding only the
+ * DB-specific clamp + Decimal packaging so a lopsided event can never
+ * crash rollupCosts() with a numeric overflow.
+ */
 export function computeMarginPct(
   revenueCents: number | null | undefined,
   foodCents: number,
   laborCents: number,
 ): Decimal | null {
-  if (!revenueCents || revenueCents <= 0) return null;
-  const pct = ((revenueCents - foodCents - laborCents) / revenueCents) * 100;
-  const clamped = Math.max(-MARGIN_PCT_DB_BOUND, Math.min(MARGIN_PCT_DB_BOUND, pct));
+  const { marginPct } = computeEventProfit({ revenueCents, foodCostCents: foodCents, laborCostCents: laborCents });
+  if (marginPct == null) return null;
+  const clamped = Math.max(-MARGIN_PCT_DB_BOUND, Math.min(MARGIN_PCT_DB_BOUND, marginPct));
   return new Decimal(clamped.toFixed(2));
 }

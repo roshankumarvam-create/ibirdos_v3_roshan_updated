@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { canViewFinancials } from "@ibirdos/permissions";
+import { computeEventProfit } from "@ibirdos/types";
 import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { StatusBadge } from "@/components/common/status-badge";
 import { formatCents, formatPct, formatDateTime, formatDate } from "@/lib/format";
@@ -198,11 +199,14 @@ export default async function EventDetailPage({
   }, 0);
   const liveQuoteTotalCents = quoteSubtotalCents + Math.round(quoteSubtotalCents * (Number(event.markupPct ?? 0) / 100)) + totalLaborCents;
 
+  // P0-1: shared formula with the create-event page and the backend P&L --
+  // see packages/types/src/money.ts. This page already subtracted labor
+  // correctly; unifying onto one helper means it can't quietly drift from
+  // the other two call sites again the way the create-event page did.
   const profitBaseCents = revenueCents ?? (liveQuoteTotalCents > 0 ? liveQuoteTotalCents : null);
-  const profitCents = profitBaseCents != null ? profitBaseCents - foodCostCents - totalLaborCents : null;
-  const marginPct = profitBaseCents != null && profitBaseCents > 0
-    ? (profitCents! / profitBaseCents) * 100
-    : null;
+  const { profitCents, marginPct } = computeEventProfit({
+    revenueCents: profitBaseCents, foodCostCents: foodCostCents, laborCostCents: totalLaborCents,
+  });
 
   const prepTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "PREP");
   const serviceTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "SERVICE");

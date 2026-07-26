@@ -179,6 +179,7 @@ export interface CreatedUserCredentials {
 export * from "./units";
 export * from "./ingredient";
 export * from "./datetime";
+export * from "./money";
 
 // ---------------------------------------------------------------------
 // Recipe creation — shared by web form and API validation
