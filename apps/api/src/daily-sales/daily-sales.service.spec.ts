@@ -87,7 +87,11 @@ describe("DailySalesService", () => {
     expect(result.id).toBe("ds1");
   });
 
-  it("create: no duplicate → sets status to NO_BUSINESS by default", async () => {
+  it("#6 fix: create with real sales and no explicit status → CLOSED_WON, not NO_BUSINESS", async () => {
+    // Corrected: this test previously asserted NO_BUSINESS here, which was
+    // the actual reported bug ("non-zero sales can never be No Business")
+    // codified as intended behavior. A day with $1000 gross / $900 net and
+    // no status pill explicitly clicked must not be labeled "No Business."
     mockFindFirst.mockResolvedValue(null);
     mockCreate.mockResolvedValue(makeRecord());
 
@@ -99,7 +103,38 @@ describe("DailySalesService", () => {
     });
 
     const created = mockCreate.mock.calls[0]![0].data;
+    expect(created.status).toBe("CLOSED_WON");
+  });
+
+  it("#6 fix: create with genuinely zero sales and no explicit status → NO_BUSINESS", async () => {
+    mockFindFirst.mockResolvedValue(null);
+    mockCreate.mockResolvedValue(makeRecord());
+
+    await svc.create(ctx, {
+      saleDate: "2024-01-15",
+      grossSales: 0,
+      netSales: 0,
+      tax: 0,
+    });
+
+    const created = mockCreate.mock.calls[0]![0].data;
     expect(created.status).toBe("NO_BUSINESS");
+  });
+
+  it("#6 fix: an explicit status always wins over the derived default", async () => {
+    mockFindFirst.mockResolvedValue(null);
+    mockCreate.mockResolvedValue(makeRecord());
+
+    await svc.create(ctx, {
+      saleDate: "2024-01-15",
+      grossSales: 1000,
+      netSales: 900,
+      tax: 100,
+      status: "FOLLOW_UP",
+    });
+
+    const created = mockCreate.mock.calls[0]![0].data;
+    expect(created.status).toBe("FOLLOW_UP");
   });
 
   it("create: duplicate date and no mode → throws ConflictException with duplicate_date code", async () => {

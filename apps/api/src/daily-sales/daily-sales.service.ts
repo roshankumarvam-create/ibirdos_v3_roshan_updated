@@ -6,6 +6,26 @@ import { moduleLogger } from "@ibirdos/logger";
 
 const log = moduleLogger("DailySalesService");
 
+/**
+ * #6 fix: status previously defaulted to NO_BUSINESS unconditionally
+ * whenever the caller didn't explicitly set one -- with zero relation to
+ * the actual grossSales/netSales entered on the same request. A user who
+ * filled in real sales figures but didn't also click a different status
+ * pill (or any importer/API caller that omits status) got a day with real
+ * revenue permanently labeled "No Business." Codified as the (wrong)
+ * intended behavior in a previous version of this spec file
+ * ("sets status to NO_BUSINESS by default", asserting NO_BUSINESS for a
+ * request with grossSales: 1000) -- that test is corrected alongside
+ * this fix. Only applies when the caller didn't specify status at all;
+ * an explicit status always wins.
+ */
+export function deriveDefaultDailySalesStatus(
+  grossSales: number,
+  netSales: number,
+): "NO_BUSINESS" | "CLOSED_WON" {
+  return grossSales > 0 || netSales > 0 ? "CLOSED_WON" : "NO_BUSINESS";
+}
+
 export interface CreateDailySalesInput {
   saleDate: string;           // YYYY-MM-DD
   grossSales: number;
@@ -97,7 +117,15 @@ export class DailySalesService {
               onlineSales: Number(existing.onlineSales) + (input.onlineSales ?? 0),
               deliveryAppSales: Number(existing.deliveryAppSales) + (input.deliveryAppSales ?? 0),
               notes: input.notes ?? existing.notes,
-              status: (input.status as any) ?? existing.status,
+              // Re-derive from the MERGED totals, not just existing.status --
+              // adding real sales onto a record that started at NO_BUSINESS
+              // (e.g. created with zero figures, then a real POS export
+              // merged in later) must not leave it stuck at NO_BUSINESS.
+              status: (input.status as any)
+                ?? deriveDefaultDailySalesStatus(
+                  Number(existing.grossSales) + input.grossSales,
+                  Number(existing.netSales) + input.netSales,
+                ),
               tenders: {
                 create: Array.from(mergedTenders.entries()).map(([tenderType, v]) => ({
                   workspaceId: ctx.workspaceId,
@@ -141,7 +169,7 @@ export class DailySalesService {
               deliveryAppSales: input.deliveryAppSales ?? 0,
               notes: input.notes ?? null,
               sourceFileUrl: input.sourceFileUrl ?? null,
-              status: (input.status as any) ?? "NO_BUSINESS",
+              status: (input.status as any) ?? deriveDefaultDailySalesStatus(input.grossSales, input.netSales),
               shift: input.shift ?? null,
               tenders: input.tenders?.length
                 ? {
@@ -185,7 +213,7 @@ export class DailySalesService {
         deliveryAppSales: input.deliveryAppSales ?? 0,
         notes: input.notes ?? null,
         sourceFileUrl: input.sourceFileUrl ?? null,
-        status: (input.status as any) ?? "NO_BUSINESS",
+        status: (input.status as any) ?? deriveDefaultDailySalesStatus(input.grossSales, input.netSales),
         shift: input.shift ?? null,
         tenders: input.tenders?.length
           ? {

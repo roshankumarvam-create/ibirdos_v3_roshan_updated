@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Button, Input, Card, CardHeader, CardTitle, CardBody, Label } from "@ibirdos/ui";
 import { api } from "@/lib/api";
@@ -47,6 +47,14 @@ export default function NewDailySalesPage() {
 
   const [saleDate, setSaleDate] = useState(today());
   const [status, setStatus] = useState<DailySalesStatus>("NO_BUSINESS");
+  // #6 fix: the status pill previously stayed on its initial "No Business"
+  // default forever unless the user remembered to click a different one --
+  // completely disconnected from the gross/net sales entered below it, so
+  // a real sales day saved with the default click was permanently mislabeled.
+  // Track whether the user has manually picked a status; until they do,
+  // auto-follow the entered sales figures (same rule the backend now
+  // enforces server-side for any caller that omits status).
+  const [statusTouched, setStatusTouched] = useState(false);
   const [grossSales, setGrossSales] = useState("");
   const [netSales, setNetSales] = useState("");
   const [tax, setTax] = useState("");
@@ -66,6 +74,14 @@ export default function NewDailySalesPage() {
   // Duplicate-date modal state
   const [duplicateInfo, setDuplicateInfo] = useState<DuplicateInfo | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
+
+  // #6 fix: auto-follow gross/net sales until the user manually overrides
+  // the pill -- same rule as deriveDefaultDailySalesStatus() server-side.
+  useEffect(() => {
+    if (statusTouched) return;
+    const hasSales = (parseFloat(grossSales) || 0) > 0 || (parseFloat(netSales) || 0) > 0;
+    setStatus(hasSales ? "CLOSED_WON" : "NO_BUSINESS");
+  }, [grossSales, netSales, statusTouched]);
 
   const tenderTotal = tenders.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
   const net = parseFloat(netSales) || 0;
@@ -176,7 +192,7 @@ export default function NewDailySalesPage() {
                 <button
                   key={opt.value}
                   type="button"
-                  onClick={() => setStatus(opt.value)}
+                  onClick={() => { setStatus(opt.value); setStatusTouched(true); }}
                   className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors ${status === opt.value ? opt.active : opt.inactive}`}
                 >
                   {opt.label}
