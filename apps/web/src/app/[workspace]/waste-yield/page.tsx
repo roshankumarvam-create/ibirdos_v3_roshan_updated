@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, CardHeader, CardTitle, CardBody, Badge } from "@ibirdos/ui";
-import { formatCents, relativeTime } from "@/lib/format";
+import { formatCents, relativeTime, formatDateTime } from "@/lib/format";
 import { WasteChart } from "@/components/charts/waste-chart";
 
 interface WasteByReason { reason: string; count: number; totalCostCents: number; }
@@ -52,7 +52,7 @@ export default async function WasteYieldPage() {
                   <tr key={w.id} className="hover:bg-bg-hover/30">
                     <td className="px-5 py-3">
                       <div className="text-text-primary text-sm">{w.ingredient.name}</div>
-                      <div className="text-[10px] text-text-tertiary">{relativeTime(w.occurredAt, user.workspaceTimeZone)}</div>
+                      <div className="text-[10px] text-text-tertiary" title={formatDateTime(w.occurredAt, user.workspaceTimeZone)}>{relativeTime(w.occurredAt, user.workspaceTimeZone)}</div>
                     </td>
                     <td className="px-5 py-3"><Badge tone="warning">{w.reason.toLowerCase().replace(/_/g, " ")}</Badge></td>
                     <td className="px-5 py-3 text-right tabular-nums text-danger">
@@ -94,7 +94,7 @@ export default async function WasteYieldPage() {
                       {Number(y.yieldPct).toFixed(1)}%
                     </span>
                   </td>
-                  <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(y.observedAt, user.workspaceTimeZone)}</td>
+                  <td className="px-5 py-3 text-text-tertiary text-xs" title={formatDateTime(y.observedAt, user.workspaceTimeZone)}>{relativeTime(y.observedAt, user.workspaceTimeZone)}</td>
                 </tr>
               ))}
             </tbody>

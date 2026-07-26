@@ -4,7 +4,7 @@ import { requireSession } from "@/lib/session";
 import { api } from "@/lib/api";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { StatusBadge } from "@/components/common/status-badge";
-import { formatCents, formatDateOnly, relativeTime } from "@/lib/format";
+import { formatCents, formatDateOnly, relativeTime, formatDateTime } from "@/lib/format";
 
 interface InvoiceListItem {
   id: string;
@@ -110,7 +110,7 @@ export default async function InvoicesPage() {
                   <td className="px-5 py-3 text-right tabular-nums text-text-secondary">
                     {inv._count.lines}
                   </td>
-                  <td className="px-5 py-3 text-text-tertiary text-xs">
+                  <td className="px-5 py-3 text-text-tertiary text-xs" title={formatDateTime(inv.createdAt, user.workspaceTimeZone)}>
                     {relativeTime(inv.createdAt, user.workspaceTimeZone)}
                   </td>
                 </tr>

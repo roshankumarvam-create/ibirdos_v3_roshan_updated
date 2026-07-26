@@ -5,7 +5,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import { Card, Badge, Button, EmptyState } from "@ibirdos/ui";
 import { api } from "@/lib/api";
-import { formatCents, formatStock, formatCostPerUnit, relativeTime } from "@/lib/format";
+import { formatCents, formatStock, formatCostPerUnit, relativeTime, formatDateTime } from "@/lib/format";
 import { inventoryStatusMessage } from "@/lib/inventory-status";
 
 interface Alert {
@@ -200,7 +200,7 @@ function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjus
                       ? `Order: ${a.ingredient.reorderQty} ${a.ingredient.purchaseUnit}`
                       : "—"}
                   </td>
-                  <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(a.detectedAt, workspaceTimeZone)}</td>
+                  <td className="px-5 py-3 text-text-tertiary text-xs" title={formatDateTime(a.detectedAt, workspaceTimeZone)}>{relativeTime(a.detectedAt, workspaceTimeZone)}</td>
                   <td className="px-5 py-3 text-right">
                     <Link href={`/${workspace}/inventory/adjust?ingredientId=${a.ingredient.id}` as any} className="text-xs text-accent-500 hover:text-accent-400">
                       Adjust
@@ -368,7 +368,7 @@ function InventoryContent({ canSeeFinancials, canAdjustInventory, canAccessAdjus
 
                   return (
                     <tr key={tx.id} className="hover:bg-bg-hover/30">
-                      <td className="px-5 py-3 text-text-tertiary text-xs">{relativeTime(tx.createdAt, workspaceTimeZone)}</td>
+                      <td className="px-5 py-3 text-text-tertiary text-xs" title={formatDateTime(tx.createdAt, workspaceTimeZone)}>{relativeTime(tx.createdAt, workspaceTimeZone)}</td>
                       <td className="px-5 py-3">
                         <Link href={`/${workspace}/ingredients/${tx.ingredient.id}` as any} className="text-text-primary hover:text-accent-500">
                           {tx.ingredient.name}
