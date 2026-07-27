@@ -9,6 +9,13 @@ import { ZodValidationPipe } from "../common/services/zod-validation.pipe";
 import { canViewFinancials } from "@ibirdos/permissions";
 
 import { RecipesService } from "./recipes.service";
+import { YIELD_VARIANCE_REASONS } from "./yield-variance.raw";
+
+// #20: reason for a target-vs-calculated portion-weight disagreement.
+const YieldVarianceReasonSchema = z.object({
+  reason: z.enum(YIELD_VARIANCE_REASONS),
+  note:   z.string().max(1000).nullable().optional(),
+});
 
 // LineSchema: used by addIngredient — requires a resolved ingredientId.
 const LineSchema = z.object({
@@ -172,6 +179,12 @@ export class RecipesController {
   removeIngredient(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
                    @Param("linkId") linkId: string) {
     return this.svc.removeIngredient(ctx, id, linkId).then(ok);
+  }
+
+  @Patch(":id/yield-variance-reason") @RequirePermission("recipe.update")
+  setYieldVarianceReason(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+                          @Body(new ZodValidationPipe(YieldVarianceReasonSchema)) body: z.infer<typeof YieldVarianceReasonSchema>) {
+    return this.svc.setYieldVarianceReason(ctx, id, body.reason, body.note ?? null).then(ok);
   }
 
   @Post(":id/recost") @RequirePermission("recipe.read")

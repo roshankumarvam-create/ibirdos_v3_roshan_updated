@@ -9,6 +9,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardBody, Badge, Button }
 import { IngredientsEditor, type EditableIngredientLine } from "./IngredientsEditor";
 import { DeleteRecipeButton } from "./delete-recipe-button";
 import { RecipePhotoImg } from "./RecipePhotoImg";
+import { YieldVarianceCard } from "./YieldVarianceCard";
 
 interface RecipeIngredientLine extends EditableIngredientLine {}
 
@@ -34,6 +35,13 @@ interface RecipeDetail {
   portionsYielded: number | null;
   portionWeightG: number | null;
   portionVolumeMl: number | null;
+  // #20: pure computation, present for every role (not a financial field).
+  calculatedPortionWeightG: number | null;
+  calculatedWeightComplete: boolean;
+  // #20: additive, inert-until-migrated -- always present as a key, null
+  // until both the migration has run AND a reason has been recorded.
+  yieldVarianceReason: string | null;
+  yieldVarianceReasonNote: string | null;
   prepTimeMin: number | null;
   cookTimeMin: number | null;
   // Financial fields below are all optional, not just nullable: the API
@@ -102,6 +110,7 @@ export default async function RecipeDetailPage({
   const canSeeFinancials = canViewFinancials(user.role);
 
   const portionWeightOz = recipe.portionWeightG ? (recipe.portionWeightG / 28.3495).toFixed(1) : null;
+  const calculatedPortionWeightOz = recipe.calculatedPortionWeightG ? (recipe.calculatedPortionWeightG / 28.3495).toFixed(1) : null;
   const portionVolumeFloz = recipe.portionVolumeMl ? (recipe.portionVolumeMl / 29.5735).toFixed(1) : null;
 
   const statusTone = recipe.status === "ACTIVE" ? "success" : recipe.status === "ARCHIVED" ? "neutral" : "warning";
@@ -207,13 +216,34 @@ export default async function RecipeDetailPage({
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 <StatBox label="Portions" value={recipe.portionsYielded != null ? String(recipe.portionsYielded) : "—"} />
-                <StatBox label="Portion weight" value={portionWeightOz ? `${portionWeightOz} oz` : "—"} />
+                {/* #20: relabeled "Portion weight" -> "Target portion weight"
+                    now that a second, calculated figure exists alongside it —
+                    this one stays exactly what it always was (manually
+                    entered, never auto-overwritten). */}
+                <StatBox label="Target portion weight" value={portionWeightOz ? `${portionWeightOz} oz` : "—"} />
+                <StatBox
+                  label="Calculated portion weight"
+                  value={calculatedPortionWeightOz ? `${calculatedPortionWeightOz} oz${recipe.calculatedWeightComplete ? "" : "*"}` : "—"}
+                />
                 <StatBox label="Portion volume" value={portionVolumeFloz ? `${portionVolumeFloz} fl oz` : "—"} />
                 <StatBox label="Prep time" value={recipe.prepTimeMin != null ? `${recipe.prepTimeMin} min` : "—"} />
                 <StatBox label="Cook time" value={recipe.cookTimeMin != null ? `${recipe.cookTimeMin} min` : "—"} />
               </div>
+              {!recipe.calculatedWeightComplete && calculatedPortionWeightOz && (
+                <p className="text-[10px] text-text-tertiary">* Calculated weight is a partial sum — one or more ingredient lines couldn't be weighed (missing density or per-unit weight).</p>
+              )}
             </CardBody>
           </Card>
+
+          <YieldVarianceCard
+            recipeId={id}
+            targetWeightG={recipe.portionWeightG}
+            calculatedWeightG={recipe.calculatedPortionWeightG}
+            calculatedWeightComplete={recipe.calculatedWeightComplete}
+            initialReason={recipe.yieldVarianceReason}
+            initialNote={recipe.yieldVarianceReasonNote}
+            canEdit={canEdit}
+          />
 
           {/* Ingredients */}
           <Card>

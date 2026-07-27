@@ -233,3 +233,53 @@ INSERT INTO billing_plan_catalog (
 -- Only WRITES using these values fail until the ALTER TYPE has run --
 -- reads/SELECTs against the still-empty billing tables are unaffected
 -- either way.)
+
+-- =====================================================================
+-- #20 -- yield-variance reason (target vs calculated portion weight).
+-- NOT run yet. NOT added to schema.prisma yet, deliberately -- same
+-- reason as quote_token above: Prisma's generated client issues an
+-- explicit column list for every query against a model, so adding these
+-- to the Recipe model in schema.prisma before the columns actually
+-- exist would break EVERY query against `recipes`, not just yield-
+-- variance ones, the moment this deploys. apps/api/src/recipes/
+-- yield-variance.raw.ts is the ONLY file that touches these two
+-- columns, via raw SQL, and treats a "column does not exist" error as
+-- "feature not yet enabled": reads degrade to null (the warning/reason
+-- UI just doesn't show a recorded reason yet), writes return a clear
+-- 400 telling the operator this isn't enabled yet rather than silently
+-- discarding what they typed. So the feature is fully inert -- the
+-- Target vs Calculated portion-weight warning still SHOWS (that part is
+-- pure computation, no schema dependency), only recording a reason for
+-- it doesn't persist -- until this migration runs.
+--
+-- What this is for: #20 in the client's numbered list. Recipe already
+-- has three yield-related fields that are never reconciled with each
+-- other (portionsYielded, portionWeightG, totalYieldCanonical -- see
+-- NEEDS_ROSHAN.md #20). Per this round's explicit instruction: do NOT
+-- auto-overwrite portionWeightG (the manually-entered target) with the
+-- calculated value, and do NOT assume a disagreement between them is
+-- valid without an operator recording WHY (one of a fixed set of
+-- legitimate reasons a cooked/portioned weight can legitimately differ
+-- from a raw-ingredient-sum target).
+
+ALTER TABLE recipes ADD COLUMN yield_variance_reason TEXT;
+ALTER TABLE recipes ADD COLUMN yield_variance_reason_note TEXT;
+
+-- Corresponding schema.prisma change to make once the above has run
+-- (and yield-variance.raw.ts switched over to normal Prisma calls,
+-- same follow-up quote-token.service.ts already went through):
+--
+--   model Recipe {
+--     ...
+--     yieldVarianceReason     String? @map("yield_variance_reason")
+--     yieldVarianceReasonNote String? @map("yield_variance_reason_note")
+--     ...
+--   }
+--
+-- No CHECK constraint on yield_variance_reason's value on purpose --
+-- the fixed reason list (COOKING_YIELD / MOISTURE_CHANGE /
+-- TRIMMING_LOSS / DRAINED_WEIGHT / PRODUCTION_ALLOWANCE /
+-- PLATING_TOLERANCE / OTHER) is enforced at the Zod/API layer
+-- (recipes.controller.ts's YieldVarianceReasonSchema), consistent with
+-- how every other enum-like free-text field in this schema is handled
+-- (e.g. DailySales.shift, KitchenTask.station).

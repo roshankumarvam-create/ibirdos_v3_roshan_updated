@@ -283,4 +283,20 @@ describe("RecipesService.get — field-level redaction for Chef/Staff", () => {
     expect(result.ingredients[0].ingredient.currentCostMicrocents).toBeUndefined();
     expect(result.name).toBe("Test Recipe");
   });
+
+  it("#20 fix: calculatedPortionWeightG is present for every role (not a financial field) -- 2 lb flour / 4 portions", async () => {
+    // 2 lb = 907.184 g / 4 portions = 226.796 g/portion
+    const owner = await svc.get({ ...ctx, role: "OWNER" }, "rec-1");
+    expect(owner.calculatedPortionWeightG).toBeCloseTo(226.796, 1);
+    expect(owner.calculatedWeightComplete).toBe(true);
+
+    const chef = await svc.get({ ...ctx, role: "CHEF" }, "rec-1");
+    expect(chef.calculatedPortionWeightG).toBeCloseTo(226.796, 1);
+  });
+
+  it("#20 fix: yieldVarianceReason degrades to null when the migration hasn't run (no $queryRaw mock in this suite)", async () => {
+    const result = await svc.get({ ...ctx, role: "OWNER" }, "rec-1");
+    expect(result.yieldVarianceReason).toBeNull();
+    expect(result.yieldVarianceReasonNote).toBeNull();
+  });
 });

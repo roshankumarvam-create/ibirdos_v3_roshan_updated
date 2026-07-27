@@ -32,6 +32,12 @@ import {
 
 import { REDIS_CLIENT } from "../common/constants/tokens";
 import { computeLiveRecipeCost } from "./recipe-cost.helper";
+import { computeCalculatedPortionWeight } from "./recipe-yield.helper";
+import {
+  getYieldVarianceReason,
+  setYieldVarianceReason as setYieldVarianceReasonRaw,
+  type YieldVarianceReason,
+} from "./yield-variance.raw";
 import { parseXLSX } from "./recipe-spreadsheet-parser";
 import { can, canViewFinancials, type Role } from "@ibirdos/permissions";
 
@@ -342,6 +348,13 @@ export class RecipesService {
     // Computed BEFORE redaction — cost math always needs the real ingredient
     // prices; only the outbound response is stripped for non-financial roles.
     const live = computeLiveRecipeCost(r);
+    // #20: calculated ingredient weight/portion -- pure computation, no
+    // schema dependency, always available regardless of the pending
+    // yield-variance-reason migration below.
+    const calculatedWeight = computeCalculatedPortionWeight(r);
+    // #20: recorded variance reason -- additive columns, not yet
+    // migrated (PENDING_MIGRATIONS.sql); degrades to null until they are.
+    const yieldVariance = await getYieldVarianceReason(id);
     const canSeeCost = canViewFinancials(ctx.role);
     // live.breakdown is a SEPARATE array (liveBreakdown, below), keyed by
     // ingredientId -- IngredientsEditor.tsx (the saved recipe page's inline
@@ -366,6 +379,14 @@ export class RecipesService {
         }
         return mapped;
       }),
+      // #20: visible to every role that can see the recipe at all -- this
+      // is a food-safety/production-accuracy concern (does the recipe
+      // actually make what it says it makes), not a financial figure.
+      calculatedPortionWeightG: calculatedWeight.perPortionWeightG,
+      calculatedWeightComplete: calculatedWeight.complete,
+      calculatedWeightLines: calculatedWeight.lines,
+      yieldVarianceReason: yieldVariance?.reason ?? null,
+      yieldVarianceReasonNote: yieldVariance?.note ?? null,
       ...(canSeeCost
         ? {
             liveCostCents: live.totalCostCents,
@@ -501,6 +522,28 @@ export class RecipesService {
       entityType: "Recipe",
       entityId: id,
       metadata: { name: existing.name },
+    });
+  }
+
+  /**
+   * #20: record why the target portion weight and the calculated
+   * ingredient weight disagree. Additive columns, not yet migrated --
+   * see yield-variance.raw.ts. Requires recipe.update (same permission
+   * as editing the recipe itself), not a separate cost-only gate --
+   * this isn't a financial figure.
+   */
+  async setYieldVarianceReason(
+    ctx: TenantContext,
+    recipeId: string,
+    reason: YieldVarianceReason,
+    note: string | null,
+  ) {
+    await setYieldVarianceReasonRaw(ctx.workspaceId, recipeId, reason, note);
+    await writeAudit(ctx, {
+      action: "recipe.yield_variance_reason_set",
+      entityType: "Recipe",
+      entityId: recipeId,
+      metadata: { reason, note },
     });
   }
 
