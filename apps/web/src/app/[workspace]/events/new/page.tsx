@@ -682,6 +682,15 @@ export default function NewEventPage() {
                   {foodCostPct != null ? ` (${foodCostPct.toFixed(1)}%)` : ""}
                 </span>
               </div>
+              {/* #2: Food margin -- revenue vs food cost only, no labor --
+                  shown separately from Final profit margin below, same as
+                  the saved event page. */}
+              {foodCostPct != null && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-text-secondary">Food margin</span>
+                  <span className="font-mono text-text-secondary">{(100 - foodCostPct).toFixed(1)}%</span>
+                </div>
+              )}
               <div className="flex justify-between text-xs">
                 <span className="text-text-secondary">Est. profit</span>
                 <span className={`font-mono ${totalProfitCents >= 0 ? "text-success" : "text-danger"}`}>
@@ -690,7 +699,7 @@ export default function NewEventPage() {
               </div>
               {totalMarginPct != null && (
                 <div className="flex justify-between text-xs">
-                  <span className="text-text-secondary">Margin</span>
+                  <span className="text-text-secondary">Final profit margin</span>
                   <span className={`font-mono ${
                     marginWarningLevel === "critical" ? "text-danger" : marginWarningLevel === "warning" ? "text-warning" : "text-text-secondary"
                   }`}>

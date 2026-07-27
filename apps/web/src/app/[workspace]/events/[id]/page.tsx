@@ -259,6 +259,13 @@ export default async function EventDetailPage({
     otherCostCents: event.otherDirectCostCents ?? 0,
   });
   const marginWarningLevel = getMarginWarningLevel(marginPct);
+  // #2: food margin only (revenue vs food cost) -- deliberately NOT run
+  // through computeEventProfit(), which also subtracts labor + direct
+  // costs for the final profit figure. Same revenueCents/foodCostCents
+  // already in scope above; no new data needed.
+  const foodMarginPct = profitBaseCents && profitBaseCents > 0
+    ? ((profitBaseCents - foodCostCents) / profitBaseCents) * 100
+    : null;
 
   const prepTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "PREP");
   const serviceTasks = (event.kitchenTasks ?? []).filter((t) => t.taskType === "SERVICE");
@@ -367,8 +374,13 @@ export default async function EventDetailPage({
       )}
 
       {/* KPI row -- Revenue/Food cost/Labor cost/Profit/Margin are omitted
-          entirely (not dashed out) for roles without financial visibility. */}
-      <div className={canSeeFinancials ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4" : "grid grid-cols-2 gap-4"}>
+          entirely (not dashed out) for roles without financial visibility.
+          #2: once frozen, every cost/profit/margin figure here reflects the
+          LOCKED-IN inputs (frozenRecipeCostsCents/frozenIngredientPricesCents),
+          not live ingredient prices -- "(frozen)" is now on every dependent
+          KPI, not just Food cost, so the snapshot is unambiguous everywhere
+          it appears, not just on the one label that happened to say so before. */}
+      <div className={canSeeFinancials ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4" : "grid grid-cols-2 gap-4"}>
         <KpiCard label="Guests" value={event.guestCount.toString()} />
         {canSeeFinancials && (
           <>
@@ -385,14 +397,24 @@ export default async function EventDetailPage({
                 : {})}
             />
             <KpiCard
-              label="Labor cost"
+              label={event.frozenAt ? "Labor cost (frozen)" : "Labor cost"}
               value={formatCents(totalLaborCents)}
               {...(revenueCents && totalLaborCents > 0
                 ? { sub: `${formatPct((totalLaborCents / revenueCents) * 100)} of revenue` }
                 : {})}
             />
+            {/* #2: Food margin -- revenue vs food cost ONLY, no labor/direct
+                costs subtracted -- shown as its own labeled number,
+                separate from Final profit margin below. Previously only
+                the inverse framing (Food cost as % of revenue, above)
+                existed; the two are the same underlying comparison but
+                "margin" reads as "what's left", not "what was spent". */}
             <KpiCard
-              label="Profit"
+              label={event.frozenAt ? "Food margin (frozen)" : "Food margin"}
+              value={foodMarginPct != null ? formatPct(foodMarginPct) : "—"}
+            />
+            <KpiCard
+              label={event.frozenAt ? "Profit (frozen)" : "Profit"}
               value={profitCents != null ? formatCents(profitCents) : "—"}
               tone={profitCents != null && profitBaseCents != null
                 ? (profitCents < 0 ? "danger" : profitCents < profitBaseCents * 0.2 ? "warning" : "default")
@@ -400,7 +422,7 @@ export default async function EventDetailPage({
               {...(profitCents == null ? { sub: "Set quote first" } : {})}
             />
             <KpiCard
-              label="Margin %"
+              label={event.frozenAt ? "Final profit margin (frozen)" : "Final profit margin"}
               value={marginPct != null ? formatPct(marginPct) : "—"}
               tone={marginPct != null
                 ? marginPct < 25 ? "danger" : marginPct < 45 ? "warning" : "default"
