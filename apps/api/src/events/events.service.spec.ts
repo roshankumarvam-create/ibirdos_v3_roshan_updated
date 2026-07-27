@@ -12,6 +12,8 @@ const mockInvoiceLineFindMany = vi.fn();
 const mockKitchenTaskFindMany = vi.fn();
 const mockStaffFindFirst = vi.fn();
 const mockStaffDelete = vi.fn();
+const mockQueryRaw = vi.fn();
+const mockExecuteRaw = vi.fn();
 const mockWriteAudit = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@ibirdos/db", () => ({
@@ -32,6 +34,8 @@ vi.mock("@ibirdos/db", () => ({
       findFirst: (...args: any[]) => mockStaffFindFirst(...args),
       delete: (...args: any[]) => mockStaffDelete(...args),
     },
+    $queryRaw: (...args: any[]) => mockQueryRaw(...args),
+    $executeRaw: (...args: any[]) => mockExecuteRaw(...args),
   },
   Prisma: { Decimal: class Decimal { constructor(v: any) { Object.assign(this, { v }); } } },
   writeAudit: (...args: any[]) => mockWriteAudit(...args),
@@ -519,5 +523,41 @@ describe("EventsService.removeStaff — #2: no UI existed to correct a mistaken 
     expect(mockStaffFindFirst.mock.calls[0]![0]).toMatchObject({
       where: { id: "staff1", eventId: "ev1", workspaceId: ctx.workspaceId },
     });
+  });
+});
+
+describe("EventsService.setEventDirectCosts — bug found during post-migration verification: cache went stale", () => {
+  let svc: EventsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
+  });
+
+  it("calls rollupCosts() after saving, so the cached computedMarginPct doesn't go stale (live-confirmed bug: stayed at the pre-edit value otherwise)", async () => {
+    mockEventFindFirst
+      .mockResolvedValueOnce({ id: "ev1", workspaceId: "ws1" }) // existence check
+      .mockResolvedValueOnce({
+        // rollupCosts()'s own findFirst
+        id: "ev1", staff: [], kitchenPacket: null,
+        computedFoodCostCents: 20307, quotedTotalOverrideCents: null, quotedPriceCents: 44375,
+        laborTotalCents: 10000,
+      });
+    mockQueryRaw
+      .mockResolvedValueOnce([]) // getEventDirectCosts() inside setEventDirectCostsRaw's read-before-write
+      // rollupCosts()'s own getEventDirectCosts() call, and setEventDirectCosts()'s
+      // final return-value read both see the saved value from here on.
+      .mockResolvedValue([{ packaging_cost_cents: 1500, delivery_cost_cents: 0, equipment_cost_cents: 0, other_direct_cost_cents: 0 }]);
+    mockExecuteRaw.mockResolvedValue(1);
+    mockEventUpdate.mockResolvedValue({});
+
+    await svc.setEventDirectCosts(ctx, "ev1", { packagingCostCents: 1500 });
+
+    // rollupCosts() writes the cache via prisma.event.update -- this is
+    // the assertion that would have caught the bug: it must fire on every
+    // direct-cost edit, the same way it already does for assignStaff()/removeStaff().
+    expect(mockEventUpdate).toHaveBeenCalledOnce();
+    const updateData = mockEventUpdate.mock.calls[0]![0].data;
+    expect(updateData.computedMarginPct).toBeDefined();
   });
 });

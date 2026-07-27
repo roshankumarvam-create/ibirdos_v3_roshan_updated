@@ -634,6 +634,20 @@ export class EventsService implements OnApplicationBootstrap {
    * inputs. Additive columns, not yet migrated -- see
    * event-direct-costs.raw.ts. Simple per-event cost inputs, not costed
    * from any other model -- just numbers the operator types in.
+   *
+   * BUG FOUND during post-migration verification: this originally didn't
+   * call rollupCosts(), so the cached Event.computedMarginPct went stale
+   * the moment a direct cost was set -- live-confirmed on a real test
+   * event (stayed at the pre-edit 31.7% after setting a $15 packaging
+   * cost, instead of the correct 28.32%). The event detail page and
+   * events list still showed the right number regardless (both recompute
+   * live from packagingCostCents etc., never trust the stored column --
+   * see #10's fix), but ReportsService.getLowMarginEvents() filters and
+   * sorts by the raw stored column directly in SQL, which can't be
+   * "recomputed live" after the fact the way an in-memory map can. Same
+   * staleness bug class as #10 (assignStaff()/removeStaff() already call
+   * rollupCosts() for exactly this reason -- this was the one direct
+   * write path that didn't).
    */
   async setEventDirectCosts(
     ctx: TenantContext,
@@ -650,6 +664,7 @@ export class EventsService implements OnApplicationBootstrap {
       entityId: eventId,
       metadata: patch,
     });
+    await this.rollupCosts(ctx, eventId);
     return getEventDirectCosts(eventId);
   }
 

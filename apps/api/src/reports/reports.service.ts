@@ -3,6 +3,8 @@ import { Prisma } from "@ibirdos/db";
 const Decimal = Prisma.Decimal;
 import { prisma, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
+import { computeEventProfit } from "@ibirdos/types";
+import { getEventDirectCostsBulk } from "../events/event-direct-costs.raw";
 
 const log = moduleLogger("ReportsService");
 
@@ -307,22 +309,35 @@ export class ReportsService {
       },
     });
 
-    const grouped: Record<string, { count: number; revenueCents: number; foodCostCents: number; laborCostCents: number }> = {};
+    // #2 fix: this report computed profit/margin with its own inline
+    // revenue-food-labor subtraction instead of calling the shared
+    // computeEventProfit() -- found during post-migration verification
+    // (the #2 audit that wired every OTHER profit/margin reader missed
+    // this one specifically because it never called computeEventProfit()
+    // at all, so a grep for that call site didn't surface it). Direct
+    // costs (packaging/delivery/equipment/other) were silently absent
+    // from this report's profit/margin, even after the migration ran.
+    const directCostsById = await getEventDirectCostsBulk(events.map((e) => e.id));
+
+    const grouped: Record<string, { count: number; revenueCents: number; foodCostCents: number; laborCostCents: number; directCostsCents: number }> = {};
     for (const e of events) {
       const type = e.serviceType;
-      if (!grouped[type]) grouped[type] = { count: 0, revenueCents: 0, foodCostCents: 0, laborCostCents: 0 };
+      if (!grouped[type]) grouped[type] = { count: 0, revenueCents: 0, foodCostCents: 0, laborCostCents: 0, directCostsCents: 0 };
+      const dc = directCostsById.get(e.id);
       grouped[type].count++;
       grouped[type].revenueCents += e.quotedPriceCents ?? 0;
       grouped[type].foodCostCents += e.computedFoodCostCents ?? 0;
       grouped[type].laborCostCents += e.computedLaborCostCents ?? 0;
+      grouped[type].directCostsCents += dc ? dc.packagingCostCents + dc.deliveryCostCents + dc.equipmentCostCents + dc.otherDirectCostCents : 0;
     }
 
-    return Object.entries(grouped).map(([serviceType, v]) => ({
-      serviceType,
-      ...v,
-      profitCents: v.revenueCents - v.foodCostCents - v.laborCostCents,
-      marginPct: pct(v.revenueCents - v.foodCostCents - v.laborCostCents, v.revenueCents),
-    }));
+    return Object.entries(grouped).map(([serviceType, v]) => {
+      const { profitCents, marginPct } = computeEventProfit({
+        revenueCents: v.revenueCents, foodCostCents: v.foodCostCents, laborCostCents: v.laborCostCents,
+        otherCostCents: v.directCostsCents,
+      });
+      return { serviceType, ...v, profitCents: profitCents ?? 0, marginPct };
+    });
   }
 
   async getVendorPriceChangeReport(ctx: TenantContext, range: DateRange) {

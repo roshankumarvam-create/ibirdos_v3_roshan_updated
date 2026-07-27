@@ -10,11 +10,12 @@ vi.mock("@ibirdos/db", () => ({
     event: { findMany: vi.fn() },
     ingredientPriceHistory: { findMany: vi.fn() },
     insight: { findMany: vi.fn() },
+    $queryRaw: vi.fn(),
   },
   Prisma: { Decimal: class Decimal { constructor(v: any) { Object.assign(this, { d: [v] }); } } },
 }));
 
-vi.mock("@ibirdos/logger", () => ({ moduleLogger: () => ({ info: vi.fn(), error: vi.fn() }) }));
+vi.mock("@ibirdos/logger", () => ({ moduleLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }));
 
 import { prisma } from "@ibirdos/db";
 
@@ -352,6 +353,56 @@ describe("ReportsService", () => {
       expect(result).toEqual([
         { period: "2024-01-10", posNetSales: 0, grossSales: 0, eventRevenue: 312.5, netSales: 312.5 },
       ]);
+    });
+  });
+
+  describe("getCateringVsEventProfit — #2 fix: direct costs were silently missing (found during post-migration verification)", () => {
+    it("includes packaging/delivery/equipment/other in profit and margin, grouped by service type", async () => {
+      vi.mocked(prisma.event.findMany).mockResolvedValue([
+        { id: "ev1", name: "E1", serviceType: "BUFFET", startsAt: new Date("2024-01-05"), quotedPriceCents: 44375, computedFoodCostCents: 20307, computedLaborCostCents: 10000, computedMarginPct: null },
+      ] as any);
+      vi.mocked(prisma.$queryRaw).mockResolvedValue([
+        { id: "ev1", packaging_cost_cents: 500, delivery_cost_cents: 1500, equipment_cost_cents: 3000, other_direct_cost_cents: 200 },
+      ] as any);
+
+      const result = await service.getCateringVsEventProfit(ctx, range);
+
+      expect(result).toHaveLength(1);
+      // $443.75 - $203.07 - $100.00 - ($5+$15+$30+$2=$52.00) = $88.68
+      expect(result[0]!.profitCents).toBe(8868);
+      expect(result[0]!.directCostsCents).toBe(5200);
+      expect(result[0]!.marginPct).toBeCloseTo(19.98, 1);
+    });
+
+    it("degrades to the pre-migration result (direct costs treated as 0) when the columns don't exist yet", async () => {
+      vi.mocked(prisma.event.findMany).mockResolvedValue([
+        { id: "ev1", name: "E1", serviceType: "BUFFET", startsAt: new Date("2024-01-05"), quotedPriceCents: 44375, computedFoodCostCents: 20307, computedLaborCostCents: 10000, computedMarginPct: null },
+      ] as any);
+      vi.mocked(prisma.$queryRaw).mockRejectedValue(new Error('column "packaging_cost_cents" does not exist'));
+
+      const result = await service.getCateringVsEventProfit(ctx, range);
+
+      expect(result[0]!.profitCents).toBe(14068); // $140.68, identical to before #2
+      expect(result[0]!.directCostsCents).toBe(0);
+    });
+
+    it("groups multiple events by service type and sums direct costs per group", async () => {
+      vi.mocked(prisma.event.findMany).mockResolvedValue([
+        { id: "ev1", name: "E1", serviceType: "BUFFET", startsAt: new Date("2024-01-05"), quotedPriceCents: 10000, computedFoodCostCents: 4000, computedLaborCostCents: 1000, computedMarginPct: null },
+        { id: "ev2", name: "E2", serviceType: "BUFFET", startsAt: new Date("2024-01-06"), quotedPriceCents: 20000, computedFoodCostCents: 8000, computedLaborCostCents: 2000, computedMarginPct: null },
+      ] as any);
+      vi.mocked(prisma.$queryRaw).mockResolvedValue([
+        { id: "ev1", packaging_cost_cents: 100, delivery_cost_cents: 0, equipment_cost_cents: 0, other_direct_cost_cents: 0 },
+        { id: "ev2", packaging_cost_cents: 200, delivery_cost_cents: 0, equipment_cost_cents: 0, other_direct_cost_cents: 0 },
+      ] as any);
+
+      const result = await service.getCateringVsEventProfit(ctx, range);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.count).toBe(2);
+      expect(result[0]!.directCostsCents).toBe(300);
+      // (10000+20000) - (4000+8000) - (1000+2000) - 300 = 14700
+      expect(result[0]!.profitCents).toBe(14700);
     });
   });
 });
