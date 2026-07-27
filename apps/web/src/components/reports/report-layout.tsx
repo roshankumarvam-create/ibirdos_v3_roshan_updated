@@ -56,7 +56,22 @@ export function ReportLayout({
           />
         </div>
       </header>
+      {/* #5: show the selected reporting period clearly next to the
+          numbers themselves, not just in the editable date pickers above
+          -- matters most on the purchases/prime-cost reports, where the
+          period the % is computed over is exactly what was in question. */}
+      <p className="text-xs text-text-tertiary">
+        Showing {formatDisplayDate(range.from)} – {formatDisplayDate(range.to)}
+      </p>
       {children(range)}
     </div>
   );
+}
+
+function formatDisplayDate(isoDate: string): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (!year || !month || !day) return isoDate;
+  return new Date(year, month - 1, day).toLocaleDateString("en-US", {
+    year: "numeric", month: "short", day: "numeric",
+  });
 }

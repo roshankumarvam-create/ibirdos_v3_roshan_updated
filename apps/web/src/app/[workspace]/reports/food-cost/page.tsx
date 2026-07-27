@@ -31,18 +31,21 @@ export default function FoodCostReportPage() {
   });
 
   const chartData = data ? [
-    { name: "Food Cost", value: data.foodCostCents / 100 },
+    { name: "Purchases", value: data.foodCostCents / 100 },
     { name: "Net Sales", value: data.netSalesCents / 100 },
   ] : [];
 
   return (
-    <ReportLayout title="Food Cost vs Sales" backHref={`/${ws}/reports`} onRangeChange={setRange}>
+    // #5: relabeled from "Food Cost vs Sales" -- this is raw invoice
+    // purchases, not COGS (no beginning/ending inventory valuation in
+    // this app). See ReportsService.getFoodCostVsSales's comment.
+    <ReportLayout title="Purchases vs Sales" backHref={`/${ws}/reports`} onRangeChange={setRange}>
       {() => (
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-4">
             <Card>
               <CardBody>
-                <div className="text-xs text-text-tertiary uppercase tracking-wider">Food Cost</div>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Purchases</div>
                 <div className="mt-1 text-2xl font-semibold">
                   {isLoading ? "—" : `$${((data?.foodCostCents ?? 0) / 100).toFixed(2)}`}
                 </div>
@@ -63,7 +66,7 @@ export default function FoodCostReportPage() {
             </Card>
             <Card>
               <CardBody>
-                <div className="text-xs text-text-tertiary uppercase tracking-wider">Food Cost %</div>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Purchases as % of Sales</div>
                 <div className={`mt-1 text-2xl font-semibold ${!isLoading && data?.foodCostPct != null && data.foodCostPct > 35 ? "text-danger" : ""}`}>
                   {isLoading ? "—" : data?.foodCostPct != null ? `${data.foodCostPct}%` : "N/A"}
                 </div>

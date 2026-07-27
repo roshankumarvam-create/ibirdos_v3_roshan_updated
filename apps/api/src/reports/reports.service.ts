@@ -70,11 +70,39 @@ export class ReportsService {
     return buckets;
   }
 
+  /**
+   * #5 (client relabel request): everything this method (and getPrimeCost,
+   * below) returns is raw INVOICE PURCHASES within the period, not true
+   * COGS. True COGS = beginning inventory + purchases − ending inventory;
+   * true prime cost = COGS + direct labor. This app has no
+   * beginning/ending inventory valuation anywhere, so that's not
+   * computable today -- a later phase, deferred by the client, not
+   * something to fake here. The API/type names below (foodCostCents,
+   * getFoodCostVsSales, getPrimeCost, FoodCostData, PrimeCostData) are
+   * kept as-is to avoid a wider rename across every caller; only the
+   * user-facing labels changed ("Purchases" / "Purchases as % of Sales"),
+   * not what's actually computed or what these identifiers are called.
+   */
   async getFoodCostVsSales(ctx: TenantContext, range: DateRange) {
     const { workspaceId } = ctx;
     const [invoices, sales, eventRevenue] = await Promise.all([
       prisma.invoice.findMany({
-        where: { workspaceId, status: "CONFIRMED", confirmedAt: { gte: range.from, lte: range.to }, deletedAt: null },
+        where: {
+          workspaceId, status: "CONFIRMED", deletedAt: null,
+          // Period alignment: purchases must fall in the same window as
+          // sales/events below using the date the purchase actually
+          // happened (the vendor's own invoice date), not confirmedAt
+          // (whenever someone got around to reviewing it in the app --
+          // could be days or weeks later, silently shifting purchases
+          // into a different reporting period than the sales they funded).
+          // Same class of bug already fixed for price history (P1-C).
+          // Falls back to confirmedAt only for older invoices that predate
+          // invoiceDate capture / never had one extracted.
+          OR: [
+            { invoiceDate: { gte: range.from, lte: range.to } },
+            { invoiceDate: null, confirmedAt: { gte: range.from, lte: range.to } },
+          ],
+        },
         select: {
           lines: {
             where: { excluded: false, category: "FOOD_INGREDIENT" },
@@ -176,6 +204,9 @@ export class ReportsService {
     };
   }
 
+  // #5: "primeCost" here is purchases + labor, not true prime cost (COGS +
+  // labor) -- see the comment on getFoodCostVsSales above. Displayed as
+  // "Purchases + Labor" in the UI, not "Prime Cost".
   async getPrimeCost(ctx: TenantContext, range: DateRange) {
     const { workspaceId } = ctx;
     const [food, labor] = await Promise.all([

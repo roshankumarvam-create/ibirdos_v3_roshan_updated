@@ -1,9 +1,13 @@
 import { requireSession } from "@/lib/session";
 
+// #5: these two are invoice-purchases-based, not true COGS/prime cost
+// (COGS needs beginning/ending inventory valuation, which this app
+// doesn't track) -- labeled "Purchases" accordingly, never "Food Cost" or
+// "Prime Cost". See the comment on ReportsService.getFoodCostVsSales.
 const REPORTS = [
-  { href: "food-cost",           title: "Food Cost vs Sales",    description: "COGS as % of net sales" },
+  { href: "food-cost",           title: "Purchases vs Sales",    description: "Invoice purchases as % of net sales (not full COGS)" },
   { href: "labor-cost",          title: "Labor Cost vs Sales",   description: "Labor spend as % of net sales" },
-  { href: "prime-cost",          title: "Prime Cost",            description: "Combined food + labor as % of net sales" },
+  { href: "prime-cost",          title: "Purchases + Labor",     description: "Combined purchases + labor as % of net sales (not true prime cost)" },
   { href: "vendor-price-changes", title: "Vendor Price Changes", description: "Ingredient price movements by vendor" },
   { href: "vendor-aging",        title: "Vendor Aging",          description: "Unpaid invoices by aging bucket" },
 ];

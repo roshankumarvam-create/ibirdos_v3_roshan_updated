@@ -35,19 +35,22 @@ export default function PrimeCostReportPage() {
   });
 
   const pieData = data ? [
-    { name: "Food", value: data.foodCost },
+    { name: "Purchases", value: data.foodCost },
     { name: "Labor", value: data.laborCost },
     { name: "Other", value: Math.max(0, data.netSales - data.foodCost - data.laborCost) },
   ] : [];
 
   return (
-    <ReportLayout title="Prime Cost" backHref={`/${ws}/reports`} onRangeChange={setRange}>
+    // #5: relabeled from "Prime Cost" -- this is invoice purchases + labor,
+    // not true prime cost (COGS + labor). See ReportsService.getPrimeCost's
+    // comment for why COGS isn't computable here today.
+    <ReportLayout title="Purchases + Labor" backHref={`/${ws}/reports`} onRangeChange={setRange}>
       {() => (
         <div className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
             <Card>
               <CardBody>
-                <div className="text-xs text-text-tertiary uppercase tracking-wider">Food Cost</div>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Purchases</div>
                 <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : `$${(data?.foodCost ?? 0).toFixed(2)}`}</div>
               </CardBody>
             </Card>
@@ -64,7 +67,7 @@ export default function PrimeCostReportPage() {
             </Card>
             <Card>
               <CardBody>
-                <div className="text-xs text-text-tertiary uppercase tracking-wider">Prime Cost</div>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Purchases + Labor</div>
                 <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : `$${(data?.primeCost ?? 0).toFixed(2)}`}</div>
               </CardBody>
             </Card>
@@ -81,7 +84,7 @@ export default function PrimeCostReportPage() {
             </Card>
             <Card>
               <CardBody>
-                <div className="text-xs text-text-tertiary uppercase tracking-wider">Prime Cost %</div>
+                <div className="text-xs text-text-tertiary uppercase tracking-wider">Purchases + Labor as % of Sales</div>
                 <div className="mt-1 text-2xl font-semibold">{isLoading ? "—" : data?.primeCostPct != null ? `${data.primeCostPct}%` : "N/A"}</div>
               </CardBody>
             </Card>

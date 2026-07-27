@@ -70,6 +70,30 @@ describe("ReportsService", () => {
       expect(vi.mocked(prisma.invoice.findMany).mock.calls[0]![0]).toMatchObject({ where: { workspaceId: "ws1" } });
       expect(vi.mocked(prisma.dailySales.findMany).mock.calls[0]![0]).toMatchObject({ where: { workspaceId: "ws1" } });
     });
+
+    it("#5 fix: filters purchases by invoiceDate (when to use the SAME period as sales), not confirmedAt", async () => {
+      vi.mocked(prisma.invoice.findMany).mockResolvedValue([]);
+      vi.mocked(prisma.dailySales.findMany).mockResolvedValue([]);
+
+      await service.getFoodCostVsSales(ctx, range);
+
+      const invoiceWhere: any = (vi.mocked(prisma.invoice.findMany).mock.calls[0] as any)[0].where;
+      // Must NOT filter on confirmedAt alone (the pre-fix bug: an invoice
+      // for a purchase made inside `range` but not reviewed/confirmed in
+      // the app until after `range` closed would silently fall outside
+      // the period, disagreeing with the sales side which is dated by
+      // when the sale actually happened).
+      expect(invoiceWhere.confirmedAt).toBeUndefined();
+      // Must match on invoiceDate (the actual purchase date) within the
+      // exact same range object used for dailySales/events below, with a
+      // fallback to confirmedAt only for invoices with no invoiceDate at all.
+      expect(invoiceWhere.OR).toEqual([
+        { invoiceDate: { gte: range.from, lte: range.to } },
+        { invoiceDate: null, confirmedAt: { gte: range.from, lte: range.to } },
+      ]);
+      const salesWhere: any = (vi.mocked(prisma.dailySales.findMany).mock.calls[0] as any)[0].where;
+      expect(salesWhere.saleDate).toEqual({ gte: range.from, lte: range.to });
+    });
   });
 
   describe("getLaborCostVsSales", () => {
