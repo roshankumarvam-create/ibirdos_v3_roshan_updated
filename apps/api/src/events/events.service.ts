@@ -976,6 +976,22 @@ export class EventsService implements OnApplicationBootstrap {
     return assignment;
   }
 
+  /**
+   * #2: no UI existed anywhere to call assignStaff() above despite the
+   * full EventStaffAssignment model/endpoint already working -- adding
+   * the matching remove endpoint too so a mistaken assignment (wrong
+   * person, wrong hours) can actually be corrected from the UI, not
+   * just added.
+   */
+  async removeStaff(ctx: TenantContext, eventId: string, staffId: string): Promise<void> {
+    const assignment = await prisma.eventStaffAssignment.findFirst({
+      where: { id: staffId, eventId, workspaceId: ctx.workspaceId },
+    });
+    if (!assignment) throw new NotFoundException({ code: "not_found", message: "Staff assignment not found" });
+    await prisma.eventStaffAssignment.delete({ where: { id: staffId } });
+    await this.rollupCosts(ctx, eventId);
+  }
+
   // -----------------------------------------------------------------
   // Kitchen packet generation
   // -----------------------------------------------------------------

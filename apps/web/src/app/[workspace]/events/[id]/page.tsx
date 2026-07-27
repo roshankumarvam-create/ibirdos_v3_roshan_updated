@@ -15,6 +15,7 @@ import { MarkPaidButton } from "./mark-paid-button";
 import { SendQuoteButton } from "./send-quote-button";
 import { DeleteEventButton } from "./delete-event-button";
 import { DirectCostsCard } from "./DirectCostsCard";
+import { StaffCard } from "./StaffCard";
 
 interface MenuItem {
   id: string;
@@ -172,16 +173,22 @@ export default async function EventDetailPage({
   const c = await cookies();
   const canSeeFinancials = canViewFinancials(user.role);
 
-  const [eventRes, reqRes, outstandingRes] = await Promise.all([
+  const [eventRes, reqRes, outstandingRes, usersRes] = await Promise.all([
     api.get<EventDetail>(`/events/${id}`, { cookies: c }),
     api.get<IngredientRequirement[]>(`/events/${id}/ingredient-requirements`, { cookies: c }),
     api.get<OutstandingShortage[]>(`/events/${id}/outstanding-shortages`, { cookies: c }),
+    // #2: only OWNER/MANAGER can assign staff (event.assign_staff) -- no
+    // need to fetch the workspace member list for roles that can't act on it.
+    canViewFinancials(user.role)
+      ? api.get<{ users: Array<{ id: string; username: string; displayName: string | null }> }>("/users", { cookies: c })
+      : Promise.resolve({ data: null, error: null }),
   ]);
 
   if (!eventRes.data) notFound();
   const event = eventRes.data;
   const requirements = reqRes.data ?? [];
   const outstandingShortages = outstandingRes.data ?? [];
+  const assignableUsers = usersRes.data?.users ?? [];
 
   const isPaid = event.paymentStatus === "PAID";
   // P0-3 fix: previously read event.inventoryShortages, a snapshot frozen
@@ -572,35 +579,14 @@ export default async function EventDetailPage({
 
         {/* Right: staff + actions */}
         <div className="space-y-4">
-          <Card>
-            <CardHeader><CardTitle>Staff</CardTitle></CardHeader>
-            {event.staff.length === 0 ? (
-              <CardBody className="text-xs text-text-tertiary">No staff assigned</CardBody>
-            ) : (
-              <div className="px-5 pb-4 space-y-3">
-                {event.staff.map((s) => (
-                  <div key={s.id} className="text-sm">
-                    <div className="font-medium text-text-primary">
-                      {s.user?.displayName ?? s.user?.username ?? "Unassigned"}
-                    </div>
-                    <div className="text-xs text-text-secondary">
-                      {s.role.replace(/_/g, " ").toLowerCase()} ·{" "}
-                      {Number(s.hours).toFixed(1)}h
-                      {canSeeFinancials && s.hourlyRateCents != null && (
-                        <> @ {formatCents(s.hourlyRateCents)}/h ={" "}
-                          {formatCents(Math.round(Number(s.hours) * s.hourlyRateCents))}</>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {canSeeFinancials && (
-                  <div className="pt-2 border-t border-bg-border text-xs text-text-secondary">
-                    Total labor: <span className="font-mono">{formatCents(totalLaborCents)}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </Card>
+          <StaffCard
+            eventId={event.id}
+            staff={event.staff}
+            assignableUsers={assignableUsers}
+            totalLaborCents={totalLaborCents}
+            canSeeFinancials={canSeeFinancials}
+            canEdit={canSeeFinancials}
+          />
 
           {canSeeFinancials && (
             <DirectCostsCard

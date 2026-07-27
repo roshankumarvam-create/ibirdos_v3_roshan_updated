@@ -160,6 +160,12 @@ export class EventsController {
     return this.svc.assignStaff(ctx, id, body).then(ok);
   }
 
+  @Delete(":id/staff/:staffId") @RequirePermission("event.assign_staff") @HttpCode(HttpStatus.OK)
+  removeStaff(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+              @Param("staffId") staffId: string): Promise<any> {
+    return this.svc.removeStaff(ctx, id, staffId).then(() => ok(null));
+  }
+
   @Post(":id/kitchen-packet/generate") @RequirePermission("event.update")
   generatePacket(@CurrentCtx() ctx: TenantContext, @Param("id") id: string): Promise<any> {
     return this.svc.generateKitchenPacket(ctx, id).then(ok);

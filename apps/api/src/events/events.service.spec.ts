@@ -10,6 +10,8 @@ const mockEventUpdate = vi.fn();
 const mockEventUpdateMany = vi.fn();
 const mockInvoiceLineFindMany = vi.fn();
 const mockKitchenTaskFindMany = vi.fn();
+const mockStaffFindFirst = vi.fn();
+const mockStaffDelete = vi.fn();
 const mockWriteAudit = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@ibirdos/db", () => ({
@@ -25,6 +27,10 @@ vi.mock("@ibirdos/db", () => ({
     },
     kitchenTask: {
       findMany: (...args: any[]) => mockKitchenTaskFindMany(...args),
+    },
+    eventStaffAssignment: {
+      findFirst: (...args: any[]) => mockStaffFindFirst(...args),
+      delete: (...args: any[]) => mockStaffDelete(...args),
     },
   },
   Prisma: { Decimal: class Decimal { constructor(v: any) { Object.assign(this, { v }); } } },
@@ -473,5 +479,45 @@ describe("EventsService.list — #10: margin computed live, not read from a poss
     const result = await svc.list(ctx, {});
 
     expect(result.items[0].computedMarginPct).toBeNull();
+  });
+});
+
+describe("EventsService.removeStaff — #2: no UI existed to correct a mistaken staff assignment", () => {
+  let svc: EventsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
+    // removeStaff() calls rollupCosts() after deleting -- returning null
+    // here lets rollupCosts() no-op early (its own `if (!event) return`),
+    // keeping this test scoped to removeStaff's own logic.
+    mockEventFindFirst.mockResolvedValue(null);
+  });
+
+  it("deletes the assignment when it exists in this workspace/event", async () => {
+    mockStaffFindFirst.mockResolvedValue({ id: "staff1", eventId: "ev1", workspaceId: "ws1" });
+    mockStaffDelete.mockResolvedValue({ id: "staff1" });
+
+    await svc.removeStaff(ctx, "ev1", "staff1");
+
+    expect(mockStaffDelete).toHaveBeenCalledWith({ where: { id: "staff1" } });
+  });
+
+  it("throws not_found instead of silently no-op'ing when the assignment doesn't exist in this event/workspace", async () => {
+    mockStaffFindFirst.mockResolvedValue(null);
+
+    await expect(svc.removeStaff(ctx, "ev1", "nope")).rejects.toThrow();
+    expect(mockStaffDelete).not.toHaveBeenCalled();
+  });
+
+  it("multi-tenant isolation: lookup is scoped to workspaceId, not just the assignment id", async () => {
+    mockStaffFindFirst.mockResolvedValue({ id: "staff1", eventId: "ev1", workspaceId: "ws1" });
+    mockStaffDelete.mockResolvedValue({ id: "staff1" });
+
+    await svc.removeStaff(ctx, "ev1", "staff1");
+
+    expect(mockStaffFindFirst.mock.calls[0]![0]).toMatchObject({
+      where: { id: "staff1", eventId: "ev1", workspaceId: ctx.workspaceId },
+    });
   });
 });
