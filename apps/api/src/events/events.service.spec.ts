@@ -178,6 +178,19 @@ describe("computeMarginPct — Fix #5: margin formula includes labor cost", () =
     expect(result).not.toBeNull();
     expect(Number((result as any).v)).toBe(999.99);
   });
+
+  it("#2 fix: directCostsCents (4th param) subtracts on top of food + labor when provided", () => {
+    // revenue $1000, food $400, labor $0, direct costs $100 -> 50%, not 60%
+    const result = computeMarginPct(100_000, 40_000, 0, 10_000);
+    expect(result).not.toBeNull();
+    expect(Number((result as any).v)).toBeCloseTo(50.0, 1);
+  });
+
+  it("#2 fix: directCostsCents defaults to 0 when omitted -- identical to pre-#2 behavior", () => {
+    const withDefault = computeMarginPct(100_000, 40_000, 0);
+    const explicitZero = computeMarginPct(100_000, 40_000, 0, 0);
+    expect(Number((withDefault as any).v)).toBe(Number((explicitZero as any).v));
+  });
 });
 
 describe("computeLiveQuoteTotalCents — BUG 3: labor IS billed, must be included in the quote total", () => {

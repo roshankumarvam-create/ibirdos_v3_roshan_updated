@@ -25,15 +25,19 @@ export interface EventProfitInputs {
   foodCostCents: number;
   laborCostCents: number;
   /**
-   * Packaging/delivery/other per-event costs. No such figure is
-   * currently tracked anywhere in the event-cost pipeline (Recipe has
-   * a paperCostCents field, but it isn't rolled into any event or
-   * recipe cost total today) -- defaults to 0 so this formula is a
-   * straight revenue-food-labor calc until that's wired up. Accepting
-   * the parameter now means the day it IS wired up, every caller of
-   * this function picks it up for free instead of needing a second
-   * round of "who forgot to subtract it" fixes.
+   * #2: per-event direct cost inputs (packaging/delivery/equipment
+   * rental, plus a catch-all "other"). Wired up via the additive
+   * Event.{packaging,delivery,equipment,other_direct}_cost_cents
+   * columns -- see event-direct-costs.raw.ts and PENDING_MIGRATIONS.sql.
+   * All default to 0, so any caller that predates this (or a workspace
+   * where the migration hasn't run yet) gets the exact same
+   * revenue-food-labor result as before -- this is a pure addition, not
+   * a behavior change for existing callers.
    */
+  packagingCostCents?: number;
+  deliveryCostCents?: number;
+  equipmentCostCents?: number;
+  /** Catch-all for direct costs that don't fit the three categories above. */
   otherCostCents?: number;
 }
 
@@ -43,11 +47,15 @@ export interface EventProfitResult {
 }
 
 export function computeEventProfit(inputs: EventProfitInputs): EventProfitResult {
-  const { revenueCents, foodCostCents, laborCostCents, otherCostCents = 0 } = inputs;
+  const {
+    revenueCents, foodCostCents, laborCostCents,
+    packagingCostCents = 0, deliveryCostCents = 0, equipmentCostCents = 0, otherCostCents = 0,
+  } = inputs;
   if (revenueCents == null || revenueCents <= 0) {
     return { profitCents: null, marginPct: null };
   }
-  const profitCents = revenueCents - foodCostCents - laborCostCents - otherCostCents;
+  const directCostsCents = packagingCostCents + deliveryCostCents + equipmentCostCents + otherCostCents;
+  const profitCents = revenueCents - foodCostCents - laborCostCents - directCostsCents;
   const marginPct = (profitCents / revenueCents) * 100;
   return { profitCents, marginPct };
 }

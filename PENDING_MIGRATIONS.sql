@@ -283,3 +283,47 @@ ALTER TABLE recipes ADD COLUMN yield_variance_reason_note TEXT;
 -- (recipes.controller.ts's YieldVarianceReasonSchema), consistent with
 -- how every other enum-like free-text field in this schema is handled
 -- (e.g. DailySales.shift, KitchenTask.station).
+
+-- =====================================================================
+-- #2 -- per-event direct cost inputs (packaging / delivery / equipment
+-- rental / other). NOT run yet. NOT added to schema.prisma yet,
+-- deliberately -- same reason as quote_token and the #20 yield-variance
+-- columns above: Prisma's generated client issues an explicit column
+-- list for every query against a model, so adding these four to the
+-- Event model in schema.prisma before the columns actually exist would
+-- break EVERY query against `events`, not just direct-cost ones, the
+-- moment this deploys. apps/api/src/events/event-direct-costs.raw.ts is
+-- the ONLY file that touches these four columns, via raw SQL, and
+-- treats a "column does not exist" error as "feature not yet enabled":
+-- reads degrade to all-zero (a true no-op -- computeEventProfit()
+-- already defaults these to 0), writes return a clear 400 instead of
+-- silently discarding a cost the operator typed in. So the feature is
+-- fully inert -- every profit/margin figure everywhere (event detail,
+-- events list, dashboard KPI, P&L report, the cached
+-- Event.computedMarginPct rollupCosts() writes) computes exactly as it
+-- did before -- until this migration runs.
+--
+-- What this is for: #2 in the client's numbered list. Client asked for
+-- simple per-event cost inputs that flow into the existing profit
+-- formula (profit = revenue - food - labor - packaging - delivery -
+-- equipment - other) -- see packages/types/src/money.ts's
+-- computeEventProfit(), extended to accept these four as named,
+-- independently-optional fields (all default 0).
+
+ALTER TABLE events ADD COLUMN packaging_cost_cents INTEGER;
+ALTER TABLE events ADD COLUMN delivery_cost_cents INTEGER;
+ALTER TABLE events ADD COLUMN equipment_cost_cents INTEGER;
+ALTER TABLE events ADD COLUMN other_direct_cost_cents INTEGER;
+
+-- Corresponding schema.prisma change to make once the above has run
+-- (and event-direct-costs.raw.ts switched over to normal Prisma calls,
+-- same follow-up quote-token.service.ts already went through):
+--
+--   model Event {
+--     ...
+--     packagingCostCents    Int? @map("packaging_cost_cents")
+--     deliveryCostCents     Int? @map("delivery_cost_cents")
+--     equipmentCostCents    Int? @map("equipment_cost_cents")
+--     otherDirectCostCents  Int? @map("other_direct_cost_cents")
+--     ...
+--   }

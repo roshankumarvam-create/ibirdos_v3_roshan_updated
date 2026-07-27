@@ -22,6 +22,10 @@ import { canViewFinancials } from "@ibirdos/permissions";
 import { env } from "@ibirdos/config";
 import { getOrCreateQuoteToken } from "./quote-token.service";
 import { listOutstandingForEvent, resolveShortage } from "./event-ingredient-shortage.service";
+import {
+  getEventDirectCosts, getEventDirectCostsBulk,
+  setEventDirectCosts as setEventDirectCostsRaw, type EventDirectCosts,
+} from "./event-direct-costs.raw";
 
 const log = moduleLogger("EventsService");
 
@@ -394,6 +398,11 @@ export class EventsService implements OnApplicationBootstrap {
     });
     const page = items.length > limit ? items.slice(0, limit) : items;
     const canSeeFinancials = canViewFinancials(ctx.role);
+    // #2: bulk fetch (one query for the whole page) -- degrades to an
+    // empty map until the migration runs, so `.get(id)` below is
+    // undefined and directCostsCents falls back to 0 exactly like the
+    // pre-#2 behavior.
+    const directCostsById = await getEventDirectCostsBulk(page.map((e: any) => e.id));
     return {
       items: page.map((e: any) => {
         // #10 fix: the stored computedMarginPct column is only written by
@@ -407,10 +416,15 @@ export class EventsService implements OnApplicationBootstrap {
         // stale" pattern as P0-1/P0-3/P0-4 -- compute live from the same
         // computeEventProfit() helper instead of trusting the stored column.
         const effectiveRevenueCents = e.quotedTotalOverrideCents ?? e.quotedPriceCents;
+        const directCosts = directCostsById.get(e.id);
         const { marginPct } = computeEventProfit({
           revenueCents: effectiveRevenueCents,
           foodCostCents: e.computedFoodCostCents ?? 0,
           laborCostCents: e.computedLaborCostCents ?? 0,
+          packagingCostCents: directCosts?.packagingCostCents,
+          deliveryCostCents: directCosts?.deliveryCostCents,
+          equipmentCostCents: directCosts?.equipmentCostCents,
+          otherCostCents: directCosts?.otherDirectCostCents,
         });
         const shaped = {
           ...e,
@@ -451,7 +465,11 @@ export class EventsService implements OnApplicationBootstrap {
       orderBy: [{ taskType: "asc" }, { displayOrder: "asc" }],
     });
 
-    const shaped = { ...e, kitchenTasks };
+    // #2: additive, inert-until-migrated -- degrades to all-zero (a true
+    // no-op for the profit formula) until PENDING_MIGRATIONS.sql runs.
+    const directCosts = await getEventDirectCosts(id);
+
+    const shaped = { ...e, kitchenTasks, ...directCosts };
     return canViewFinancials(ctx.role) ? shaped : this.redactEventFinancials(shaped);
   }
 
@@ -473,6 +491,9 @@ export class EventsService implements OnApplicationBootstrap {
       quotedPriceCents, computedFoodCostCents, computedLaborCostCents, computedMarginPct,
       markupPct, laborTotalCents, laborRateCentsPerHour, laborHoursEstimate,
       frozenRecipeCostsCents, frozenIngredientPricesCents, quotedTotalOverrideCents,
+      // #2: per-event direct costs -- financial figures, same redaction as
+      // the other cost fields above.
+      packagingCostCents, deliveryCostCents, equipmentCostCents, otherDirectCostCents,
       ...rest
     } = e;
     const result: any = rest;
@@ -606,6 +627,30 @@ export class EventsService implements OnApplicationBootstrap {
       },
     });
     return updated;
+  }
+
+  /**
+   * #2: set this event's packaging/delivery/equipment/other direct cost
+   * inputs. Additive columns, not yet migrated -- see
+   * event-direct-costs.raw.ts. Simple per-event cost inputs, not costed
+   * from any other model -- just numbers the operator types in.
+   */
+  async setEventDirectCosts(
+    ctx: TenantContext,
+    eventId: string,
+    patch: Partial<EventDirectCosts>,
+  ): Promise<EventDirectCosts> {
+    const event = await prisma.event.findFirst({ where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null } });
+    if (!event) throw new NotFoundException({ code: "not_found", message: "Event not found" });
+
+    await setEventDirectCostsRaw(ctx.workspaceId, eventId, patch);
+    await writeAudit(ctx, {
+      action: "event.direct_costs_updated",
+      entityType: "Event",
+      entityId: eventId,
+      metadata: patch,
+    });
+    return getEventDirectCosts(eventId);
   }
 
   // -----------------------------------------------------------------
@@ -1088,7 +1133,14 @@ export class EventsService implements OnApplicationBootstrap {
 
     // Use the quote-builder override when present (consistent with sendQuote + frontend KPIs)
     const effectiveRevenueCents = (event as any).quotedTotalOverrideCents ?? event.quotedPriceCents;
-    const marginPct = computeMarginPct(effectiveRevenueCents, foodCents, laborCents);
+    // #2: fold packaging/delivery/equipment/other into the SAME cached
+    // margin every other reader (events list, dashboard, P&L) trusts --
+    // degrades to 0 (no effect) until the migration runs, exactly like
+    // every other reader of getEventDirectCosts().
+    const directCosts = await getEventDirectCosts(eventId);
+    const directCostsCents = directCosts.packagingCostCents + directCosts.deliveryCostCents
+      + directCosts.equipmentCostCents + directCosts.otherDirectCostCents;
+    const marginPct = computeMarginPct(effectiveRevenueCents, foodCents, laborCents, directCostsCents);
 
     await prisma.event.update({
       where: { id: eventId },
@@ -1562,8 +1614,15 @@ export function computeMarginPct(
   revenueCents: number | null | undefined,
   foodCents: number,
   laborCents: number,
+  // #2: packaging/delivery/equipment/other direct costs, pre-summed by
+  // the caller (rollupCosts() sums getEventDirectCosts()'s four fields).
+  // Defaults to 0 -- every existing call/test keeps its exact prior
+  // result when this is omitted.
+  directCostsCents = 0,
 ): Decimal | null {
-  const { marginPct } = computeEventProfit({ revenueCents, foodCostCents: foodCents, laborCostCents: laborCents });
+  const { marginPct } = computeEventProfit({
+    revenueCents, foodCostCents: foodCents, laborCostCents: laborCents, otherCostCents: directCostsCents,
+  });
   if (marginPct == null) return null;
   const clamped = Math.max(-MARGIN_PCT_DB_BOUND, Math.min(MARGIN_PCT_DB_BOUND, marginPct));
   return new Decimal(clamped.toFixed(2));

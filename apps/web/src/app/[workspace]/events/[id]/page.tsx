@@ -14,6 +14,7 @@ import { OutstandingShortageBanner } from "./outstanding-shortage-banner";
 import { MarkPaidButton } from "./mark-paid-button";
 import { SendQuoteButton } from "./send-quote-button";
 import { DeleteEventButton } from "./delete-event-button";
+import { DirectCostsCard } from "./DirectCostsCard";
 
 interface MenuItem {
   id: string;
@@ -125,6 +126,15 @@ interface EventDetail {
   frozenIngredientPricesCents?: Record<string, number> | null;
   markupPct?: number;
   quotedTotalOverrideCents?: number | null;
+  // #2: additive, inert-until-migrated (see event-direct-costs.raw.ts) --
+  // omitted from the API response entirely for roles without financial
+  // visibility, same as the other cost fields above. Present as 0 (not
+  // undefined) once a role CAN see financials, even before the migration
+  // runs -- the raw-SQL layer degrades to 0, not to "field missing".
+  packagingCostCents?: number;
+  deliveryCostCents?: number;
+  equipmentCostCents?: number;
+  otherDirectCostCents?: number;
 }
 
 interface IngredientRequirement {
@@ -238,8 +248,15 @@ export default async function EventDetailPage({
   // correctly; unifying onto one helper means it can't quietly drift from
   // the other two call sites again the way the create-event page did.
   const profitBaseCents = revenueCents ?? (liveQuoteTotalCents > 0 ? liveQuoteTotalCents : null);
+  // #2: packaging/delivery/equipment/other -- 0 (not undefined) once this
+  // role can see financials at all, even before the migration runs (the
+  // raw-SQL layer already degrades to 0 server-side).
   const { profitCents, marginPct } = computeEventProfit({
     revenueCents: profitBaseCents, foodCostCents: foodCostCents, laborCostCents: totalLaborCents,
+    packagingCostCents: event.packagingCostCents ?? 0,
+    deliveryCostCents: event.deliveryCostCents ?? 0,
+    equipmentCostCents: event.equipmentCostCents ?? 0,
+    otherCostCents: event.otherDirectCostCents ?? 0,
   });
   const marginWarningLevel = getMarginWarningLevel(marginPct);
 
@@ -562,6 +579,17 @@ export default async function EventDetailPage({
               </div>
             )}
           </Card>
+
+          {canSeeFinancials && (
+            <DirectCostsCard
+              eventId={event.id}
+              packagingCostCents={event.packagingCostCents ?? 0}
+              deliveryCostCents={event.deliveryCostCents ?? 0}
+              equipmentCostCents={event.equipmentCostCents ?? 0}
+              otherDirectCostCents={event.otherDirectCostCents ?? 0}
+              canEdit={canSeeFinancials}
+            />
+          )}
 
           <Card>
             <CardHeader><CardTitle>Kitchen</CardTitle></CardHeader>

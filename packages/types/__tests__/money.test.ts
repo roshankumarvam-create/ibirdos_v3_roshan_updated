@@ -55,6 +55,22 @@ describe("computeEventProfit — P0-1: profit must subtract labor cost, not just
     expect(withDefault).toEqual(explicitZero);
   });
 
+  it("#2 fix: packaging/delivery/equipment/other all subtract together, matching profit = revenue - food - labor - packaging - delivery - equipment - other", () => {
+    const result = computeEventProfit({
+      revenueCents: 44375, foodCostCents: 20307, laborCostCents: 10000,
+      packagingCostCents: 500, deliveryCostCents: 1500, equipmentCostCents: 3000, otherCostCents: 200,
+    });
+    // $140.68 base profit - ($5 + $15 + $30 + $2) = $140.68 - $52.00 = $88.68
+    expect(result.profitCents).toBe(8868);
+  });
+
+  it("#2 fix: all four direct-cost fields default to 0 independently -- omitting any subset changes nothing else", () => {
+    const onlyPackaging = computeEventProfit({
+      revenueCents: 44375, foodCostCents: 20307, laborCostCents: 10000, packagingCostCents: 1000,
+    });
+    expect(onlyPackaging.profitCents).toBe(13068); // $140.68 - $10.00
+  });
+
   it("returns null profit/margin when there's no quote yet (revenue null)", () => {
     expect(computeEventProfit({ revenueCents: null, foodCostCents: 20307, laborCostCents: 10000 }))
       .toEqual({ profitCents: null, marginPct: null });

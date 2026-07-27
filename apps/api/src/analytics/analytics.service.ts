@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { prisma, type TenantContext } from "@ibirdos/db";
 import { moduleLogger } from "@ibirdos/logger";
 import { computeEventProfit } from "@ibirdos/types";
+import { getEventDirectCostsBulk } from "../events/event-direct-costs.raw";
 
 const log = moduleLogger("AnalyticsService");
 
@@ -34,6 +35,7 @@ export class AnalyticsService {
     // disagree with what an individual event page shows for the same window.
     const { marginPct: eventMarginPct } = computeEventProfit({
       revenueCents: events.revenueCents, foodCostCents: events.foodCostCents, laborCostCents: events.laborCostCents,
+      otherCostCents: events.directCostsCents,
     });
 
     return {
@@ -83,13 +85,22 @@ export class AnalyticsService {
         paymentStatus: "PAID",
         status: { not: "CANCELLED" },
       },
-      select: { quotedPriceCents: true, computedFoodCostCents: true, computedLaborCostCents: true },
+      select: { id: true, quotedPriceCents: true, computedFoodCostCents: true, computedLaborCostCents: true },
     });
+    // #2: same additive/inert-until-migrated fields as rollupCosts() and
+    // the events list -- degrades to an empty map (0 for every event)
+    // until the migration runs, so this aggregate is unchanged in that case.
+    const directCostsById = await getEventDirectCostsBulk(evs.map((e) => e.id));
+    const directCostsCents = evs.reduce((s, e) => {
+      const dc = directCostsById.get(e.id);
+      return s + (dc ? dc.packagingCostCents + dc.deliveryCostCents + dc.equipmentCostCents + dc.otherDirectCostCents : 0);
+    }, 0);
     return {
       count: evs.length,
       revenueCents: evs.reduce((s, e) => s + (e.quotedPriceCents ?? 0), 0),
       foodCostCents: evs.reduce((s, e) => s + (e.computedFoodCostCents ?? 0), 0),
       laborCostCents: evs.reduce((s, e) => s + (e.computedLaborCostCents ?? 0), 0),
+      directCostsCents,
     };
   }
 
@@ -229,6 +240,7 @@ export class AnalyticsService {
     // profit widget did (revenue - food, missing the labor subtraction).
     const { profitCents: grossProfitCents, marginPct: grossMarginPct } = computeEventProfit({
       revenueCents: events.revenueCents, foodCostCents: events.foodCostCents, laborCostCents: events.laborCostCents,
+      otherCostCents: events.directCostsCents,
     });
 
     return {
@@ -240,6 +252,9 @@ export class AnalyticsService {
         eventFoodCostCents: events.foodCostCents,
       },
       labor: { eventLaborCents: events.laborCostCents },
+      // #2: packaging/delivery/equipment/other, summed across events.
+      // Always 0 until the migration runs — see event-direct-costs.raw.ts.
+      directCosts: { eventDirectCostsCents: events.directCostsCents },
       // grossProfitCents/grossMarginPct are null when there's no revenue in
       // the window (events.revenueCents === 0) -- previously grossProfitCents
       // was always a number (0 - food - labor, a nonsensical negative COGS

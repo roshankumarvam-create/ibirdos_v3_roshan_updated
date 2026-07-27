@@ -66,6 +66,14 @@ const UpdateEventQuoteSchema = z.object({
   quotedTotalOverrideCents: z.number().int().nonnegative().nullable().optional(),
 });
 
+// #2: per-event direct cost inputs.
+const UpdateEventDirectCostsSchema = z.object({
+  packagingCostCents: z.number().int().nonnegative().optional(),
+  deliveryCostCents: z.number().int().nonnegative().optional(),
+  equipmentCostCents: z.number().int().nonnegative().optional(),
+  otherDirectCostCents: z.number().int().nonnegative().optional(),
+});
+
 const UpdateStatusSchema = z.object({
   status: z.enum(["DRAFT", "CONFIRMED", "PREP_IN_PROGRESS", "IN_SERVICE", "COMPLETED", "CANCELLED"]),
 });
@@ -128,6 +136,12 @@ export class EventsController {
   updateQuote(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
               @Body(new ZodValidationPipe(UpdateEventQuoteSchema)) body: any): Promise<any> {
     return this.svc.updateEventQuote(ctx, id, body).then(ok);
+  }
+
+  @Patch(":id/direct-costs") @RequirePermission("event.update")
+  updateDirectCosts(@CurrentCtx() ctx: TenantContext, @Param("id") id: string,
+                     @Body(new ZodValidationPipe(UpdateEventDirectCostsSchema)) body: any): Promise<any> {
+    return this.svc.setEventDirectCosts(ctx, id, body).then(ok);
   }
 
   @Post(":id/paid") @RequirePermission("event.update")
