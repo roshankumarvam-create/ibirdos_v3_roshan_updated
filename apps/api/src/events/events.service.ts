@@ -1042,11 +1042,18 @@ export class EventsService implements OnApplicationBootstrap {
     }>();
 
     const tasks: any[] = [];
+    // Actual-consumption basis (multiplier excluded, event- AND per-item-level)
+    // -- this is what's actually billed/served, and is the ONLY basis the
+    // profit/margin food-cost figure may use. portionMultiplier/perItemMultiplier
+    // are a purchasing/prep over-buy buffer; they must inflate packet quantities
+    // and cost (below, unchanged) but never the food cost that feeds profit.
+    let totalActualFoodCostMicrocents = 0n;
 
     for (const mi of event.menuItems) {
       const effectivePortions = mi.portions * (mi.perItemMultiplier ? Number(mi.perItemMultiplier) : eventMultiplier);
       const recipePortions = mi.recipe.portionsYielded ?? 1;
       const scale = effectivePortions / recipePortions;
+      const actualScale = mi.portions / recipePortions;
 
       let recipeTotalCostMicrocents = 0n;
       const recipeIngredientLines: any[] = [];
@@ -1060,10 +1067,15 @@ export class EventsService implements OnApplicationBootstrap {
           });
           const yieldPct = Number(link.yieldPctOverride ?? ing.defaultYieldPct ?? 100);
           const scaled = baseCanonical * scale * (100 / Math.max(yieldPct, 1));
+          const actualScaled = baseCanonical * actualScale * (100 / Math.max(yieldPct, 1));
           const costMc = ing.currentCostMicrocents != null
             ? BigInt(Math.round(scaled * Number(ing.currentCostMicrocents)))
             : 0n;
+          const actualCostMc = ing.currentCostMicrocents != null
+            ? BigInt(Math.round(actualScaled * Number(ing.currentCostMicrocents)))
+            : 0n;
           recipeTotalCostMicrocents += costMc;
+          totalActualFoodCostMicrocents += actualCostMc;
 
           const existing = agg.get(ing.id);
           if (existing) {
@@ -1131,9 +1143,14 @@ export class EventsService implements OnApplicationBootstrap {
       },
     });
 
+    // computedFoodCostCents feeds profit/margin everywhere (rollupCosts,
+    // computeEventProfit, events list) -- it must be the actual-consumption
+    // cost (multiplier excluded), NOT totalFoodCostMicrocents above (which is
+    // the buffered purchasing/prep total, correctly kept buffered for the
+    // packet's own ingredientsJson/costCents display).
     await prisma.event.update({
       where: { id: eventId },
-      data: { computedFoodCostCents: Math.round(Number(totalFoodCostMicrocents) / 1000) },
+      data: { computedFoodCostCents: Math.round(Number(totalActualFoodCostMicrocents) / 1000) },
     });
     await this.rollupCosts(ctx, eventId);
 
@@ -1150,7 +1167,7 @@ export class EventsService implements OnApplicationBootstrap {
   async rollupCosts(ctx: TenantContext, eventId: string) {
     const event = await prisma.event.findFirst({
       where: { id: eventId, workspaceId: ctx.workspaceId, deletedAt: null },
-      include: { staff: true, kitchenPacket: { select: { totalFoodCostMicrocents: true } } },
+      include: { staff: true },
     });
     if (!event) return;
 
@@ -1158,9 +1175,13 @@ export class EventsService implements OnApplicationBootstrap {
     const staffLaborCents = event.staff.reduce((sum, s) => sum + Math.round(Number(s.hours) * s.hourlyRateCents), 0);
     const laborCents = staffLaborCents || ((event as any).laborTotalCents ?? 0);
 
-    const foodCents = event.kitchenPacket?.totalFoodCostMicrocents
-      ? Math.round(Number(event.kitchenPacket.totalFoodCostMicrocents) / 1000)
-      : event.computedFoodCostCents ?? 0;
+    // computedFoodCostCents (written by generateKitchenPacket) is the actual-
+    // consumption food cost -- the purchasing buffer must never re-enter here.
+    // Previously this preferred kitchenPacket.totalFoodCostMicrocents (the
+    // buffered packet total), which re-inflated profit's food cost every time
+    // rollupCosts ran (staff add/remove, markAsPaid) even after
+    // generateKitchenPacket wrote the correct figure.
+    const foodCents = event.computedFoodCostCents ?? 0;
 
     // Use the quote-builder override when present (consistent with sendQuote + frontend KPIs)
     const effectiveRevenueCents = (event as any).quotedTotalOverrideCents ?? event.quotedPriceCents;

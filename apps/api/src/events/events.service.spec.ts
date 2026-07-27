@@ -10,6 +10,7 @@ const mockEventUpdate = vi.fn();
 const mockEventUpdateMany = vi.fn();
 const mockInvoiceLineFindMany = vi.fn();
 const mockKitchenTaskFindMany = vi.fn();
+const mockKitchenPacketUpsert = vi.fn();
 const mockStaffFindFirst = vi.fn();
 const mockStaffDelete = vi.fn();
 const mockQueryRaw = vi.fn();
@@ -29,6 +30,9 @@ vi.mock("@ibirdos/db", () => ({
     },
     kitchenTask: {
       findMany: (...args: any[]) => mockKitchenTaskFindMany(...args),
+    },
+    kitchenPacket: {
+      upsert: (...args: any[]) => mockKitchenPacketUpsert(...args),
     },
     eventStaffAssignment: {
       findFirst: (...args: any[]) => mockStaffFindFirst(...args),
@@ -559,5 +563,124 @@ describe("EventsService.setEventDirectCosts — bug found during post-migration 
     expect(mockEventUpdate).toHaveBeenCalledOnce();
     const updateData = mockEventUpdate.mock.calls[0]![0].data;
     expect(updateData.computedMarginPct).toBeDefined();
+  });
+});
+
+describe("EventsService.generateKitchenPacket — portionMultiplier is a purchasing/prep buffer, must NEVER inflate profit's food cost", () => {
+  let svc: EventsService;
+
+  // Simbu's exact case: recipe yields 50 portions from 203.07g of a
+  // $1.00/g ($100/g in cents, i.e. currentCostMicrocents=100_000) ingredient
+  // -- exactly $203.07 for the full batch at the actual-consumption (1.0)
+  // basis. Event bills 50 portions; portionMultiplier only buffers
+  // purchasing/prep, never what's actually served/billed.
+  function buildEvent(portionMultiplier: number) {
+    return {
+      id: "ev1", workspaceId: "ws1", deletedAt: null, portionMultiplier,
+      menuItems: [{
+        recipeId: "r1", portions: 50, perItemMultiplier: null,
+        recipe: {
+          id: "r1", name: "Batch", portionsYielded: 50, prepTimeMin: 0, cookTimeMin: 0,
+          ingredients: [{
+            quantity: 203.07, unit: "g", yieldPctOverride: null,
+            ingredient: {
+              id: "ing1", name: "Flour", dimension: "MASS", canonicalUnit: "g", densityGPerMl: null,
+              preferredDisplayUnit: null, currentCostMicrocents: 100_000, defaultYieldPct: 100,
+            },
+          }],
+        },
+      }],
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
+  });
+
+  async function runAtMultiplier(multiplier: number) {
+    mockKitchenPacketUpsert.mockResolvedValue({ id: "kp1" });
+    mockEventUpdate.mockResolvedValue({});
+    mockEventFindFirst
+      .mockResolvedValueOnce(buildEvent(multiplier)) // generateKitchenPacket's own findFirst
+      // rollupCosts() is called internally at the end of generateKitchenPacket --
+      // returning null here lets it no-op early, isolating this test to
+      // generateKitchenPacket's own computedFoodCostCents write.
+      .mockResolvedValueOnce(null);
+
+    await svc.generateKitchenPacket(ctx, "ev1");
+
+    // .at(-1) -- this helper is called more than once per test (once per
+    // multiplier) without clearing mocks between calls, so the LATEST call
+    // is this invocation's, not the first one ever recorded.
+    const foodCostUpdateCall = [...mockEventUpdate.mock.calls]
+      .reverse()
+      .find(([arg]) => arg.data?.computedFoodCostCents !== undefined);
+    const packetUpsertArg = mockKitchenPacketUpsert.mock.calls.at(-1)![0];
+    return {
+      computedFoodCostCents: foodCostUpdateCall?.[0].data.computedFoodCostCents,
+      packetTotalFoodCostMicrocents: packetUpsertArg.create.totalFoodCostMicrocents as bigint,
+      packetQuantityCanonical: packetUpsertArg.create.ingredientsJson[0].totalCanonical,
+    };
+  }
+
+  it("computedFoodCostCents (the figure profit/margin reads) is IDENTICAL at multiplier 1.0 and 1.10 -- $203.07 either way", async () => {
+    const at1_0 = await runAtMultiplier(1.0);
+    expect(at1_0.computedFoodCostCents).toBe(20307); // $203.07
+
+    const at1_10 = await runAtMultiplier(1.10);
+    expect(at1_10.computedFoodCostCents).toBe(20307); // SAME -- buffer excluded from profit food cost
+  });
+
+  it("the kitchen packet's own purchasing quantity/cost STILL reflects the 10% buffer -- only profit's food cost is buffer-free", async () => {
+    const at1_0 = await runAtMultiplier(1.0);
+    const at1_10 = await runAtMultiplier(1.10);
+
+    expect(at1_0.packetQuantityCanonical).toBeCloseTo(203.07, 5);
+    expect(at1_10.packetQuantityCanonical).toBeCloseTo(223.377, 5); // 203.07 * 1.10 -- buffer intact
+
+    expect(at1_0.packetTotalFoodCostMicrocents).toBe(20_307_000n);
+    expect(at1_10.packetTotalFoodCostMicrocents).toBe(22_337_700n); // 203.07 * 1.10 @ $1.00/g -- buffer intact
+  });
+
+  it("Simbu's exact case: profit is $140.68 at the DEFAULT 1.10 multiplier -- same as at 1.0, no pinning required", async () => {
+    const at1_10 = await runAtMultiplier(1.10);
+
+    // Revenue: 50 portions x $6.25 = $312.50 subtotal + 10% markup ($31.25) + $100 labor billed = $443.75
+    const revenueCents = 44375;
+    const laborCents = 10000; // $100 staff cost, same as billed labor (Scenario A)
+    const directCents = 0; // no packaging/delivery/equipment/other in Simbu's case
+    const profitCents = revenueCents - at1_10.computedFoodCostCents - laborCents - directCents;
+
+    expect(profitCents).toBe(14068); // $140.68
+  });
+});
+
+describe("EventsService.rollupCosts — food cost must read computedFoodCostCents, never re-derive from a buffered kitchenPacket total", () => {
+  let svc: EventsService;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    svc = new EventsService({} as any, {} as any, {} as any, {} as any);
+    mockEventUpdate.mockResolvedValue({});
+  });
+
+  it("trusts computedFoodCostCents (actual-consumption basis) even when a buffered kitchenPacket.totalFoodCostMicrocents sits on the same row", async () => {
+    mockEventFindFirst.mockResolvedValue({
+      id: "ev1", staff: [], laborTotalCents: 10000,
+      quotedPriceCents: 44375, quotedTotalOverrideCents: null,
+      computedFoodCostCents: 20307, // actual-consumption ($203.07) -- what generateKitchenPacket now writes
+      // Regression guard: rollupCosts() used to prefer this buffered figure
+      // ($223.38, multiplier-inflated) over computedFoodCostCents above,
+      // silently re-inflating profit's food cost on every staff add/remove
+      // and every markAsPaid() call.
+      kitchenPacket: { totalFoodCostMicrocents: 22_337_700n },
+    });
+    mockQueryRaw.mockResolvedValue([]); // getEventDirectCosts -- no direct-cost row
+
+    await svc.rollupCosts(ctx, "ev1");
+
+    const updateData = mockEventUpdate.mock.calls[0]![0].data;
+    expect(updateData.computedFoodCostCents).toBe(20307);
   });
 });
