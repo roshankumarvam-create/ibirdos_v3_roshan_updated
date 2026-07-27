@@ -114,7 +114,15 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
         </tr>
       </thead>
       <tbody className="divide-y divide-bg-border">
-        {lines.map(line => (
+        {lines.map(line => {
+          // #3: missing/zero quantity and missing unit warnings -- same
+          // "!" badge pattern already used for lowConfidence above, on
+          // data already present on every line (quantity/unit are
+          // required non-null columns, but a placeholder 0 or a blank
+          // unit from an import path can still slip through).
+          const hasIncompleteQty = !(Number(line.quantity) > 0);
+          const hasMissingUnit = !line.unit || !line.unit.trim();
+          return (
           <tr key={line.id} className={`hover:bg-bg-hover/20 ${saving[line.id] ? "opacity-50" : ""}`}>
             {/* Name -- read-only here: this is the shared Ingredient's name
                 (not a per-recipe-line field), so renaming it belongs on the
@@ -137,6 +145,14 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
                   <span
                     title={line.conversionNote ?? "Low-confidence conversion. Verify quantity."}
                     className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-warning/20 text-warning text-[9px] font-bold cursor-help flex-shrink-0"
+                  >
+                    !
+                  </span>
+                )}
+                {(hasIncompleteQty || hasMissingUnit) && (
+                  <span
+                    title={[hasIncompleteQty && "Missing or zero quantity", hasMissingUnit && "Missing unit"].filter(Boolean).join(" · ")}
+                    className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-danger/20 text-danger text-[9px] font-bold cursor-help flex-shrink-0"
                   >
                     !
                   </span>
@@ -168,7 +184,7 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
                 cost/consumption logic -- editing it here previously changed
                 what was displayed without changing what the recipe actually
                 costs, see FIX_LOG.md P1-6/P1-7). */}
-            <td className="px-4 py-1.5 text-right">
+            <td className={`px-4 py-1.5 text-right ${hasIncompleteQty ? "bg-danger/5" : ""}`}>
               {canEdit ? (
                 <input
                   type="number"
@@ -186,7 +202,7 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
             </td>
 
             {/* Unit dropdown */}
-            <td className="px-4 py-1.5">
+            <td className={`px-4 py-1.5 ${hasMissingUnit ? "bg-danger/5" : ""}`}>
               {canEdit ? (
                 <select
                   className="bg-bg-inset border border-bg-border rounded px-1 py-0.5 text-text-primary focus:outline-none focus:border-accent-500/60 text-sm font-mono cursor-pointer"
@@ -284,7 +300,8 @@ export function IngredientsEditor({ recipeId, workspaceId, lines: initialLines, 
               </td>
             )}
           </tr>
-        ))}
+          );
+        })}
       </tbody>
     </table>
   );
