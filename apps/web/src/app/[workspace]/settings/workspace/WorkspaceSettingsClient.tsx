@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Card, CardHeader, CardTitle, CardBody, Label, Select } from "@ibirdos/ui";
+import { Button, Card, CardHeader, CardTitle, CardBody, Label, Select, Input } from "@ibirdos/ui";
 import { api } from "@/lib/api";
 import { toast } from "@/lib/toast";
 
@@ -22,24 +22,48 @@ function getAllTimeZones(current: string): string[] {
 export function WorkspaceSettingsClient({
   workspaceSlug,
   currentTimeZone,
+  currentTargetFoodCostPct,
 }: {
   workspaceSlug: string;
   currentTimeZone: string;
+  currentTargetFoodCostPct: number | null;
 }) {
   const router = useRouter();
   const [timezone, setTimezone] = useState(currentTimeZone);
-  const [saving, setSaving] = useState(false);
+  const [savingTimezone, setSavingTimezone] = useState(false);
   const zones = getAllTimeZones(currentTimeZone);
 
-  async function handleSave() {
-    setSaving(true);
+  const [targetFoodCostPct, setTargetFoodCostPct] = useState(
+    currentTargetFoodCostPct != null ? String(currentTargetFoodCostPct) : "",
+  );
+  const [savingTarget, setSavingTarget] = useState(false);
+
+  async function handleSaveTimezone() {
+    setSavingTimezone(true);
     const res = await api.patch(`/workspaces/${workspaceSlug}`, { timezone });
-    setSaving(false);
+    setSavingTimezone(false);
     if (res.error) {
       toast.error(res.error.message);
       return;
     }
     toast.success("Timezone updated. Every date/time on the site now uses this zone.");
+    router.refresh();
+  }
+
+  async function handleSaveTarget() {
+    const parsed = targetFoodCostPct.trim() === "" ? null : parseFloat(targetFoodCostPct);
+    if (parsed != null && (isNaN(parsed) || parsed < 0 || parsed > 100)) {
+      toast.error("Enter a percentage between 0 and 100, or leave blank to clear it.");
+      return;
+    }
+    setSavingTarget(true);
+    const res = await api.patch(`/workspaces/${workspaceSlug}`, { targetFoodCostPct: parsed });
+    setSavingTarget(false);
+    if (res.error) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(parsed != null ? "Target food cost % saved." : "Target food cost % cleared.");
     router.refresh();
   }
 
@@ -71,7 +95,34 @@ export function WorkspaceSettingsClient({
               ))}
             </Select>
           </div>
-          <Button onClick={handleSave} loading={saving} disabled={timezone === currentTimeZone}>
+          <Button onClick={handleSaveTimezone} loading={savingTimezone} disabled={timezone === currentTimeZone}>
+            Save
+          </Button>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Target food cost %</CardTitle></CardHeader>
+        <CardBody className="space-y-3">
+          <p className="text-xs text-text-secondary">
+            When set, recipes whose food cost exceeds this percentage of the sale price
+            show a warning on the recipe page. Leave blank to disable the warning workspace-wide.
+          </p>
+          <div>
+            <Label htmlFor="targetFoodCostPct">Target food cost %</Label>
+            <Input
+              id="targetFoodCostPct"
+              type="number" min="0" max="100" step="0.1"
+              value={targetFoodCostPct}
+              onChange={(e) => setTargetFoodCostPct(e.target.value)}
+              placeholder="e.g. 30"
+            />
+          </div>
+          <Button
+            onClick={handleSaveTarget}
+            loading={savingTarget}
+            disabled={targetFoodCostPct === (currentTargetFoodCostPct != null ? String(currentTargetFoodCostPct) : "")}
+          >
             Save
           </Button>
         </CardBody>

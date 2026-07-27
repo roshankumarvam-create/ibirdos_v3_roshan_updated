@@ -109,6 +109,17 @@ export default async function RecipeDetailPage({
   // never sent cost/price/margin data for this recipe in the first place.
   const canSeeFinancials = canViewFinancials(user.role);
 
+  // #3: workspace-wide target food-cost % -- stored in the existing
+  // settings JSON blob (see workspaces.service.ts), only meaningful to
+  // roles that can already see liveFoodCostPct at all.
+  let targetFoodCostPct: number | null = null;
+  if (canSeeFinancials) {
+    const wsRes = await api.get<{ workspace: { settings: { targetFoodCostPct?: number | null } } }>(
+      `/workspaces/${workspace}`, { cookies: c },
+    );
+    targetFoodCostPct = wsRes.data?.workspace.settings.targetFoodCostPct ?? null;
+  }
+
   const portionWeightOz = recipe.portionWeightG ? (recipe.portionWeightG / 28.3495).toFixed(1) : null;
   const calculatedPortionWeightOz = recipe.calculatedPortionWeightG ? (recipe.calculatedPortionWeightG / 28.3495).toFixed(1) : null;
   const portionVolumeFloz = recipe.portionVolumeMl ? (recipe.portionVolumeMl / 29.5735).toFixed(1) : null;
@@ -336,6 +347,17 @@ export default async function RecipeDetailPage({
                 </CardHeader>
                 <CardBody className="space-y-3 text-sm">
                   <FoodCostBadge pct={foodCostPct} />
+                  {/* #3: workspace-wide target, distinct from the existing
+                      per-recipe "Goal food cost %" reference line below
+                      (which only colors that one row and doesn't set
+                      anything). This is a standalone warning banner, tied
+                      to a workspace setting an owner sets once instead of
+                      per recipe. */}
+                  {targetFoodCostPct != null && foodCostPct != null && foodCostPct > targetFoodCostPct && (
+                    <div className="rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning">
+                      Food cost is {fmtPct(foodCostPct)}, above this workspace's {fmtPct(targetFoodCostPct)} target.
+                    </div>
+                  )}
                   {recipe.liveStaleness === "MISSING_PRICE" && (
                     <p className="text-[10px] text-warning">Some ingredients have no price set — cost is partial.</p>
                   )}

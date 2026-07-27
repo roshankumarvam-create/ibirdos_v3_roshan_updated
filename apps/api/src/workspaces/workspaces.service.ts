@@ -49,7 +49,15 @@ const VALID_TIME_ZONES = new Set(Intl.supportedValuesOf("timeZone"));
 export const UpdateWorkspaceSettingsSchema = z.object({
   timezone: z.string().refine((tz) => VALID_TIME_ZONES.has(tz), {
     message: "Not a recognized IANA timezone",
-  }),
+  }).optional(),
+  // #3: workspace-wide target food-cost % -- stored in the existing
+  // `settings` JSON blob (merge-updated by updateSettings() below), not
+  // a new column. No schema/migration needed at all: unlike the other
+  // additive fields in this batch (recipes.yield_variance_reason,
+  // events.packaging_cost_cents, etc.), `settings` is already a flexible
+  // Json column designed to absorb exactly this kind of new key without
+  // an ALTER TABLE -- the simpler mechanism when one's already available.
+  targetFoodCostPct: z.number().min(0).max(100).nullable().optional(),
 });
 
 export type UpdateWorkspaceSettingsInput = z.infer<typeof UpdateWorkspaceSettingsSchema>;
